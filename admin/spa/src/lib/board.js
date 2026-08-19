@@ -94,17 +94,43 @@ export function bucketize(rows, adoptionMode, { doneCap = 30 } = {}) {
   return buckets;
 }
 
+// Label preconditions for context-menu actions — pinned mirror of
+// mission_actions.ACTION_SPECS plus force_freshness (outside ACTION_SPECS;
+// 409s without DEVCAKE-MERGE). contracts.mjs asserts deep-equality with
+// spa-contracts action_preconditions.
+export const ACTION_PRECONDITIONS = {
+  retry: { require_present: ["DEVCAKE-FAILED"], require_absent: [] },
+  park: { require_present: [], require_absent: ["DEVCAKE-SKIP"] },
+  unpark: { require_present: ["DEVCAKE-SKIP"], require_absent: [] },
+  resume: { require_present: ["DEVCAKE-NEEDS-HUMAN"], require_absent: [] },
+  force_freshness: { require_present: ["DEVCAKE-MERGE"], require_absent: [] },
+};
+
+const ACTION_LABELS = {
+  retry: "Retry",
+  resume: "Resume",
+  force_freshness: "Re-check freshness",
+  unpark: "Unpark",
+  park: "Park",
+};
+
+// Menu offer order (stable for operators). Membership is driven solely by
+// ACTION_PRECONDITIONS so park/unpark mutual exclusion falls out of the
+// require_present / require_absent sets.
+const ACTION_ORDER = ["retry", "resume", "force_freshness", "unpark", "park"];
+
 // Menu items available on a card for its current label state.
 // Empty when nothing applies — the caller should not render an empty menu.
 export function contextActions(row) {
   const set = new Set(row.labels || []);
   const items = [];
-  if (set.has("DEVCAKE-FAILED"))       items.push({ id: "retry",  label: "Retry" });
-  if (set.has("DEVCAKE-NEEDS-HUMAN"))  items.push({ id: "resume", label: "Resume" });
-  if (set.has("DEVCAKE-MERGE")) {
-    items.push({ id: "force_freshness", label: "Re-check freshness" });
+  for (const id of ACTION_ORDER) {
+    const spec = ACTION_PRECONDITIONS[id];
+    const presentOk = spec.require_present.every((l) => set.has(l));
+    const absentOk = spec.require_absent.every((l) => !set.has(l));
+    if (presentOk && absentOk) {
+      items.push({ id, label: ACTION_LABELS[id] });
+    }
   }
-  if (set.has("DEVCAKE-SKIP"))         items.push({ id: "unpark", label: "Unpark" });
-  else                                  items.push({ id: "park",   label: "Park" });
   return items;
 }

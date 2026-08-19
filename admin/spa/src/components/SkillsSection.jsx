@@ -18,6 +18,7 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { useNewNames } from "../lib/instanceNames.js";
 import { fileToB64 } from "../lib/files.js";
 import { isMarkdownPath, stripYamlFrontmatter } from "../lib/markdown.js";
+import { connRef } from "../lib/connectionFields.js";
 
 // ── skill authoring (docs/11 Skills section) ─────────────────────────────────
 
@@ -340,11 +341,11 @@ function SkillSourcesCard() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <SecretField label="Read token"
               help="Token with read access to the repository (private sources). Stored as plaintext mode 0600 on the app volume — never echoed back."
-              refKey={`skill:${src.name}:token_ro`} paste
+              refKey={connRef("skill", src.name, "token_ro")} paste
               locked={!nameLocked(src.name, idx)} />
             <SecretField label="Token (fallback)"
               help="Used only when no read token is stored. A read-scoped token is all a skills source ever needs."
-              refKey={`skill:${src.name}:token`} paste
+              refKey={connRef("skill", src.name, "token")} paste
               locked={!nameLocked(src.name, idx)} />
           </div>
           {!nameLocked(src.name, idx) && (

@@ -19,6 +19,7 @@ import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 import { newRepoCard } from "../lib/cards.js";
 import { unusedRepoNames } from "../lib/unusedRepos.js";
 import { fleetSeedIndexes } from "../lib/fleetExpand.js";
+import { CONNECTION_FIELDS, connRef } from "../lib/connectionFields.js";
 
 // Repositories page (v0.1.1 B4, founder request): the repository cards +
 // merge policy lifted out of Configuration, plus the internal-forge
@@ -185,8 +186,8 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
 // batched presence map (bulk-scale 2026-08-02) instead of its own fetch.
 function RoOnlyNote({ name, presence }) {
   const state = presence && {
-    w: presence[`repo:${name}:token`]?.present,
-    ro: presence[`repo:${name}:token_ro`]?.present,
+    w: presence[connRef("repo", name, "token")]?.present,
+    ro: presence[connRef("repo", name, "token_ro")]?.present,
   };
   if (!state || state.w || !state.ro) return null;
   return (
@@ -271,7 +272,7 @@ export default function ReposPage({ onHealthChange }) {
   });
   useEffect(() => {
     const refs = visibleNames.filter(Boolean).flatMap((n) =>
-      [`repo:${n}:token`, `repo:${n}:token_ro`, `repo:${n}:reviewer_token`]);
+      CONNECTION_FIELDS.repo.map((f) => connRef("repo", n, f)));
     if (!refs.length) return;
     let live = true;
     const chunks = [];
@@ -536,19 +537,19 @@ export default function ReposPage({ onHealthChange }) {
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
                 <SecretField label="Access token"
                   help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored as plaintext mode 0600 on the app volume — never echoed, never in .env."
-                  refKey={`repo:${repo.name}:token`} paste
+                  refKey={connRef("repo", repo.name, "token")} paste
                   absentNote="not set — repo is reference-only until an Access token is stored"
-                  presence={presence[`repo:${repo.name}:token`] || null}
+                  presence={presence[connRef("repo", repo.name, "token")] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push with a write-capable PAT. Leave empty to give every stage the write token (and, if the default branch is unprotected, merge capability)."
-                  refKey={`repo:${repo.name}:token_ro`} paste optional
-                  presence={presence[`repo:${repo.name}:token_ro`] || null}
+                  refKey={connRef("repo", repo.name, "token_ro")} paste optional
+                  presence={presence[connRef("repo", repo.name, "token_ro")] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Reviewer token" hint="Recommended 2nd account → formal PR approvals"
                   help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not a supply-chain control when you staff a different Dev Type for REVIEW — that is role focus only."
-                  refKey={`repo:${repo.name}:reviewer_token`} paste optional
-                  presence={presence[`repo:${repo.name}:reviewer_token`] || null}
+                  refKey={connRef("repo", repo.name, "reviewer_token")} paste optional
+                  presence={presence[connRef("repo", repo.name, "reviewer_token")] || null}
                   locked={!nameLocked(repo.name, idx)} />
               </div>
               {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} presence={presence} />}

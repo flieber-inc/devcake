@@ -1,6 +1,8 @@
 // Human labels, formatting and danger warnings for config draft paths —
 // drives the Save review dialog. Labels mirror the Field labels on the page.
 
+import { ATTEMPT_RESET_POLICIES } from "./configEnums.js";
+
 export const AUTO_MERGE_COPY =
   "DevCake's app will merge this repository's pull requests to the default " +
   "branch without a human PR click (after its REVIEW step approves). Without " +
@@ -104,9 +106,17 @@ const EXACT = {
   "cfg.continuation_policy": { group: "Limits", label: "Continuation policy" },
   "cfg.attempt_reset": {
     group: "Limits", label: "Attempt reset policy",
-    format: (v) => ({ "label-ops": "strict (DEVCAKE-RETRY / labels)",
-                      "any-comment": "any comment",
-                      unlimited: "unlimited (never give up)" }[v] || String(v)),
+    // Operator-facing labels only — vocabulary lives in configEnums.js /
+    // spa-contracts (ATTEMPT_RESET_POLICIES).
+    format: (v) => {
+      const labels = {
+        "label-ops": "strict (DEVCAKE-RETRY / labels)",
+        "any-comment": "any comment",
+        unlimited: "unlimited (never give up)",
+      };
+      if (ATTEMPT_RESET_POLICIES.includes(v) && labels[v]) return labels[v];
+      return String(v);
+    },
   },
   "cfg.brake_on_bad_output": {
     group: "Limits", label: "Brake on missing results (exit 11)",

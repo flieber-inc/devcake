@@ -1,6 +1,5 @@
 import React from "react";
-
-const STAGES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
+import { STAGES } from "../lib/missionStages.js";
 
 // The layer cake: the mission pipeline's strict 4-stage sequence as stacked
 // layers, baked bottom-up. Filled = stages before this run, accent = the

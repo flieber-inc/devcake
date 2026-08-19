@@ -9,6 +9,7 @@ import Toggle from "./Toggle.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import { ConfirmDialog, Modal, PromptDialog } from "./Modal.jsx";
 import { CRON_ID_RE, CRON_ID_RULE } from "../lib/draftErrors.js";
+import { STAGES } from "../lib/missionStages.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // Scheduled Tasks (#/config/scheduled-tasks): the one home for everything
@@ -17,7 +18,6 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 // tasks (operator cron rows). The card split IS the segregation.
 
 const MEMORY_CURATOR = "memory-curator";
-const STAGES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 
 function DegradedPill() {
   return (

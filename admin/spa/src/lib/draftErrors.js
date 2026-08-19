@@ -11,8 +11,9 @@ export const INSTANCE_NAME_RE = /^[a-z][a-z0-9]{0,11}$/;
 export const INSTANCE_NAME_RULE =
   "a lowercase letter, then lowercase letters/digits, 12 max (no spaces, no hyphens)";
 
-// Client-side mirror of the server's cron-id rule (config.py _CRON_ID_RE):
-// scheduled-task ids validate BEFORE Save, same contract as names above.
+// Client-side mirror of the server's cron-id rule (config.py _CRON_ID_RE);
+// pinned by spa-contracts cron_id_re + contracts.mjs (CAKE-88).
+// Scheduled-task ids validate BEFORE Save, same contract as names above.
 export const CRON_ID_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 export const CRON_ID_RULE =
   "a lowercase letter, then lowercase letters/digits/hyphen/underscore, 32 max";

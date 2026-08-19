@@ -17,6 +17,7 @@ import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 import { newPmoCard } from "../lib/cards.js";
 import { fleetSeedIndexes } from "../lib/fleetExpand.js";
+import { connRef } from "../lib/connectionFields.js";
 
 export default function PmoSection({ newNamesState, health = {}, healthError = false,
                                      onHealthChange }) {
@@ -67,10 +68,10 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
     const chunks = [];
     for (let i = 0; i < names.length; i += 40) chunks.push(names.slice(i, i + 40));
     Promise.all(chunks.map((chunk) => {
-      const q = chunk.map((n) => `repo:${n}:token`).join(",");
+      const q = chunk.map((n) => connRef("repo", n, "token")).join(",");
       return get(`/secrets-check?conn=${encodeURIComponent(q)}`)
         .then((r) => Object.fromEntries(
-          chunk.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present])))
+          chunk.map((n) => [n, !!r.conn[connRef("repo", n, "token")]?.present])))
         .catch(() => Object.fromEntries(chunk.map((n) => [n, true])));
     })).then((parts) => {
       if (live) setRepoHasToken(Object.assign({}, ...parts));
@@ -388,7 +389,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 ) : (
                   <SecretField label="API key"
                     help="This instance's PMO API key. Stored as plaintext mode 0600 on the app volume — never echoed back, never in .env."
-                    refKey={`pmo:${inst.name}:api_key`} paste
+                    refKey={connRef("pmo", inst.name, "api_key")} paste
                     locked={!pmoNameLocked(inst.name, idx)} />
                 )}
               </div>

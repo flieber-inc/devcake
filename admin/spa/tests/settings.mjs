@@ -3,10 +3,17 @@
 // 2026-08-02 nav reorg), legacy-route redirects, nav guard, mobile chips.
 // Never confirms a Save — every flow ends in Cancel/Discard so live config
 // is untouched.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BASE, check, checked, gotoFresh, summary, withPage } from "./harness.mjs";
 
 const POLL = 'input[aria-label="Poll interval (seconds)"]';
 const GLOBAL_MAX = 'input[aria-label="Global max Devs"]';
+const _here = dirname(fileURLToPath(import.meta.url));
+const _contracts = JSON.parse(
+  readFileSync(join(_here, "../../../docs/contracts/spa-contracts.json")));
+const ATTEMPT_RESET_POLICIES = _contracts.attempt_reset_policies;
 
 await withPage(async (page) => {
   // 1-2: bare and unknown #/config land on the first section (dev-types)
@@ -76,12 +83,11 @@ await withPage(async (page) => {
   const attemptSelect = page.locator('select[aria-label="Attempt reset policy"]');
   check("Attempt reset row renders with a legal policy selected",
     (await attemptSelect.count()) === 1 &&
-    ["label-ops", "any-comment", "unlimited"]
-      .includes(await attemptSelect.inputValue()));
-  check("Attempt reset offers all three ADR-0026 policies",
-    (await attemptSelect.locator('option[value="label-ops"]').count()) === 1 &&
-    (await attemptSelect.locator('option[value="any-comment"]').count()) === 1 &&
-    (await attemptSelect.locator('option[value="unlimited"]').count()) === 1);
+    ATTEMPT_RESET_POLICIES.includes(await attemptSelect.inputValue()));
+  check("Attempt reset offers every spa-contracts policy",
+    (await Promise.all(ATTEMPT_RESET_POLICIES.map((p) =>
+      attemptSelect.locator(`option[value="${p}"]`).count())))
+      .every((n) => n === 1));
   const brakeToggle = page.locator(
     'button[role="switch"][aria-label="Brake on missing results"]');
   check("Brake-on-missing-results switch renders with a boolean state",

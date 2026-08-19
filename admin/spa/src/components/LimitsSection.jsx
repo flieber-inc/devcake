@@ -5,11 +5,11 @@ import SettingRow from "./SettingRow.jsx";
 import Toggle from "./Toggle.jsx";
 import { ConfirmDialog } from "./Modal.jsx";
 import { MEMORY_AUTO_MERGE_COPY } from "../lib/configLabels.js";
+import {
+  ATTEMPT_RESET_POLICIES,
+  CONTINUATION_POLICIES,
+} from "../lib/configEnums.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
-
-const CONTINUATION_POLICIES = ["auto", "resume-only", "fresh-only", "off"];
-
-const ATTEMPT_RESET_POLICIES = ["label-ops", "any-comment", "unlimited"];
 
 const ATTEMPT_RESET_DESC = {
   "label-ops":

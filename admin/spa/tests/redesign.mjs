@@ -2,6 +2,7 @@
 // click-popover help, and the RunTerminal dialog behavior (when the stack
 // has runs). Read-only — no config edits, no destructive actions.
 import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
+import { MISSION_STAGES } from "../src/lib/missionStages.js";
 
 await withPage(async (page) => {
   // 1: Overview opens with the answer masthead + eyebrow, not a status dump
@@ -12,7 +13,7 @@ await withPage(async (page) => {
     /(needs? you|critical warning|DevCake)/.test(h1), `got "${h1}"`);
 
   // 2: the four-stage oven strip renders every pipeline stage
-  for (const stage of ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"]) {
+  for (const stage of MISSION_STAGES) {
     check(`oven strip shows ${stage}`,
       (await page.locator(`a[href="#/runs"]:has-text("${stage}")`).count()) === 1);
   }

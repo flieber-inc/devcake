@@ -108,3 +108,65 @@ def test_discovery_label_is_derivation_inert():
                 base = derive(_m(combo), adoption)
                 spiked = derive(_m(set(combo) | {LABEL_DISCOVERY}), adoption)
                 assert base == spiked, (status, adoption, combo)
+
+
+def test_continuation_and_attempt_reset_match_appconfig_literals():
+    """CAKE-88: enum vocabularies ride spa-contracts from AppConfig Literals —
+    independent get_args, not a re-read of the generator's own extraction."""
+    from typing import get_args
+
+    from devcake.config import AppConfig
+
+    data = build()
+    assert data["continuation_policies"] == sorted(
+        get_args(AppConfig.model_fields["continuation_policy"].annotation))
+    assert data["attempt_reset_policies"] == sorted(
+        get_args(AppConfig.model_fields["attempt_reset"].annotation))
+
+
+def test_mission_stages_match_mission_type_enum():
+    """CAKE-88: mission-stage vocabulary from MissionType, not a hand list."""
+    from devcake.domain.model import MissionType
+
+    data = build()
+    assert data["mission_stages"] == [m.value for m in MissionType]
+
+
+def test_cron_id_re_matches_config():
+    """CAKE-88: cron-id regex pin matches config._CRON_ID_RE (sibling of
+    instance_name_re / harness_var_pattern)."""
+    from devcake.config import _CRON_ID_RE
+
+    data = build()
+    assert data["cron_id_re"] == _CRON_ID_RE
+
+
+def test_connection_fields_match_secrets_allowlist():
+    """CAKE-88: connection field vocabulary equals secrets.CONNECTION_FIELDS
+    (sorted per scope for stable JSON)."""
+    from devcake.secrets import CONNECTION_FIELDS
+
+    data = build()
+    expected = {scope: sorted(fields)
+                for scope, fields in CONNECTION_FIELDS.items()}
+    assert data["connection_fields"] == expected
+    assert set(data["connection_fields"]) == set(CONNECTION_FIELDS)
+
+
+def test_action_preconditions_cover_action_specs_plus_force_freshness():
+    """CAKE-88: action_preconditions covers ACTION_SPECS ∪ {force_freshness}.
+    force_freshness is NOT in ACTION_SPECS — it is a separate handler that
+    409s without DEVCAKE-MERGE; the pin must still carry it for the SPA menu."""
+    from devcake.api.mission_actions import ACTION_SPECS
+    from devcake.domain.model import LABEL_MERGE
+
+    data = build()
+    pre = data["action_preconditions"]
+    assert set(pre) == set(ACTION_SPECS) | {"force_freshness"}
+    for action, spec in ACTION_SPECS.items():
+        assert pre[action]["require_present"] == sorted(spec.require_present)
+        assert pre[action]["require_absent"] == sorted(spec.require_absent)
+    assert pre["force_freshness"] == {
+        "require_present": [LABEL_MERGE],
+        "require_absent": [],
+    }

@@ -2,8 +2,7 @@ import React from "react";
 import { Section } from "./Card.jsx";
 import { Help, Input, Select } from "./Field.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
-
-const MISSION_TYPES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
+import { MISSION_TYPES } from "../lib/missionStages.js";
 
 export default function AssignmentsSection() {
   const { dr } = useSharedDraft();

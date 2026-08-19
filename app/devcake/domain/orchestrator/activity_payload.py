@@ -334,9 +334,11 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
 
     lines = []
     if act.truncated:   # the adapter's hard stop — never silent (ADR-0014)
+        # Which end drops is adapter-specific (Activity.truncated carries no
+        # direction) — say entries are missing, not which end.
         lines += ["⚠ FEED TRUNCATED — the feed exceeded the full-history "
-                  "hard stop; the OLDEST entries are missing from this "
-                  "mirror.", ""]
+                  "hard stop; some entries are missing from this mirror "
+                  "(which end depends on the PMO adapter).", ""]
     lines += [
         f"# {m.key}: {m.title}",
         "> Brief: MISSION.md (same folder) — description, labels, mission attachments.", "",

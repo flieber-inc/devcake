@@ -544,6 +544,9 @@ def test_activity_payload_renders_truncation_banner(tmp_path):
     mgr = make_mgr(tmp_path, pmo)
     md = run_coro(mgr.activity_payload("i1"))["activity_md"]
     assert "FEED TRUNCATED" in md.splitlines()[0]   # loud, first line
+    # which end the hard stop drops is adapter-specific — never claim one
+    assert "OLDEST" not in md
+    assert "NEWEST" not in md
 
 
 def _returns(value):

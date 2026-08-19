@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { columnOf, needsHumanReason } from "../src/lib/board.js";
-import { newPmoCard, newRepoCard } from "../src/lib/cards.js";
+import { newPmoCard, newRepoCard, newSkillSourceCard } from "../src/lib/cards.js";
 import { STOPPED_STATES, TERMINAL_STATES } from "../src/lib/runStates.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -67,6 +67,11 @@ check("PMO card scaffold equals the server-model defaults", () => {
 check("repo card scaffold equals the server-model defaults", () => {
   const { name: _n, url: _u, ...rest } = newRepoCard("x");
   assert.deepEqual(rest, contracts.repo_card_defaults);
+});
+
+check("skill-source card scaffold equals the server-model defaults", () => {
+  const { name: _n, ...rest } = newSkillSourceCard("x");
+  assert.deepEqual(rest, contracts.skill_source_card_defaults);
 });
 
 // Adapter registry FALLBACK is a pinned mirror of GET /connections/registry

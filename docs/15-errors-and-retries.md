@@ -36,7 +36,7 @@ prose.
 | `DEV_FORGE` | exit 13 without the structured `DEV_FORGE_AUTH` class (transient forge/clone/push failure, or auth-ish wording without the structured class). Includes a **strict memory-notebook clone failure** in the provision step (ADR-0035: `context_sourcing_strict` on ⇒ the run must not start memoryless) | counted only after per-step excusals are spent (§4a) — **not** a latched breaker |
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push. NOTE (ADR-0035): a strict memory mount's revoked credential classifies here too — a NOTEBOOK card's breaker then freezes dispatch for every mission that binds it, by design (fail closed beats silently memoryless). Distinct case: a memory/skill-source card that fails the MIRROR gate never reaches a container at all — it defers dispatch as an unschedulable gate reason (blocked-reasons row), no attempt, no class |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
-| `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.147.0, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
+| `DEV_TURN_BUDGET` | exit 16: the harness stopped at a configured run-budget cap — reachable for **`claude-code`** / **`grok-build`** (`--max-turns`) and **`qwen-code`** (`--max-session-turns` / `--max-wall-time` / `--max-tool-calls`, CLI exits 53/55); unreachable for **codex** 0.147.0, **pi**, and **opencode**, which have no turn/session cap that maps here (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid **after the in-container continuation budget is spent, when the loop is enabled** (ADR-0022; `07-dev-runtime.md` §5a); app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 by default, with `brake_on_bad_output` (ADR-0026, default off) widening it to cover exactly this cascade |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
@@ -60,7 +60,7 @@ prose.
 | `DEV_OPERATOR_STOP` | yes — the mission stays schedulable; stop the *mission*, not just the run, to prevent re-dispatch | **yes** | scheduler | Runs page names the operator stop |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
 | `DEV_HARNESS_FAULT` | yes — same | **yes**, unless correlated (§4a) | scheduler | `dev_backend_degraded` in `/health` + SPA warning while throttled |
-| `DEV_TURN_BUDGET` | yes — but retrying the same cap cannot help; raise `--max-turns` (claude-code and grok-build take it; **codex has none** — §2a) or assign a stronger Dev Type | **yes** | scheduler | `run.error` names the cap and where to change it |
+| `DEV_TURN_BUDGET` | yes — but retrying the same cap cannot help; raise the harness's budget flag (claude-code / grok-build: `--max-turns`; qwen-code: `--max-session-turns` / wall-time / tool-calls; **codex / pi / opencode have none** — §2a) or assign a stronger Dev Type | **yes** | scheduler | `run.error` names the cap and where to change it |
 | `DEV_FORGE` | yes — a forge outage should not burn missions | **no** while the step has excusals (§4a), **yes** once spent | scheduler | after the cap: `DEVCAKE-FAILED` |
 | `DEV_AUTH` | no — pointless until creds fixed | **no** | — | circuit breaker (§4) + SPA/health alert |
 | `DEV_FORGE_AUTH` | no — pointless until repository access is fixed | **no** | — | per-repo forge breaker + actionable connection-test error |
@@ -78,17 +78,22 @@ against each CLI (`adr/0018-harness-fault-classification-and-backend-brake.md`, 
 |---|---|---|
 | `claude-code` | `--max-turns <N>` | **yes** — on `terminal_reason:"max_turns"` / `subtype:"error_max_turns"` |
 | `grok-build` (0.2.112) | `--max-turns <N>` | **yes** — it emits a dedicated `{"type":"max_turns_reached"}` event **and** `end` `stopReason:"Cancelled"`, exits 1, and the predicate fires on that event type (`grok_turn_budget`). It landed on `DEV_CRASH` (exit 10) until the ADR-0018 fix round added the arm |
+| `qwen-code` | `--max-session-turns` / `--max-wall-time` / `--max-tool-calls` | **yes** — CLI exits 53/55 and budget subtypes map through `qwen_run_fault` → `FAULT_TURN_BUDGET` → exit 16 (`08-harness-templates.md` §1) |
 | `codex` (0.147.0) | **none** | **no** — no `--max-turns` equivalent and no config key for one, so the class is unreachable |
+| `pi` | **none** | **no** — no turn/session budget flag maps to `FAULT_TURN_BUDGET` |
+| `opencode` | **none** | **no** — no turn/session budget flag maps to `FAULT_TURN_BUDGET` |
 
 Consequences for the operator. On a **claude-code** or **grok-build** Dev, raising
 `--max-turns` in that Mission Type's extra CLI args (`11-admin-panel.md` §3) is
 the literal remedy the `run.error` names, and both report the stop as
-`DEV_TURN_BUDGET`. On a **codex** Dev there is nothing to raise: an unbounded run
-is stopped only by `dev_timeout_minutes` (`AppConfig.dev_timeout_minutes`, default 120 — a
+`DEV_TURN_BUDGET`. On a **qwen-code** Dev the levers are the three budget flags
+above (same class, different CLI surface). On a **codex**, **pi**, or **opencode**
+Dev there is nothing to raise: an unbounded run is stopped only by
+`dev_timeout_minutes` (`AppConfig.dev_timeout_minutes`, default 120 — a
 **global** setting, so lowering it to fence one Dev Type shortens every run) and
 it arrives as a signal kill reported `DEV_TIMEOUT`, never `DEV_TURN_BUDGET`. The
 levers there are a smaller task, a different Dev Type, or accepting the timeout as
-the bound. Do not go looking for a codex turn flag; at 0.147.0 there is not one.
+the bound. Do not go looking for a turn flag those three CLIs do not expose.
 
 **grok's cap has no default**, so nothing sits above the value you set: it stops
 exactly where it is told (`grok_loop_varying_cap20` at 20; `grok_turn_budget` at 2),
@@ -282,6 +287,9 @@ non-auth rejections — those words alone must **not** win over an in-band fault
    - `codex`: transport wording in error / `turn.failed` messages
      (`unexpected status NNN`, `last status: NNN`)
    - `grok-build`: `Unauthorized (NNN)` / `(status NNN` in error events
+   - `pi` / `opencode` / `qwen-code`: dialect `api_error_status` extractors
+     over error / terminal event text via `HARNESS_STATUS_PATTERNS` (plus
+     qwen's `api_error_status` / `[API Error: …]` bodies when present)
 2. **Or** stderr matches a **distinctive** marker (word-boundary): currently
    only the grok session phrases `not signed in` and `grok login`.
 
@@ -336,12 +344,17 @@ and teardown paths all deliberately outlive individual errors. The policy that
 keeps that deliberate without becoming sloppy:
 
 - **Lint-enforced** (`app/ruff.toml`, rule `BLE001`; runs in CI and
-  `scripts/ci_suite.sh`): every production `except Exception` is either
-  **narrowed** to the types the code can actually handle, or carries
-  `# noqa: BLE001 — <one-line justification>` naming the contract that makes a
-  blanket catch correct. The justification lives **inline at the site** — this
+  `scripts/ci_suite.sh`): every production `except Exception` satisfies one of
+  three arms — (1) **narrowed** to the types the code can actually handle, or
+  (2) carries `# noqa: BLE001 — <one-line justification>` naming the contract
+  that makes a blanket catch correct, or (3) is a handler that **logs**
+  (`log.exception` / equivalent) under a sanctioned contract below. Ruff's
+  BLE001 already accepts logged handlers without a noqa; the noqa form is
+  still preferred at long-lived seams (teardown, routing degrade) so the
+  contract is readable at the site. Justifications live **inline** — this
   section defines the vocabulary, never a site inventory (it would drift).
-- **Sanctioned contracts** (the justification should name one):
+- **Sanctioned contracts** (the justification — or the log line of arm 3 —
+  should name one):
   *loop guard* (a poll/sweep/consumer cycle must survive any single item's
   failure — the failure is logged and, where one exists, surfaced via
   `poll_degraded`/`blocked_reasons`/a breaker); *probe* (health and connection

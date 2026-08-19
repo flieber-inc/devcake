@@ -81,7 +81,7 @@ def sh(cmd):
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
                               timeout=60).stdout.strip()
-    except Exception as e:                                    # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 — best-effort probe: unavailable host detail must not abort the receipts pack
         return f"<unavailable: {e}>"
 
 

@@ -69,11 +69,10 @@ phrase: **the clean room for delegated deep work** — as capability gets
 cheap, the scarce thing is accountability, and the envelope supplies it,
 domain-free ([`docs/17-positioning.md`](docs/17-positioning.md) §1c).
 
-We believe this works; we have not yet proven it publicly. The mechanisms are
-built and tested; the evidence so far is our own production use, self-reported
-([`docs/16-roadmap.md`](docs/16-roadmap.md), living log). The full argument —
-its evidence status stated claim by claim, and what would change our mind — is
-[`docs/19-thesis.md`](docs/19-thesis.md).
+We believe this works. The mechanisms are built and tested; the evidence so far 
+is our own production use, self-reported ([`docs/16-roadmap.md`](docs/16-roadmap.md), living log). 
+The full argument — its evidence status stated claim by claim, and what 
+would change our mind — is [`docs/19-thesis.md`](docs/19-thesis.md).
 
 ---
 

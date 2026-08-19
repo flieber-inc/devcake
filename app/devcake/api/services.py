@@ -34,7 +34,7 @@ from typing import Any, Optional
 from ..adapters.claims_writer import make_claims_writer
 from ..adapters.dagu import DaguExecutor
 from ..adapters.files import CronStore, RunLogStore, RunStore
-from ..adapters.redis import Messaging
+from ..adapters.redis import Messaging, redis_connect_env
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import security
 from ..config import AppConfig, DevType, load_config, load_dev_types
@@ -195,9 +195,8 @@ def build_services() -> Services:
     dev_types = load_dev_types()
     store = RunStore()
     runlog = RunLogStore()
-    # REDIS_* read HERE — no longer frozen at import time
-    messaging = Messaging(os.environ.get("REDIS_URL", "redis://redis:6379/0"),
-                          os.environ.get("REDIS_PASSWORD", ""))
+    # REDIS_* via redis_connect_env — same helper as /health (not frozen at import)
+    messaging = Messaging(*redis_connect_env())
     executor = DaguExecutor()
     # ADR-0025: per-run workspace tree on the host bind (compose mounts
     # $DEVCAKE_WS_HOST here rw; the dev-run DAG binds per-run subdirs)

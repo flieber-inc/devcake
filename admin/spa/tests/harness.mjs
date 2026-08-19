@@ -18,8 +18,13 @@ function chromePath() {
     join(homedir(), ".cache", "ms-playwright"),                    // Linux
     join(homedir(), "Library", "Caches", "ms-playwright"),         // macOS
   ];
+  // Layouts differ by arch / Playwright build channel: linux-arm64 still
+  // uses chrome-linux/headless_shell; linux-x64 Chrome-for-Testing uses
+  // chrome-headless-shell-linux64/chrome-headless-shell (playwright-core
+  // registry). macOS paths keep the chrome-headless-shell-* layout.
   const layouts = [
     ["chrome-linux", "headless_shell"],
+    ["chrome-headless-shell-linux64", "chrome-headless-shell"],
     ["chrome-headless-shell-mac-arm64", "chrome-headless-shell"],
     ["chrome-headless-shell-mac-x64", "chrome-headless-shell"],
   ];

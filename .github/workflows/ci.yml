@@ -184,6 +184,20 @@ jobs:
           # installs shared libs on ubuntu-latest runners.
           unset PLAYWRIGHT_BROWSERS_PATH
           npx --yes --prefix admin/spa playwright-core install --with-deps --only-shell chromium
+          # Resolve the executable explicitly: linux-x64 CFT layout is
+          # chrome-headless-shell-linux64/chrome-headless-shell; linux-arm64
+          # stays chrome-linux/headless_shell. UI_CHROME short-circuits
+          # harness.mjs chromePath() so either layout works.
+          UI_CHROME="$(find "${HOME}/.cache/ms-playwright" -type f \
+            \( -name headless_shell -o -name chrome-headless-shell \) \
+            -perm -111 2>/dev/null | sort | head -1 || true)"
+          if [ -z "${UI_CHROME}" ]; then
+            echo "FAIL: no Chromium headless shell under ~/.cache/ms-playwright after install" >&2
+            find "${HOME}/.cache/ms-playwright" -maxdepth 3 -type d 2>/dev/null || true
+            exit 1
+          fi
+          export UI_CHROME
+          echo "UI_CHROME=${UI_CHROME}"
           export UI_BASE=http://127.0.0.1:8080
           export ADMIN_USER="${ADMIN_USER:-admin}"
           export ADMIN_PASSWORD="${ADMIN_PASSWORD:-Ci-admin-Pass1!}"

@@ -449,12 +449,113 @@ def test_build_zip_manifest_attributes_omissions_honestly(tmp_path):
     assert "big.bin" in cap_part and "bad.bin" not in cap_part
 
 
+def test_build_zip_manifest_discloses_forge_truncation(tmp_path):
+    """CAKE-68: when the forge truncated the changed-file list, MANIFEST
+    must say additional paths are unknown and point at the forge PR — never
+    invent dropped filenames."""
+    import io
+    import zipfile
+    from devcake.domain.orchestrator.deliver import _build_zip
+    from devcake.ports.forge import PRFile
+
+    class F:
+        async def file_content(self, path, ref):
+            return b"ok"
+
+    files = [PRFile(path="kept.py", status="added")]
+    data, omitted = run_coro(_build_zip(
+        F(), files, "main", cap=10 * 1024 * 1024,
+        truncated=True, pr_url="https://gitlab.example/o/r/-/merge_requests/9"))
+    assert omitted == []  # no named path omissions — withheld names unknown
+    z = zipfile.ZipFile(io.BytesIO(data))
+    assert "kept.py" in z.namelist()
+    manifest = z.read("MANIFEST.txt").decode()
+    assert "forge truncated the changed-file list" in manifest
+    assert "additional paths unknown" in manifest
+    assert "https://gitlab.example/o/r/-/merge_requests/9" in manifest
+    assert "could not be fetched" not in manifest
+    assert "size cap" not in manifest
+
+
+def test_deliver_feed_note_discloses_truncated_file_list(tmp_path):
+    """Truncation is a real omission for feed accounting: the note must not
+    treat len(files) as a complete change set, and the zip MANIFEST must
+    carry the truncation arm."""
+    import io
+    import zipfile
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
+
+    uploaded = {}
+    feed = []
+
+    class FakePMO:
+        async def upload_attachment(self, pmo_id, name, data):
+            uploaded[name] = data
+            return f"https://pmo/{name}"
+
+        def capabilities(self):
+            from devcake.ports.pmo import PMOCapabilities
+            return PMOCapabilities(attachment_max_bytes=10 * 1024 * 1024,
+                                   relations_supported=True)
+
+    class FakeForge:
+        async def pr_state(self, n):
+            return PullRequest(
+                number=n, url="https://gitlab.example/o/r/-/merge_requests/3",
+                state="closed", merged=True, merge_commit_sha="deadbeef")
+
+        async def pr_files(self, n):
+            return PRFilesResult(
+                files=[PRFile(path="only_known.py", status="added")],
+                truncated=True)
+
+        async def file_content(self, path, ref):
+            return b"body"
+
+    class RT:
+        internal = {"linear-t-1"}
+
+        def get(self, name):
+            return FakeForge()
+
+    from fakes import make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+    mgr = make_mission_manager(
+        pmo=FakePMO(),
+        forge_runtime=RT(),
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
+
+    async def _feed(pmo_id, kind, md):
+        feed.append(md)
+
+    mgr._feed = _feed
+    mgr._attachment_cap = lambda: 10 * 1024 * 1024
+
+    run = _run("linear-t-1")
+    run.mission_pmo_id = "p1"
+    run.mission_key = "T-TRUNC"
+    run.finalized_steps = []
+    pr = PullRequest(number=3, url="https://gitlab.example/o/r/-/merge_requests/3",
+                     state="closed", merged=True)
+    run_coro(mgr.deliver_internal_zip(run, pr))
+
+    assert feed, "expected a deliverable feed note"
+    note = feed[0]
+    assert "truncated the changed-file list" in note
+    assert "additional paths unknown" in note
+    assert "https://gitlab.example/o/r/-/merge_requests/3" in note
+    z = zipfile.ZipFile(io.BytesIO(uploaded["T-TRUNC-deliverable.zip"]))
+    assert "MANIFEST.txt" in z.namelist()
+    assert "forge truncated the changed-file list" in z.read("MANIFEST.txt").decode()
+
+
 def test_internal_zip_delivery(tmp_path, monkeypatch):
     """M11 zip delivery: an internal-forge merge packages the changed files
     and attaches them to the PMO feed; failure never un-Dones the mission."""
     import zipfile, io
     from devcake.domain.orchestrator import MissionManager
-    from devcake.ports.forge import PRFile, PullRequest
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
 
     uploaded = {}
     feed = []
@@ -474,9 +575,9 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
                                state="closed", merged=True,
                                merge_commit_sha="abc123")
         async def pr_files(self, n):
-            return [PRFile(path="report/REPORT.md", status="added"),
+            return PRFilesResult(files=[PRFile(path="report/REPORT.md", status="added"),
                     PRFile(path="report/data.bin", status="added"),
-                    PRFile(path="gone.txt", status="removed")]
+                    PRFile(path="gone.txt", status="removed")])
         async def file_content(self, path, ref):
             return {"report/REPORT.md": b"# report",
                     "report/data.bin": b"\x00\x01\x02"}[path]
@@ -520,7 +621,7 @@ def _mission_delivery_setup(tmp_path, feed_body):
     """deliver_internal_zip_for_mission scaffolding: internal repo, one feed
     entry with the given body, capture of uploads."""
     from devcake.domain.model import Activity, ActivityEntry
-    from devcake.ports.forge import PRFile, PullRequest
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
     from fakes import make_mission_manager
     from devcake.adapters.files.run_store import RunStore
 
@@ -543,7 +644,7 @@ def _mission_delivery_setup(tmp_path, feed_body):
                                state="closed", merged=True,
                                merge_commit_sha="abc123")
         async def pr_files(self, n):
-            return [PRFile(path="a.txt", status="added")]
+            return PRFilesResult(files=[PRFile(path="a.txt", status="added")])
         async def file_content(self, path, ref):
             return b"data"
 
@@ -592,7 +693,7 @@ def test_attach_merged_changeset_default_off():
 def test_external_zip_delivery_gated_by_toggle(tmp_path):
     """Configured (non-internal) work repos only zip when the operator
     enables attach_merged_changeset_to_pmo; internal always zips."""
-    from devcake.ports.forge import PRFile, PullRequest
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
     from fakes import make_mission_manager
     from devcake.adapters.files.run_store import RunStore
     from devcake.config import AppConfig
@@ -615,7 +716,7 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
                                state="closed", merged=True,
                                merge_commit_sha="deadbeef")
         async def pr_files(self, n):
-            return [PRFile(path="src/a.py", status="added")]
+            return PRFilesResult(files=[PRFile(path="src/a.py", status="added")])
         async def file_content(self, path, ref):
             return b"print(1)\n"
 
@@ -654,7 +755,7 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
 def test_external_mission_zip_respects_toggle(tmp_path):
     """Merge-sweep path for a non-internal repo: toggle off skips, on delivers."""
     from devcake.domain.model import Activity, ActivityEntry
-    from devcake.ports.forge import PRFile, PullRequest
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
     from fakes import make_mission_manager
     from devcake.adapters.files.run_store import RunStore
     from devcake.config import AppConfig
@@ -679,7 +780,7 @@ def test_external_mission_zip_respects_toggle(tmp_path):
                                state="closed", merged=True,
                                merge_commit_sha="abc")
         async def pr_files(self, n):
-            return [PRFile(path="a.txt", status="added")]
+            return PRFilesResult(files=[PRFile(path="a.txt", status="added")])
         async def file_content(self, path, ref):
             return b"data"
 
@@ -711,7 +812,7 @@ def test_external_mission_zip_respects_toggle(tmp_path):
 def test_deliver_zip_ref_from_pr_state_merge_commit_sha(tmp_path):
     """CAKE-77: deliver pins the zip to PullRequest.merge_commit_sha from
     pr_state — never via adapter-private forge._req."""
-    from devcake.ports.forge import PRFile, PullRequest
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
     from fakes import make_mission_manager
     from devcake.adapters.files.run_store import RunStore
 
@@ -736,7 +837,7 @@ def test_deliver_zip_ref_from_pr_state_merge_commit_sha(tmp_path):
                                merge_commit_sha="deadbeef")
 
         async def pr_files(self, n):
-            return [PRFile(path="a.txt", status="added")]
+            return PRFilesResult(files=[PRFile(path="a.txt", status="added")])
 
         async def file_content(self, path, ref):
             seen_refs.append(ref)
@@ -783,7 +884,7 @@ def test_deliver_zip_ref_falls_back_to_main_without_req(tmp_path):
     """CAKE-77: when neither pr_state nor the inbound PR carries
     merge_commit_sha, the zip ref is the default branch name — still with
     no forge._req reach-through."""
-    from devcake.ports.forge import PRFile, PullRequest
+    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
     from fakes import make_mission_manager
     from devcake.adapters.files.run_store import RunStore
 
@@ -808,7 +909,7 @@ def test_deliver_zip_ref_falls_back_to_main_without_req(tmp_path):
                                merge_commit_sha=None)
 
         async def pr_files(self, n):
-            return [PRFile(path="a.txt", status="added")]
+            return PRFilesResult(files=[PRFile(path="a.txt", status="added")])
 
         async def file_content(self, path, ref):
             seen_refs.append(ref)

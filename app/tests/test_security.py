@@ -376,6 +376,154 @@ def test_security_warnings_bodies_match_product_contract(tmp_path, monkeypatch):
     assert "merge" in wbody.lower()
 
 
+# ── INV-4 mono-repo forge-issues residual (CAKE-113 / CAKE-55 decision 2) ──
+
+
+def test_security_warnings_mono_repo_overlap_fires(tmp_path, monkeypatch):
+    """Forge-issues board path == a configured repo URL → warn (not gate)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="missions",
+            forge="gitea",
+            url="https://git.example/acme/missions.git",
+        )],
+        pmos=[PMOInstance(
+            name="missions",
+            system="gitea_issues",
+            team_key="acme/missions",
+            api_base="https://git.example",
+        )],
+    )
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert "pmo-forge-mono-repo:missions" in ids
+
+
+def test_security_warnings_mono_repo_silent_when_disjoint(tmp_path, monkeypatch):
+    """Dedicated Issues board path ≠ work repo → no mono-repo warning."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="code",
+            forge="gitea",
+            url="https://git.example/acme/code",
+        )],
+        pmos=[PMOInstance(
+            name="missions",
+            system="gitea_issues",
+            team_key="acme/missions",
+            api_base="https://git.example",
+        )],
+    )
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert "pmo-forge-mono-repo:missions" not in ids
+
+
+def test_security_warnings_mono_repo_silent_for_linear(tmp_path, monkeypatch):
+    """Linear PMO is not a forge-issues board — never emit mono-repo warning."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="code",
+            url="https://github.com/acme/missions",
+        )],
+        pmos=[PMOInstance(
+            name="lin",
+            system="linear",
+            team_key="ACME",
+        )],
+    )
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert not any(i.startswith("pmo-forge-mono-repo:") for i in ids)
+
+
+def test_security_warnings_mono_repo_body_honest(tmp_path, monkeypatch):
+    """Warning copy names the residual and recommends Issues repo or Linear."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="missions",
+            forge="gitea",
+            url="https://git.example/acme/missions.git",
+        )],
+        pmos=[PMOInstance(
+            name="missions",
+            system="gitea_issues",
+            team_key="acme/missions",
+            api_base="https://git.example",
+        )],
+    )
+    by_id = {w["id"]: w for w in security.security_warnings(cfg)}
+    warn = by_id["pmo-forge-mono-repo:missions"]
+    assert warn["severity"] == "warning"
+    body = warn["body"]
+    body_l = body.lower()
+    # Residual: Dev forge token can reach the Issues board
+    assert "forge" in body_l and ("issues" in body_l or "board" in body_l)
+    assert "token" in body_l
+    # Recommendation: separate Issues repo OR Linear PMO
+    assert "linear" in body_l
+    assert "separate" in body_l or "dedicated" in body_l
+    # Must not claim INV-4 remains unconditionally Hard / fully enforced here
+    assert "fully enforced" not in body_l
+    assert "unconditionally" not in body_l
+    assert "hard gate" not in body_l
+
+
+def test_security_warnings_mono_repo_different_hosts_no_warning(
+        tmp_path, monkeypatch):
+    """Same path on different hosts is not mono-repo overlap."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="code",
+            forge="gitea",
+            url="https://other.example/acme/missions.git",
+        )],
+        pmos=[PMOInstance(
+            name="missions",
+            system="gitea_issues",
+            team_key="acme/missions",
+            api_base="https://git.example",
+        )],
+    )
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert "pmo-forge-mono-repo:missions" not in ids
+
+
+def test_security_warnings_mono_repo_github_api_host_alias(
+        tmp_path, monkeypatch):
+    """Registry host_aliases: API origin matches clone host for overlap."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="code",
+            forge="github",
+            url="https://github.com/acme/missions.git",
+        )],
+        pmos=[PMOInstance(
+            name="ghiss",
+            system="github_issues",
+            team_key="acme/missions",
+            api_base="https://api.github.com",
+        )],
+    )
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert "pmo-forge-mono-repo:ghiss" in ids
+
+
 def test_profile_secret_snapshots_are_covered_by_the_redaction_glob(tmp_path, monkeypatch):
     """ADR-0013 glob tripwire: /data/secrets/profiles/{name}.json sits at
     scan level two, so a DORMANT profile's values must mask with ZERO

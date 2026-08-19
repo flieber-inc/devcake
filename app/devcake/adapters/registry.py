@@ -42,6 +42,16 @@ class PMOSystemInfo(BaseModel):
     # this; it is NOT a second code path — adapters still implement full
     # PMOPort.
     experimental: bool = False
+    # Forge-issues family (board is owner/repo on a forge). Drives INV-4
+    # mono-repo overlap detection in security.security_warnings (CAKE-113)
+    # without putting forge-host literals outside adapters/ (F1).
+    forge_issue: bool = False
+    # Hostnames that count as the same forge face when comparing a PMO
+    # api_base to a RepoInstance.url (e.g. API host vs clone host).
+    host_aliases: list[list[str]] = []
+    # When api_base is empty, use this host for overlap comparison (public
+    # default). Empty = path-only match when api_base is unset.
+    default_host: str = ""
 
 
 PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
@@ -74,6 +84,7 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
             "http://gitea:3000 (browser UI is http://localhost:3300). "
             "External: https://gitea.example.com"),
         supports_priority=False,   # forge-issue: priority always medium (§9.2)
+        forge_issue=True,
     ),
     "github_issues": PMOSystemInfo(
         id="github_issues",
@@ -96,6 +107,10 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         attachments_supported=False,
         relations_supported=True,
         experimental=True,
+        forge_issue=True,
+        # API origin vs clone URL (CAKE-113 mono-repo host match).
+        host_aliases=[["api.github.com", "github.com"]],
+        default_host="github.com",
         operator_note=(
             "Experimental (not launch-supported). GitHub's public API cannot "
             "attach files to issues. Transcripts, plans, and other "
@@ -124,6 +139,7 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         attachments_supported=True,
         relations_supported=False,
         experimental=True,
+        forge_issue=True,
         operator_note=(
             "Experimental (not launch-supported). Blocked-by issue links "
             "need GitLab Premium (or self-hosted EE). DevCake probes the "

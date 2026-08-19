@@ -106,7 +106,8 @@ echo "── forge contract battery (gitea lane — bundled instance, no externa
 docker compose exec -T app python - < scripts/contract_tests_forge.py
 
 echo "── PMO contract battery (gitea_issues auto-lane — bundled instance, no external tokens)"
-# Default path in contract_tests_pmo.py: GITEA_ADMIN_* → scratch board → 13 scenarios.
+# Default path in contract_tests_pmo.py: GITEA_ADMIN_* → scratch board;
+# row count pinned by EXPECTED_ROWS there — the battery self-fails if a check vanishes.
 # App container already has GITEA_ADMIN_USER/PASSWORD (compose). No Linear required.
 docker compose exec -T app python - < scripts/contract_tests_pmo.py
 

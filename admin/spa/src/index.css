@@ -4,19 +4,20 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* bakery orange, anchored on the brand #b4550a at 600 */
-  --color-accent-50: #fdf6ef;
-  --color-accent-100: #f9e8d8;
-  --color-accent-200: #f2cdab;
-  --color-accent-300: #e9ab74;
-  --color-accent-400: #df833f;
-  --color-accent-500: #cf661c;
-  --color-accent-600: #b4550a;
-  --color-accent-700: #954409;
-  --color-accent-800: #7a380e;
-  --color-accent-900: #652f0f;
-  --color-accent-950: #3a1805;
-  --color-accent: #b4550a;
+  /* frosting violet — 400/500/600 are the brand mark's own gradient stops
+     (#a28ef1 / #7b61dc / #6042cc); the rest of the ramp interpolates them */
+  --color-accent-50: #f7f5fe;
+  --color-accent-100: #efeafd;
+  --color-accent-200: #ded4fa;
+  --color-accent-300: #c5b3f6;
+  --color-accent-400: #a28ef1;
+  --color-accent-500: #7b61dc;
+  --color-accent-600: #6042cc;
+  --color-accent-700: #4f35ab;
+  --color-accent-800: #422d8a;
+  --color-accent-900: #38276f;
+  --color-accent-950: #211744;
+  --color-accent: #6042cc;
 
   /* warm surfaces: stone-tinted light, warm near-black dark */
   --color-surface: #faf9f7;
@@ -38,8 +39,8 @@
   --color-neutral-900: #2a2018;
   --color-neutral-950: #1c1610;
 
-  /* warnings pushed toward true amber so they stop reading as the brand
-     orange (accent) — alarms get their own register */
+  /* warnings: true amber, a register of its own — never the accent, and the
+     accent is never a warning */
   --color-amber-50: #fcf9ec;
   --color-amber-100: #f8f0d3;
   --color-amber-200: #efdfa4;

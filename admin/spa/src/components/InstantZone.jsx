@@ -2,7 +2,7 @@ import React from "react";
 import { Zap } from "lucide-react";
 
 // Spatial convention for the two persistence regimes: anything inside a
-// crust-tinted zone hits the server the moment it's used — plain zones ride
+// accent-tinted zone hits the server the moment it's used — plain zones ride
 // the unified draft and wait for the page-level Save.
 export default function InstantZone({ children, note = "applies immediately — does not wait for Save", className = "" }) {
   return (

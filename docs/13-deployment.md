@@ -277,7 +277,7 @@ DAG's `name:` keys (ADR-0025), with the human-readable run id format of
 | `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (no full harness matrix) — group `ci` |
 | `docker buildx bake all` | control plane + hello + the six harnesses (`app`, `admin`, `hello`, `claude-code`, `codex`, `grok-build`, `pi`, `opencode`, `qwen-code`) — **first install / full upgrades**. **`app-test` is not in group `all`** — bake it explicitly or via group `ci` |
 
-**Cache:** opt-in local `.buildx-cache/` — `BAKE_LOCAL_CACHE=1 docker buildx bake …` (needs a docker-container builder or the containerd image store; the default `docker` driver cannot export cache, so plain `bake all` works everywhere without it). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
+**Cache:** opt-in local `.buildx-cache/` — `BAKE_LOCAL_CACHE=1 docker buildx bake …` (needs a docker-container builder or the containerd image store; the default `docker` driver cannot export cache, so plain `bake all` works everywhere without it). CI: workflows bake `docker-bake.hcl` only and apply GitHub Actions `type=gha` cache via bake-action `set:` with a per-workflow scope (`devcake-ci` / `devcake-images` / `devcake-publish`; `ignore-error=true` on cache-to).
 
 **Bake prerequisite:** full matrix targets (`ci`, `images`, `all`, control-plane) need real **Docker Buildx bake**. On hosts where `docker` is Podman and `docker buildx` is Buildah, `bake` is missing and `-f` may be rejected — only the **app-test unit path** has a fallback (`scripts/lib/bake_app_test.sh` → `docker build -f app/Dockerfile --target test`). Admin/hello/harness builds still need Docker Buildx (or GHA).
 

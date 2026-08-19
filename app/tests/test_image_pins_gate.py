@@ -111,3 +111,36 @@ def test_python_fstring_image_is_an_offender(tmp_path):
               'import subprocess\n'
               'subprocess.run(["docker", "run", f"{img}", "sh"])\n')
     assert off and "not a resolvable literal" in off[0]
+
+
+def _df(mod, tmp_path, body: str) -> list[str]:
+    f = tmp_path / "Dockerfile"
+    f.write_text(body)
+    offenders: list[str] = []
+    mod.check_dockerfile(f, offenders)
+    return offenders
+
+
+def test_unpinned_syntax_frontend_is_an_offender(tmp_path):
+    """# syntax= is an external BuildKit image — floating tags must fail."""
+    mod = _load(tmp_path)
+    off = _df(mod, tmp_path,
+              "# syntax=docker/dockerfile:1\n"
+              f"FROM alpine:3.22@sha256:{DIGEST}\n")
+    assert off and "syntax" in off[0].lower()
+
+
+def test_pinned_syntax_frontend_passes(tmp_path):
+    mod = _load(tmp_path)
+    off = _df(mod, tmp_path,
+              f"# syntax=docker/dockerfile:1@sha256:{DIGEST}\n"
+              f"FROM alpine:3.22@sha256:{DIGEST}\n")
+    assert not off, off
+
+
+def test_ordinary_hash_comment_is_not_a_syntax_line(tmp_path):
+    mod = _load(tmp_path)
+    off = _df(mod, tmp_path,
+              "# syntax note: keep digests pinned\n"
+              f"FROM alpine:3.22@sha256:{DIGEST}\n")
+    assert not off, off

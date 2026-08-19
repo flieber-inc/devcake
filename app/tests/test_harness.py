@@ -382,8 +382,8 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     payload = mgr.runspec_secret_payload(run)
     assert payload["env"]["XAI_API_KEY"] == "xai-test-000000000000000000000"
     assert payload["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_write_token_for_tests_0001"
-    # ISSUES #13 regression tripwire: OO credentials must NEVER re-enter a
-    # runspec — Devs export through the collector, credential-free
+    # OO credentials must NEVER re-enter a runspec — Devs export through
+    # the collector, credential-free
     assert "OTEL_EXPORTER_OTLP_BASIC" not in payload["env"]
     assert not any("OO_" in k for k in payload["env"])
     assert payload["credential_files"] == [{"path_hint": "~/.grok/auth.json",
@@ -594,7 +594,7 @@ def test_dispatch_steward_uses_registry_image_and_sends_harness(tmp_path, monkey
 
 
 def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
-    """ISSUES #13: Dev OTLP export targets the collector on devcake_runtime —
+    """Dev OTLP export targets the collector on devcake_runtime —
     never OpenObserve directly (which would need credentials in the runspec)."""
     from fakes import make_mission_manager
     from devcake.adapters.registry import make_forge

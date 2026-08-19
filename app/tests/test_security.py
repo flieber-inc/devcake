@@ -47,7 +47,7 @@ V0_SECRET_ENV_VARS = [
     "GITLAB_REVIEWER_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
     "XAI_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "REDIS_PASSWORD",
     "DAGU_PASSWORD", "ADMIN_PASSWORD", "OO_ROOT_PASSWORD",
-    # added with the ISSUES #13/#15 opt-in credentials — the mitigations must
+    # added with the opt-in credentials — the mitigations must
     # not themselves open redaction gaps
     "OO_INGEST_PASSWORD", "GITHUB_TOKEN_RO", "GITLAB_TOKEN_RO",
 ]
@@ -159,9 +159,9 @@ def test_raw_credential_file_does_not_alarm_redaction_gap(
 
 
 def test_oo_ingest_and_ro_forge_tokens_redacted(monkeypatch):
-    """ISSUES #13/#15 follow-up: the opt-in credentials (ingest OO user, RO
-    forge PATs) must be masked like every other platform secret — they are
-    arbitrary strings with no token-shape pattern to fall back on."""
+    """Opt-in credentials (ingest OO user, RO forge PATs) must be masked
+    like every other platform secret — they are arbitrary strings with no
+    token-shape pattern to fall back on."""
     monkeypatch.setenv("OO_INGEST_PASSWORD", "ingest-pw-0123456789abcdef")
     monkeypatch.setenv("GITHUB_TOKEN_RO", "read-only-pat-0123456789abcdef")
     for leak in ("ingest-pw-0123456789abcdef", "read-only-pat-0123456789abcdef"):

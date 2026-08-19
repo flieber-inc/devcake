@@ -1,10 +1,11 @@
-"""Idempotent OpenObserve ingest-user provision (docs/12 §1, ISSUES #13).
+"""Idempotent OpenObserve ingest-user provision (docs/12 §1).
 
 The stack authenticates telemetry with ``OO_INGEST_*``; OpenObserve only
 creates the root user from compose. This module creates/resyncs the ingest
 service account so a filled ``.env`` + ``compose up`` is enough — no host-side
 ``scripts/provision_oo.py`` step for connectivity (that script remains for
-dashboard + optional alerts).
+dashboard + optional alerts). Devs hold no OO credentials; the collector
+authenticates.
 
 Called fail-loud from app lifespan: OO is non-negotiable for DevCake.
 """
@@ -58,7 +59,7 @@ async def ensure_oo_ingest_user(
     if not (email or "").strip() or not (password or "").strip():
         raise OoProvisionError(
             "OO_INGEST_EMAIL / OO_INGEST_PASSWORD must be set "
-            "(the OO service account — ISSUES #13)")
+            "(the OO service account)")
     if not (root_e or "").strip() or not (root_p or "").strip():
         raise OoProvisionError(
             "OO_ROOT_EMAIL / OO_ROOT_PASSWORD must be set to provision the "

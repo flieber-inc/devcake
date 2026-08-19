@@ -34,26 +34,6 @@ _GIT_IDENTITY = {
 }
 
 
-class NullClaims:
-    async def list_json_names(self, card):
-        return None
-
-    async def snapshot(self, card):
-        return None
-
-    async def list_claim_meta(self, card):
-        return None
-
-    async def has_readme(self, card):
-        return None
-
-    async def commit(self, card, *, creates, deletes, message):
-        raise RuntimeError("claims writer is not configured")
-
-    def can_write(self, card):
-        return False
-
-
 class ClaimsWriter:
     """One writer for every configured card that stores a write token."""
 
@@ -295,8 +275,7 @@ class ClaimsWriter:
             self._cleanup(dest)
 
 
-def make_claims_writer(config, internal_forge=None) -> ClaimsNotebooks:
-    """Always a real writer. `internal_forge` is accepted for call-site
-    compatibility and unused: operator notebooks already have a write
+def make_claims_writer(config) -> ClaimsNotebooks:
+    """Always a real writer. Operator notebooks already have a write
     token, same as external cards."""
     return ClaimsWriter(config)

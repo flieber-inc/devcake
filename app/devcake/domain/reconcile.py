@@ -1,5 +1,5 @@
 """Startup reconciliation steps 3–4 (docs/04 §6), factored out of the API
-lifespan so the ordering contract is unit-testable (ISSUES #26)."""
+lifespan so the ordering contract is unit-testable."""
 
 import logging
 import re
@@ -66,9 +66,8 @@ def _restamp_store_gen(store, run) -> None:
 async def reconcile_runs(manager) -> None:
     """Step 3: orphan dead Dagu runs. Skip state=="finalizing" — those may have
     pending run.artifacts on the ingress stream; killing them to orphaned
-    before reclaim would either re-finalize after orphan (ISSUES #1+#2) or
-    drop mid-finalize work once terminal redelivery is a no-op. Reclaim
-    (step 4) resumes them.
+    before reclaim would either re-finalize after orphan or drop mid-finalize
+    work once terminal redelivery is a no-op. Reclaim (step 4) resumes them.
 
     Also skip (promote to finalizing) when Dagu is dead but unresolved
     messaging still holds the run's entry — docs/04 §6 "artifacts present →

@@ -93,8 +93,8 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         merged = AppConfig.model_validate(deep_merge(current, body))
     except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
         raise HTTPException(422, str(e))
-    # cross-store semantics + dry-run adapter construction (ISSUES #11) live
-    # in settings_bundle — ONE implementation shared with bundle apply
+    # cross-store semantics + dry-run adapter construction live in
+    # settings_bundle — ONE implementation shared with bundle apply
     # (ADR-0013); the PUT resolves templates against disk
     try:
         validate_config_semantics(

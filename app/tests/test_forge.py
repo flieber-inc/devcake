@@ -120,7 +120,7 @@ def test_merge_gives_up_after_retries_and_405_is_immediate(make, monkeypatch):
     async def conflict_405(method, path, **kw):
         calls2.append(path)
         if method == "GET":
-            # not merged — redelivery probe (ISSUES #6) then re-raise merge error
+            # not merged — redelivery probe then re-raise merge error
             return {"number": 8, "html_url": "https://x/8", "state": "open",
                     "merged": False, "web_url": "https://x/8", "iid": 8}
         raise ForgeError("conflicts", status=405)
@@ -149,7 +149,7 @@ def test_gitea_merge_retries_try_again_later_405(monkeypatch):
 
 
 def test_gitea_merge_definitive_405_probes_already_merged(monkeypatch):
-    """Approvals/conflict 405s must not retry as transient; ISSUES #6 probe
+    """Approvals/conflict 405s must not retry as transient; redelivery probe
     still absorbs a successful-but-redelivered merge."""
     async def no_sleep(_):
         pass
@@ -183,7 +183,7 @@ def test_gitea_merge_definitive_405_probes_already_merged(monkeypatch):
 
 
 def test_github_merge_already_merged_is_success():
-    """ISSUES #6: redelivery after a successful merge must not report failure."""
+    """Redelivery after a successful merge must not report failure."""
     forge, calls = gh(), []
 
     async def merged_405(method, path, **kw):
@@ -199,7 +199,7 @@ def test_github_merge_already_merged_is_success():
 
 
 def test_gitlab_merge_already_merged_is_success():
-    """ISSUES #6: GitLab derives merged from MR state == 'merged'."""
+    """GitLab derives merged from MR state == 'merged'."""
     forge, calls = gl(), []
 
     async def merged_405(method, path, **kw):
@@ -644,7 +644,7 @@ def test_descriptor_complete_and_renderable(cls):
         assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"
     # token_patterns/secret_shape_prefixes MAY be deliberately empty (Gitea:
     # 40-hex tokens collide with git SHAs — value registration is the
-    # redaction line, docs/14 §5); when present they must compile/behave
+    # redaction line, docs/14 §7); when present they must compile/behave
     # templates must render without KeyError against the documented placeholders
     d.pr_instructions.format(key="DEV-1", title="t", default="main",
                              branch="devcake/DEV-1")

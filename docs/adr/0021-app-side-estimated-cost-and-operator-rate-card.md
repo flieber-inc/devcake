@@ -1,6 +1,8 @@
 # ADR-0021 — App-side estimated cost and the operator rate card
 
-- **Status:** accepted (2026-08-02)
+- **Status:** accepted (2026-08-02); **partial identifier supersession** —
+  `finalize_mapper()` renamed to `finalize_steward` (MAPPER→STEWARD; same
+  costing stamp behavior) — note in Decision 2
 - **Context:** Grok runs extract full token splits but `cost_usd` is always
   null (grok-build 0.2.112 emits no cost field; `08-harness-templates.md`
   §5), so fleet spend was understated everywhere native cost is summed —
@@ -31,10 +33,11 @@ A pure module `domain/costing.py` prices an already-extracted token_report:
 
 `finalize()` and `finalize_mapper()` stamp `cost_usd_estimated` +
 `rate_card_id` into `run.token_report` (via `costing.stamp_estimate`)
-before OTel/feed/persist read the dict. `cost_usd` is never written by
-estimation, so every existing native-cost aggregation stays pure. The
-stamp lands even when native cost exists — the override display mode
-(§4) needs both numbers.
+before OTel/feed/persist read the dict. *(Runtime: the mapper finalize
+path is `finalize_steward` — MAPPER→STEWARD rename; costing stamp
+behavior unchanged.)* `cost_usd` is never written by estimation, so every
+existing native-cost aggregation stays pure. The stamp lands even when
+native cost exists — the override display mode (§4) needs both numbers.
 
 ### 3 — The rate card is operator config
 

@@ -7,7 +7,7 @@ import logging
 from ...config import assignment_for
 from .. import backend_health
 from ..model import (LABEL_FAILED, LABEL_SKIP, Mission,
-                     MissionType, PRIORITY_RANK, derive, find_cycles)
+                     PRIORITY_RANK, derive, find_cycles)
 from ..repo_sourcing import memory_mount_names
 from .markers import DISPATCHABLE_TYPES, decomposition_parent_ref
 

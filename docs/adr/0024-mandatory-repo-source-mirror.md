@@ -3,7 +3,8 @@
 - **Status:** accepted (2026-08-03); §5's "ambient mirror read" accepted risk
   SUPERSEDED by ADR-0025 — the mirrors are now mounted RO into the **provision**
   container only, never the agent's harness container, so the deployment-wide
-  ambient read surface named below no longer exists.
+  ambient read surface named below no longer exists. **MAPPER→STEWARD** path /
+  service rename (Decision 2 + Related) — banner below.
 - **Context:** A production stress test ran a multi-repo instance with 27
   GitLab repositories; every run re-cloned all of them (~300 MB) from the
   external forge — 25 mission steps ≈ 7.5 GB of redundant egress, plus
@@ -19,6 +20,13 @@
   earlier refuse-LFS position was retracted: dev images shipped no
   git-lfs, so pointers-without-content was already the status quo, and
   the toggle *upgrades* it); the escape hatch is `git revert`.
+
+> **Supersession note (MAPPER→STEWARD rename):** Decision 2's "MAPPER = its
+> one repo" and "the mapper's periodic path" refer to today's **STEWARD**
+> vehicle (run kind `STEWARD`, `StewardService`, seed `steward` / Opus per
+> ADR-0033 D10). Related still listed `domain/mapper_service.py` — live path
+> is `domain/steward_service.py`. Historical MAPPER spelling below is
+> provenance; grepping engineers should follow the STEWARD names.
 
 ## Decision
 
@@ -54,7 +62,7 @@ needed-set; the mirror contract itself is unchanged.
 
 `dispatch()` computes the run's mirror-eligible set (work repo + ONBOARD
 routing set + reference repos + configured blocker-work repos; MAPPER =
-its one repo; HELLO/OAUTH none) and awaits `ensure_fresh` BEFORE the
+its one repo *(runtime: STEWARD = its one repo)*; HELLO/OAUTH none) and awaits `ensure_fresh` BEFORE the
 activity-repo push (hoisted `resolve_blocker_work`; gating after the push
 would write one snapshot commit per gated cycle). Freshness:
 `repo_mirror.sync_max_age_seconds` (default 0 = sync before every
@@ -68,6 +76,7 @@ natural retry next poll. Auth-classed sync failures latch the EXISTING
 per-repo forge breaker (`mirror sync: …`); `repository not found` is
 deliberately NOT auth app-side (a 404 is a config problem; the breaker's
 "update the token" remediation would mislead). The mapper's periodic path
+*(runtime: steward periodic path)*
 skips with outcome `mirror_stale` (never raising into the poll segment);
 `Run now` returns the reason as a 422. Warm-up runs as a background task
 started by the poll loop — never awaited at boot (structure-guard
@@ -169,7 +178,7 @@ dags bind) fixed in compose via `DAGU_WIKI_DIR`.
 
 - Implement: `app/devcake/adapters/git.py`, `domain/repo_mirror.py`,
   `domain/orchestrator/dispatch.py` (gate, spec_env, extras),
-  `domain/mapper_service.py`, `api/{main,poll,health,config_service}.py`,
+  `domain/steward_service.py` *(was `mapper_service.py` — MAPPER→STEWARD)*, `api/{main,poll,health,config_service}.py`,
   `images/common/dev_entrypoint.py` + `devcake_dev/workspace/clone.py`,
   `docker-compose.yml`, `dagu/dags/dev-run.yaml`, `app/Dockerfile`,
   `images/Dockerfile` (git-lfs — ADR-0023 floor amendment).

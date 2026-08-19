@@ -156,7 +156,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 | `app/Dockerfile` | Multi-stage FastAPI app → tag `devcake/app:${TAG}` |
 | `admin/Dockerfile` | Multi-stage SPA + nginx → tag `devcake/admin:${TAG}` |
 | `images/Dockerfile` | Multi-target Dev harnesses (`base`, `hello`, `claude-code`, `codex`, `grok-build`, `pi`, `opencode`, `qwen-code`) |
-| `app/devcake/harness.py` | Runtime image names for Dagu dispatch (`devcake/dev-*:latest`) |
+| `app/devcake/harness.py` | Runtime image names for Dagu dispatch (`devcake/dev-*:${DEVCAKE_TAG}`, default `latest`) |
 
 ### Typical agent workflows
 

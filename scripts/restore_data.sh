@@ -16,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Digest-pinned (ISSUES #29 rider, OPS-M1): root + RW on the data volume.
+# Digest-pinned (OPS-M1): root + RW on the data volume.
 ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
 
 VOLUME="${DEVCAKE_DATA_VOLUME:-devcake_devcake_data}"

@@ -59,8 +59,7 @@ def svc() -> Services:
 
 
 def _refuse_insecure_passwords() -> None:
-    """Refuse empty/default infra passwords unless DEVCAKE_ALLOW_INSECURE=1
-    (ISSUES #18)."""
+    """Refuse empty/default infra passwords unless DEVCAKE_ALLOW_INSECURE=1."""
     if os.environ.get("DEVCAKE_ALLOW_INSECURE", "").strip() in ("1", "true", "yes"):
         log.warning("DEVCAKE_ALLOW_INSECURE set — skipping password strength checks")
         return
@@ -71,7 +70,7 @@ def _refuse_insecure_passwords() -> None:
         "DAGU_PASSWORD": os.environ.get("DAGU_PASSWORD", ""),
         "OO_ROOT_PASSWORD": os.environ.get("OO_ROOT_PASSWORD", ""),
         # required since M8: the collector, fluentbit, and push_oo_log all
-        # authenticate with the OO service account (ISSUES #13)
+        # authenticate with the OO service account
         "OO_INGEST_PASSWORD": os.environ.get("OO_INGEST_PASSWORD", ""),
         # the internal fallback forge's admin (M11) — the sharpest credential
         # on the runtime network; weak/empty must refuse boot like the rest
@@ -102,7 +101,7 @@ def _refuse_insecure_passwords() -> None:
     # telemetry write silently (collector, fluentbit, log-push)
     if not os.environ.get("OO_INGEST_EMAIL", "").strip():
         raise RuntimeError(
-            "OO_INGEST_EMAIL must be set (the OO service account — ISSUES #13). "
+            "OO_INGEST_EMAIL must be set (the OO service account). "
             "Set it in .env alongside OO_INGEST_PASSWORD; app boot creates the "
             "user in OpenObserve (scripts/provision_oo.py still provisions "
             "dashboard/alerts).")
@@ -152,9 +151,10 @@ async def lifespan(app: FastAPI):
              os.environ.get("DEVCAKE_TAG", "latest"))
     for warn in _security_warnings(s.config):   # loud at boot; dismissable in the SPA
         log.warning("%s — %s", warn["title"], warn["body"])
-    # OpenObserve ingest service account (ISSUES #13): non-negotiable.
-    # Compose only seeds root; boot creates/resyncs OO_INGEST_* so telemetry
-    # never 401s after a fresh volume. Retries while OO is still starting.
+    # OpenObserve ingest service account: non-negotiable. Compose only seeds
+    # root; boot creates/resyncs OO_INGEST_* so telemetry never 401s after a
+    # fresh volume. Retries while OO is still starting. Devs hold no OO
+    # credentials — the collector authenticates.
     status = await ensure_oo_ingest_user_at_boot()
     log.info("openobserve: ingest user %s", status)
     # MAPPER→STEWARD (2026-08-06): one-time rename of persisted run records,

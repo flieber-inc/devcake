@@ -2,7 +2,7 @@
 # (frontend digest-pinned — see images/Dockerfile line 1 for why + bump how)
 # Admin SPA (Vite) + nginx reverse proxy. Multi-stage: Node build → alpine nginx.
 
-# Digest-pinned (ISSUES #29). Bump: docker buildx imagetools inspect <image:tag>
+# Digest-pinned. Bump: docker buildx imagetools inspect <image:tag>
 ARG NODE_IMAGE=node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
 ARG NGINX_IMAGE=nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 

@@ -57,8 +57,8 @@ def _pre_wipe(mgr, run: Run) -> bool:
 
 
 async def _checkpoint(mgr, run: Run, key: str, fn) -> None:
-    """Idempotent finalize sub-step (ISSUES #4–6): skip if already done;
-    append+save only after the side effect succeeds.
+    """Idempotent finalize sub-step: skip if already done; append+save only
+    after the side effect succeeds.
 
     ``fn`` must be a zero-arg async callable (not a pre-created coroutine),
     so redelivery does not construct unawaited coroutines.

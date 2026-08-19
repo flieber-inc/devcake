@@ -49,10 +49,10 @@ _NAMED_ASSET_RE = re.compile(
 RELATIONS_PAGE = 50
 MAX_RELATION_PAGES = 10  # 10 × 50 = 500 relations fail-loud ceiling (ADR-0012)
 
-# Nested issue/project labels page size (ISSUES #7). Was first: 20 with no
-# tripwire — a heavily labeled issue could omit DEVCAKE-SKIP and re-dispatch.
-# Full-page warning matches the relations pattern; get/_get paths also
-# cursor-walk when hasNextPage is set.
+# Nested issue/project labels page size. Was first: 20 with no tripwire —
+# a heavily labeled issue could omit DEVCAKE-SKIP and re-dispatch. Full-page
+# warning matches the relations pattern; get/_get paths also cursor-walk when
+# hasNextPage is set.
 LABELS_PAGE = 50
 MAX_LABEL_PAGES = 5  # 5 × 50 = 250 labels fail-loud ceiling
 
@@ -210,7 +210,7 @@ class LinearAdapter:
                                         nodes { name } }
                    } } }""", "projects", {"teamId": team["id"]})
         # list_all is the scheduler's hot path — paginate labels when the first
-        # page is full so DEVCAKE-SKIP cannot hide past page 1 (ISSUES #7).
+        # page is full so DEVCAKE-SKIP cannot hide past page 1.
         for n in issues:
             page = (n.get("labels") or {}).get("pageInfo") or {}
             if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
@@ -262,7 +262,7 @@ class LinearAdapter:
         return self._project_to_mission(project)
 
     async def _paginate_issue_labels(self, pmo_id: str, issue: dict) -> None:
-        """Cursor-walk issue labels when the first page is full (ISSUES #7)."""
+        """Cursor-walk issue labels when the first page is full."""
         conn = issue.get("labels") or {}
         nodes = list(conn.get("nodes") or [])
         page_info = conn.get("pageInfo") or {}
@@ -730,7 +730,7 @@ class LinearAdapter:
         more, so a concurrent writer's labels can never be clobbered and a
         truncated read can no longer delete overflow labels — the paginated
         read only resolves removal ids and skips no-op mutations. The ceiling
-        refusal stays: past it a removal cannot be verified (ISSUES #7).
+        refusal stays: past it a removal cannot be verified.
         Serialized per mission like every swap path (the CAKE-48 race:
         finalize's stage-label add and the discovery sweep's gate retire
         landed in the same second, and the sweep's stale full-set rewrite
@@ -870,9 +870,9 @@ class LinearAdapter:
     async def _all_project_labels(self) -> dict[str, str]:
         """NAME→id over the whole workspace projectLabels registry, cursor-
         paginated: a DEVCAKE-* project label beyond page 1 must still resolve
-        (ISSUES #7 twin of the per-project read). Past the ceiling it raises
-        instead of returning a silent truncation (audit A29 — an unresolvable
-        managed label with no signal)."""
+        (twin of the per-project read). Past the ceiling it raises instead of
+        returning a silent truncation (audit A29 — an unresolvable managed
+        label with no signal)."""
         by_name: dict[str, str] = {}
         after = None
         for _ in range(MAX_LABEL_PAGES):
@@ -895,8 +895,8 @@ class LinearAdapter:
         """Project labels are a separate workspace-level entity (verified live)
         with no per-label mutation counterpart, so this path keeps the full-set
         read-modify-write: paginate the read, refuse the rewrite past the
-        ceiling (ISSUES #7), and hold the per-mission lock so a concurrent
-        writer's label is never rewritten away."""
+        ceiling, and hold the per-mission lock so a concurrent writer's label
+        is never rewritten away."""
         async with label_write_lock(project_id):
             return await self._swap_project_labels_locked(project_id, remove, add)
 
@@ -1049,8 +1049,7 @@ class LinearAdapter:
         if (label_page or {}).get("hasNextPage") or (
                 label_page is None and len(label_nodes) >= LABELS_PAGE):
             log.warning("issue %s: labels truncated (%d fetched) — "
-                        "DEVCAKE-* labels may be missing; risk of re-dispatch "
-                        "(ISSUES #7)",
+                        "DEVCAKE-* labels may be missing; risk of re-dispatch",
                         n.get("identifier"), len(label_nodes))
         return Mission(
             pmo_id=n["id"], pmo_kind="issue", instance=self._instance,
@@ -1073,7 +1072,7 @@ class LinearAdapter:
         if (label_page or {}).get("hasNextPage") or (
                 label_page is None and len(label_nodes) >= LABELS_PAGE):
             log.warning("project %s: labels truncated (%d fetched) — "
-                        "DEVCAKE-* labels may be missing (ISSUES #7)",
+                        "DEVCAKE-* labels may be missing",
                         n.get("name"), len(label_nodes))
         return Mission(
             pmo_id=n["id"], pmo_kind="project", instance=self._instance,

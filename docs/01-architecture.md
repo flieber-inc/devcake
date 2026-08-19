@@ -52,7 +52,7 @@ app/devcake/
                    #     review, decomposition, sweeps, feed, markers, steward,
                    #     discovery, steps, router, family_graph, freshness,
                    #     completion, deliver, activity_payload
-    steward_service.py  # Relations Steward cadence (ADR-0007; ISSUES #36 first cut)
+    steward_service.py  # Relations Steward cadence (ADR-0007; orchestrator package split first cut)
     cron_service.py     # Scheduled Tasks: one-verb ticket creator + reserved
                         #   Memory Curator fan-out (ADR-0035); fires ride the poll loop
     claims.py           # the .claims/ conveyor — leads copied onto memory

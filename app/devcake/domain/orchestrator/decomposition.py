@@ -62,10 +62,10 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 f"decomposition part {i}: blocked_by must be 1-based indexes "
                 f"of EARLIER parts, got {deps!r}")
     # Redact agent-generated fields before hashing and create_mission so
-    # redelivery and secrets scrubbing stay consistent (ISSUES #12). Marker
-    # syntax in the untrusted body is defanged (opening backtick stripped)
-    # BEFORE hashing: a Dev quoting a decomposition marker would otherwise
-    # shadow the child's own footer and confuse the replay child-scan.
+    # redelivery and secrets scrubbing stay consistent. Marker syntax in the
+    # untrusted body is defanged (opening backtick stripped) BEFORE hashing: a
+    # Dev quoting a decomposition marker would otherwise shadow the child's
+    # own footer and confuse the replay child-scan.
     normalized = [{
         "title": redact(str(d.get("title") or f"part {i}")),
         "description": redact(str(d.get("description") or "")).replace(

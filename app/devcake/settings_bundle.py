@@ -665,9 +665,8 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
 
 
 def dry_run_adapters(cfg: AppConfig) -> None:
-    """Construct every adapter before anything persists (ISSUES #11): a bad
-    URL or forge shape must never land on disk. Unconfigured instances are
-    valid-but-idle."""
+    """Construct every adapter before anything persists: a bad URL or forge
+    shape must never land on disk. Unconfigured instances are valid-but-idle."""
     from .adapters.registry import make_forge, make_pmo  # lazy: import-light
     try:
         for inst in cfg.pmos:

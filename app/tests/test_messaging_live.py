@@ -41,7 +41,7 @@ def test_acl_isolation_inv4(msg):
             await rb.xrange(f"devcake:reply:{rid_a}")
         with pytest.raises(NoPermissionError):
             await rb.get(f"devcake:runspec-secret:{rid_a}")
-        # ISSUES #14: write-only on ingress — Dev must not XREAD shared ingress
+        # Write-only on ingress — Dev must not XREAD shared ingress
         # (envelopes carry plaintext auth of other runs)
         from devcake.adapters.redis.messaging import INGRESS
         with pytest.raises(NoPermissionError):

@@ -6,8 +6,8 @@
   pre-v0.2 structural plan. C1 (this ADR + the binding-block removal + the
   structure guard test) is the normative anchor; C2/C3 finish the orchestrator,
   C4–C6 split the API composition root, C7 splits the admin ConfigPage.
-- **Context:** ISSUES #36 split the ~1.8k-line orchestrator god module into
-  `domain/orchestrator/` but left a *transitional façade*: ~50 free functions
+- **Context:** The orchestrator package split moved the ~1.8k-line orchestrator
+  god module into `domain/orchestrator/` but left a *transitional façade*: ~50 free functions
   taking `self`, bound onto `MissionManager` by module-level assignment after
   the class body. Nothing was greppable as a method, `staticmethod()`/
   `classmethod()` wrappers hid calling conventions, and the test suite grew
@@ -81,7 +81,9 @@ in `api/poll.py` as `PollRuntime`; health probes in `api/health.py`.
 The dominant private seams are legitimized, not relocated:
 `transitions.transition`, `sweeps.merge_sweep`/`tracking_sweep`,
 `dispatch.attempt_number`/`resolve_repo`, `review.finalize_review`,
-`decomposition.finalize_decomposition`, `mapper.apply_mapper_edges` become
+`decomposition.finalize_decomposition`, `mapper.apply_mapper_edges`
+*(historical name — live public seams are `steward.apply_steward_edges` /
+`finalize_steward` under `domain/orchestrator/steward.py`)* become
 their modules' public functions and the tests call them as such (AGENTS.md "no
 private tests / agree the seam first"). `_feed`/`_checkpoint` stay methods, so
 their test sites stand.

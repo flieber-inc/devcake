@@ -15,7 +15,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Digest-pinned (ISSUES #29 rider, 2026-08-12 audit OPS-M1): this container
+# Digest-pinned (2026-08-12 audit OPS-M1): this container
 # runs as root with RW on the output dir — check_image_pins.py enforces.
 ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
 

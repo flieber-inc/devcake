@@ -219,9 +219,10 @@ def _validate_known_forge(v: str) -> str:
 
 
 def _validate_forge_url_shape(v: str) -> str:
-    """Forge-neutral host + owner/repo path rule (ISSUES #10). Empty is
-    allowed for first-boot / unconfigured cards. Shared by RepoInstance and
-    SkillSource so the two connection classes cannot drift."""
+    """Forge-neutral host + owner/repo path rule — malformed forge URLs are
+    rejected at schema before PUT persists. Empty is allowed for first-boot /
+    unconfigured cards. Shared by RepoInstance and SkillSource so the two
+    connection classes cannot drift."""
     if not v:
         return v
     from urllib.parse import urlsplit
@@ -263,8 +264,8 @@ class RepoInstance(BaseModel):
     merge_settle_minutes: int = Field(0, ge=0)
     # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
-    # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);
-    # when absent, every stage receives the WRITE token — /health warns.
+    # name. An optional read-only token for non-EXECUTE stages; when absent,
+    # every stage receives the WRITE token — /health warns.
 
     @field_validator("forge")
     @classmethod
@@ -943,7 +944,7 @@ class AppConfig(BaseModel):
     # deliberately no upper bound (unlike max_attempts): large budgets (10,
     # 50) are a legitimate experiment, bounded by dev_timeout_minutes
     max_continuations: int = Field(2, ge=0)
-    # ge=1: used as a modulo cadence; 0 would ZeroDivisionError (ISSUES #8/#9)
+    # ge=1: used as a modulo cadence; 0 would ZeroDivisionError
     review_loop_warning_every: int = Field(3, ge=1)
     # After a REVIEW-approved merge, also zip the PR change set onto the PMO
     # feed for CONFIGURED (external) work repos. Internal/zero-repo missions

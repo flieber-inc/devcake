@@ -199,11 +199,11 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     handled_below = False
                 if handled_below:
                     # Already-merged treated as success by forge.merge; if we
-                    # still fail, re-probe before posting merge-failed
-                    # (ISSUES #6). The try covers ONLY the probe (2026-08-12
-                    # audit F4): the old scope also swallowed completion's
-                    # PMO transients, misattributed them to the probe, and
-                    # posted "auto-merge failed" on an already-merged PR.
+                    # still fail, re-probe before posting merge-failed. The try
+                    # covers ONLY the probe (2026-08-12 audit F4): the old scope
+                    # also swallowed completion's PMO transients, misattributed
+                    # them to the probe, and posted "auto-merge failed" on an
+                    # already-merged PR.
                     merged = False
                     try:
                         merged = (await forge.pr_state(pr.number)).merged

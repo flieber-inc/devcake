@@ -20,7 +20,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
-from .._toolkit import label_write_lock
+from .._toolkit import gitea_internal_tracker_enable_deps, label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
@@ -655,15 +655,19 @@ class GiteaIssuesAdapter:
     async def _enable_issue_dependencies(self) -> None:
         """Dependencies are off by default on new repos (spike 1.24.7).
 
-        Only enable_issue_dependencies is set — Gitea applies only the fields
-        sent, so we must not force-disable the built-in time tracker.
+        Gitea replaces the whole ``internal_tracker`` (plain bools) on PATCH —
+        omitted keys become false. GET the current tracker, then PATCH with
+        deps enabled and time-tracker flags preserved
+        (``gitea_internal_tracker_enable_deps``).
         """
         try:
+            repo = await self._req("GET", self._repo_path(""))
+            cur = (repo or {}).get("internal_tracker") if isinstance(
+                repo, dict) else None
             await self._req(
                 "PATCH", self._repo_path(""),
-                json={"internal_tracker": {
-                    "enable_issue_dependencies": True,
-                }})
+                json={"internal_tracker":
+                      gitea_internal_tracker_enable_deps(cur)})
         except Exception as e:  # noqa: BLE001 — best-effort enable; create_relation may still work
             log.warning("gitea_issues enable dependencies: %s", e)
 

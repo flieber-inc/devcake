@@ -67,6 +67,16 @@ class Router:
         self.next_comment = 1
         self.calls: list[str] = []
         self.patch_bodies: list[dict] = []
+        # Seeded GET /repos/o/r payload (Gitea returns internal_tracker).
+        # Default matches a fresh Gitea issues unit: tracker on, deps off.
+        self.repo = {
+            "name": "r",
+            "internal_tracker": {
+                "enable_time_tracker": True,
+                "allow_only_contributors_to_track_time": True,
+                "enable_issue_dependencies": False,
+            },
+        }
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = urlsplit_path(req.url.path)
@@ -79,10 +89,19 @@ class Router:
             except json.JSONDecodeError:
                 body = {}
 
-        # PATCH repo (enable dependencies)
-        if method == "PATCH" and path == "/api/v1/repos/o/r":
-            self.patch_bodies.append(body)
-            return httpx.Response(200, json={"name": "r"})
+        # GET/PATCH repo (enable dependencies via RMW of internal_tracker)
+        if path == "/api/v1/repos/o/r":
+            if method == "GET":
+                return httpx.Response(200, json=self.repo)
+            if method == "PATCH":
+                self.patch_bodies.append(body)
+                tracker = body.get("internal_tracker")
+                if isinstance(tracker, dict):
+                    self.repo["internal_tracker"] = {
+                        **(self.repo.get("internal_tracker") or {}),
+                        **tracker,
+                    }
+                return httpx.Response(200, json=self.repo)
 
         # labels collection (pagination-aware: the adapter must walk pages —
         # a one-page read feeding the full-set PUT is the audit-F8 bug)
@@ -818,13 +837,23 @@ def test_blocked_by_ceiling_warns(monkeypatch, caplog):
 
 
 def test_ensure_labels_enables_deps_without_touching_time_tracker():
-    """ensure_labels still turns issue dependencies on, but must not force
-    disable the built-in time tracker (or its contributor gate)."""
+    """ensure_labels turns issue dependencies on via GET→merge→PATCH.
+
+    Gitea replaces the whole internal_tracker (plain bools); omitting keys
+    still force-disables the time tracker. The PATCH must preserve the
+    seeded tracker-on / contributor-gate values while enabling deps.
+    """
     router = Router()
+    router.repo["internal_tracker"] = {
+        "enable_time_tracker": True,
+        "allow_only_contributors_to_track_time": False,
+        "enable_issue_dependencies": False,
+    }
     pmo = make_pmo(router)
     run(pmo.ensure_labels("o/r", {"DEVCAKE"}))
     assert router.patch_bodies, "repo PATCH must run to enable dependencies"
+    assert any(c.startswith("GET /api/v1/repos/o/r") for c in router.calls)
     tracker = router.patch_bodies[0].get("internal_tracker") or {}
     assert tracker.get("enable_issue_dependencies") is True
-    assert "enable_time_tracker" not in tracker
-    assert "allow_only_contributors_to_track_time" not in tracker
+    assert tracker.get("enable_time_tracker") is True
+    assert tracker.get("allow_only_contributors_to_track_time") is False

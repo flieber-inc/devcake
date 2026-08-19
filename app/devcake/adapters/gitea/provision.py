@@ -28,6 +28,7 @@ from ... import security
 from ...ports.internal_forge import (ACTIVITY_PREFIX, ActivityRepoCredentials,
                                      InternalRepo, MissionRepoCredentials,
                                      activity_repo_name, internal_repo_name)
+from .._toolkit import gitea_internal_tracker_enable_deps
 
 log = logging.getLogger("devcake.internal_forge")
 
@@ -297,18 +298,22 @@ class GiteaProvisioner:
         from ...config import MANAGED_BOARD_NAME
         await self._req("POST", "/orgs", tolerate=(409, 422),
                         json={"username": PMO_ORG, "visibility": "private"})
-        adopted = await self._req("GET", f"/repos/{PMO_ORG}/{BOARD_REPO}",
-                                  tolerate=(404,)) is not None
+        repo = await self._req("GET", f"/repos/{PMO_ORG}/{BOARD_REPO}",
+                               tolerate=(404,))
+        adopted = repo is not None
         if not adopted:
             await self._req("POST", f"/orgs/{PMO_ORG}/repos",
                             json={"name": BOARD_REPO, "private": True,
                                   "auto_init": True, "default_branch": "main"})
+            repo = await self._req("GET", f"/repos/{PMO_ORG}/{BOARD_REPO}")
         # dependencies are off by default and gate blocked_by (docs/05 §9).
-        # Only enable_issue_dependencies — do not force-disable the time tracker.
+        # Gitea replaces the whole internal_tracker on PATCH (plain bools) —
+        # RMW so enabling deps does not force-disable the time tracker.
+        cur = (repo or {}).get("internal_tracker") if isinstance(
+            repo, dict) else None
         await self._req("PATCH", f"/repos/{PMO_ORG}/{BOARD_REPO}",
-                        json={"internal_tracker": {
-                            "enable_issue_dependencies": True,
-                        }})
+                        json={"internal_tracker":
+                              gitea_internal_tracker_enable_deps(cur)})
         await self._req("POST", "/admin/users", tolerate=(409, 422),
                         tolerate_only_if="already exists",
                         json={"username": BOARD_USER,

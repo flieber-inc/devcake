@@ -220,8 +220,7 @@ real EXECUTE: §9.
 ## Quickstart
 
 ```bash
-# Clone the remote or fork you intend to run (a fixed public product URL is
-# not published yet — pre-FOSS; do not invent one):
+# Clone the remote or fork you intend to run:
 git clone <this-repo-url> && cd devcake
 cp .env.example .env
 # Edit .env: strong ADMIN_*, REDIS_PASSWORD, DAGU_PASSWORD, OO_ROOT_PASSWORD,

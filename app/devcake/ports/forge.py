@@ -82,6 +82,14 @@ class PRFile(BaseModel):
     deletions: int = 0
 
 
+class PRFilesResult(BaseModel):
+    """Changed-file list for deliverable packaging. ``truncated=True`` means
+    the vendor withheld some paths (names unknown) — callers must disclose
+    the incomplete list rather than claim completeness."""
+    files: list[PRFile]
+    truncated: bool = False
+
+
 class ForgeCapabilities(BaseModel):
     """Behavioral divergence between forges, extracted from the observed
     GitHub/GitLab/Gitea differences (M11, F4). Call sites branch on these
@@ -163,6 +171,6 @@ class ForgePort(Protocol):
     async def default_branch_protection(
         self, branch: str = "main") -> Optional[BranchProtection]: ...
     # deliverable packaging (M11): the merged change set → zip → PMO feed
-    async def pr_files(self, pr_number: int) -> list[PRFile]: ...
+    async def pr_files(self, pr_number: int) -> PRFilesResult: ...
     async def file_content(self, path: str, ref: str) -> bytes: ...
     def approval_footer(self, pr_url: str) -> str: ...

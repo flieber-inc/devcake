@@ -92,10 +92,13 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
             or getattr(pr, "merge_commit_sha", None)
             or "main"
         )
-        files = [f for f in await forge.pr_files(pr.number)
-                 if f.status != "removed"]
+        listing = await forge.pr_files(pr.number)
+        files = [f for f in listing.files if f.status != "removed"]
+        truncated = bool(listing.truncated)
         cap = mgr._attachment_cap()
-        zip_bytes, omitted = await _build_zip(forge, files, merge_sha, cap)
+        zip_bytes, omitted = await _build_zip(
+            forge, files, merge_sha, cap,
+            truncated=truncated, pr_url=state.url)
         name = f"{mission_key}-deliverable.zip"
         url = await mgr.pmo.upload_attachment(pmo_id, name, zip_bytes)
         is_internal = repo_ref in mgr.forges.internal
@@ -107,7 +110,12 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         if not is_internal:
             note += (f" Snapshot of the merged change set; the forge PR is "
                      f"canonical: {state.url}.")
-        if omitted:
+        if truncated:
+            note += (f" The forge truncated the changed-file list "
+                     f"({len(files)} path(s) returned; additional paths "
+                     f"unknown) — the complete change set is in the PR "
+                     f"{state.url}.")
+        elif omitted:
             note += (f" {len(omitted)} file(s) omitted (too large, or a fetch "
                      f"error — see MANIFEST.txt in the zip); the full change "
                      f"set is in the PR {state.url}.")
@@ -129,9 +137,14 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
 
 
 async def _build_zip(forge, files: list[PRFile], ref: str,
-                     cap: int) -> tuple[bytes, list[str]]:
+                     cap: int, *, truncated: bool = False,
+                     pr_url: str = "") -> tuple[bytes, list[str]]:
     """Zip files at `ref`, largest-last until the cap; omitted files are
-    listed in MANIFEST.txt. Returns (zip_bytes, omitted_paths)."""
+    listed in MANIFEST.txt. Returns (zip_bytes, omitted_paths).
+
+    ``truncated`` means the forge withheld some changed paths (names
+    unknown) — a distinct MANIFEST arm, never inventing dropped filenames.
+    """
     fetched: list[tuple[str, bytes]] = []
     failed_fetch: list[str] = []
     over_cap: list[str] = []
@@ -155,9 +168,17 @@ async def _build_zip(forge, files: list[PRFile], ref: str,
             z.writestr(path, content)
             used += len(content)
         # MANIFEST attributes each omission honestly (audit A16: everything
-        # used to be blamed on the size cap)
-        if failed_fetch or over_cap:
+        # used to be blamed on the size cap). Truncation is a third arm —
+        # GitLab overflow names no withheld paths.
+        if failed_fetch or over_cap or truncated:
             manifest = ""
+            if truncated:
+                forge_ref = pr_url or "the forge PR/MR"
+                manifest += (
+                    "Files omitted (forge truncated the changed-file list; "
+                    "additional paths unknown):\n"
+                    f"{len(files)} path(s) returned; see {forge_ref} "
+                    "for the complete change set.\n")
             if failed_fetch:
                 manifest += ("Files omitted (could not be fetched from the "
                              "forge):\n" + "\n".join(failed_fetch) + "\n")

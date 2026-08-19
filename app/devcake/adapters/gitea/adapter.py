@@ -31,7 +31,7 @@ import base64
 
 from ...ports.forge import (BranchProtection, ForgeCapabilities,
                             ForgeDescriptor, ForgeError, ForgeHealth, PRFile,
-                            PullRequest)
+                            PRFilesResult, PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -253,19 +253,21 @@ class GiteaForge:
             protected=True,
             requires_reviews=bool(rule.get("required_approvals", 0) >= 1))
 
-    async def pr_files(self, pr_number: int) -> list[PRFile]:
+    async def pr_files(self, pr_number: int) -> PRFilesResult:
         """Changed files across the PR (paginated — large changesets)."""
         from .._toolkit import paginate_rest
-        raw, _ = await paginate_rest(
+        raw, truncated = await paginate_rest(
             lambda page: self._req(
                 "GET", f"/pulls/{pr_number}/files?limit=50&page={page}"),
             page_size=50, max_pages=40,
             what=f"gitea pr_files #{pr_number}", on_ceiling="warn")
-        return [PRFile(path=f.get("filename", ""),
-                       status=f.get("status", "modified"),
-                       additions=int(f.get("additions") or 0),
-                       deletions=int(f.get("deletions") or 0))
-                for f in raw]
+        return PRFilesResult(
+            files=[PRFile(path=f.get("filename", ""),
+                          status=f.get("status", "modified"),
+                          additions=int(f.get("additions") or 0),
+                          deletions=int(f.get("deletions") or 0))
+                   for f in raw],
+            truncated=truncated)
 
     async def file_content(self, path: str, ref: str) -> bytes:
         """Raw bytes of a file at a ref (base64-safe — non-code deliverables

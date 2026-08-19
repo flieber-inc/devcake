@@ -9,7 +9,8 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from ...ports.forge import (BranchProtection, ForgeCapabilities, ForgeDescriptor,
-                            ForgeError, ForgeHealth, PRFile, PullRequest)
+                            ForgeError, ForgeHealth, PRFile, PRFilesResult,
+                            PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -217,10 +218,19 @@ class GitLabForge:
         except Exception:  # noqa: BLE001 — probe contract: failure → None (protection unknown); never raises into the poll loop
             return None
 
-    async def pr_files(self, pr_number: int) -> list[PRFile]:
-        # MR changes: one call returns the full change list (paginated by the
-        # diffs endpoint; the changes endpoint returns all for typical MRs)
-        data = await self._req("GET", f"/merge_requests/{pr_number}/changes")
+    async def pr_files(self, pr_number: int) -> PRFilesResult:
+        """MR changed-file list. GitLab's /changes may set ``overflow`` when
+        size limits withhold paths; retry once with access_raw_diffs=true
+        (Gitaly-backed) and surface residual truncation on the DTO."""
+        path = f"/merge_requests/{pr_number}/changes"
+        data = await self._req("GET", path) or {}
+        if data.get("overflow"):
+            data = await self._req("GET", f"{path}?access_raw_diffs=true") or {}
+        truncated = bool(data.get("overflow"))
+        if truncated:
+            log.warning(
+                "gitlab pr_files #%s: overflow remains after access_raw_diffs "
+                "retry — changed-file list incomplete", pr_number)
         out: list[PRFile] = []
         for ch in (data.get("changes") or []):
             status = ("added" if ch.get("new_file") else
@@ -228,7 +238,7 @@ class GitLabForge:
                       "renamed" if ch.get("renamed_file") else "modified")
             out.append(PRFile(path=ch.get("new_path") or ch.get("old_path") or "",
                               status=status))
-        return out
+        return PRFilesResult(files=out, truncated=truncated)
 
     async def file_content(self, path: str, ref: str) -> bytes:
         from urllib.parse import quote

@@ -7,8 +7,10 @@ line-length = 100
 [lint]
 # Narrow: syntax / undefined names only (caught the review.py merge_err capture),
 # plus BLE001 (blind except). Policy (docs/15 §7): every production
-# `except Exception` is narrowed or carries `# noqa: BLE001` with a one-line
-# justification. Silent swallows (bare pass/continue, no log) are never OK.
+# `except Exception` is (1) narrowed, (2) carries `# noqa: BLE001 — <reason>`,
+# or (3) a logged handler (`log.exception` / equivalent) under a sanctioned
+# contract — ruff accepts arm 3 without noqa; prefer an explicit noqa at
+# long-lived seams. Silent swallows (bare pass/continue, no log) are never OK.
 select = ["E9", "F63", "F7", "F82", "BLE001"]
 
 [lint.per-file-ignores]

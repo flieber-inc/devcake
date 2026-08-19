@@ -178,7 +178,7 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
     if name in config.active_devtype_prompts:
         config.active_devtype_prompts[new] = config.active_devtype_prompts.pop(name)
         changed = True
-    if changed or True:
+    if changed:
         save_config(config)
     if name in shared_breakers:
         shared_breakers[new] = shared_breakers.pop(name)
@@ -205,7 +205,7 @@ async def remove_dev_type(name: str, *, config, dev_types):
         raise HTTPException(
             409, f"{name} is assigned on PMO instance(s) "
                  f"{', '.join(holders)} — remove the override(s) first")
-    if config.steward.dev_type == name:
+    if config.steward.enabled and config.steward.dev_type == name:
         raise HTTPException(409, f"{name} is the Relations Steward's Dev Type — "
                                  "repoint or disable the steward first")
     dev_types.pop(name, None)

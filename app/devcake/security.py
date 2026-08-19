@@ -1,4 +1,4 @@
-"""Transcript/report redaction (docs/14 §5).
+"""Transcript/report redaction (docs/14 §7).
 
 Boundary (honest): app→PMO and app→forge *writes* are scrubbed at choke points
 (`MissionManager._feed`, forge PR comments, `create_mission` titles/bodies).
@@ -28,7 +28,7 @@ PLATFORM_SECRET_ENV_VARS = [
     "GITEA_ADMIN_PASSWORD",
 ]
 
-# harness/model key shapes (docs/14 §5) — not adapter-owned
+# harness/model key shapes (docs/14 §7) — not adapter-owned
 PLATFORM_TOKEN_PATTERNS = [
     r"\bsk-[A-Za-z0-9_-]{20,}\b",
     r"\bxai-[A-Za-z0-9_-]{20,}\b",

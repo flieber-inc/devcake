@@ -91,7 +91,8 @@ def test_revoke_leftover_run_users_unregisters_runtime_secrets():
 
 
 def test_clear_redis_routes_acl_sweep_through_revoke_helper(monkeypatch):
-    """clear_redis must not reimplement bulk DELUSER without SAVE."""
+    """clear_redis must not reimplement bulk DELUSER without SAVE, and must
+    clear in-process chunk assemblies via the public Messaging method."""
     from devcake.api import clear as clear_mod
 
     calls: list[str] = []
@@ -104,6 +105,10 @@ def test_clear_redis_routes_acl_sweep_through_revoke_helper(monkeypatch):
         async def revoke_leftover_run_users(self):
             calls.append("revoke")
             return 3
+
+        def clear_chunk_assemblies(self) -> None:
+            calls.append("chunks")
+            self._chunks.clear()
 
     class _ScanRedis:
         async def scan_iter(self, match=None, count=200):
@@ -118,7 +123,7 @@ def test_clear_redis_routes_acl_sweep_through_revoke_helper(monkeypatch):
 
     msg = _Msg()
     out = run(clear_mod.clear_redis(msg))
-    assert calls == ["revoke"]
+    assert calls == ["revoke", "chunks"]
     assert out["acl_users_deleted"] == 3
     assert out["ingress_trimmed"] is True
     assert msg._chunks == {}

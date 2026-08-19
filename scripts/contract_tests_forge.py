@@ -231,7 +231,7 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     # a pr_state failure fails the battery loudly — no silent "main" default
     state_after = await forge.pr_state(n)
     merge_sha = state_after.merge_commit_sha or "main"
-    files = await forge.pr_files(n)
+    files = (await forge.pr_files(n)).files
     check("11", "pr_files lists changed files",
           any(f.path == "out.bin" for f in files), f"{[f.path for f in files]}")
 

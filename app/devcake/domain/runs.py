@@ -25,7 +25,7 @@ from ..ports.state import StatePort
 from ..telemetry import OTEL_COLLECTOR_URL
 from . import failure_taxonomy
 from .ids import make_run_id
-from .run import Run, auth_digest, utcnow
+from .run import Run, auth_digest, is_pre_wipe, utcnow
 from .run_bootstrap import RunBootstrap
 from .workspaces import NullWorkspaceStore
 
@@ -195,16 +195,8 @@ class RunManager:
         """True when this run is not stamped for the store's current wipe
         generation (docs/10 store_gen). In-flight finalize/heartbeat must not
         resurrect records or drive further PMO side effects after "start
-        fresh". Prefer RunStore.is_current_generation when present so the
-        fence stays one implementation."""
-        check = getattr(self.store, "is_current_generation", None)
-        if callable(check):
-            return not check(run)
-        wipe_gen = int(getattr(self.store, "wipe_generation", 0) or 0)
-        gen = int(getattr(run, "store_gen", 0) or 0)
-        if wipe_gen <= 0:
-            return False
-        return gen != wipe_gen
+        fresh". Delegates to ``is_pre_wipe`` so finalize shares one fence."""
+        return is_pre_wipe(self.store, run)
 
     async def handle(self, run_id: str, kind: str, payload: dict) -> None:
         run = self.store.get(run_id)
@@ -451,16 +443,15 @@ class RunManager:
 
     async def kill(self, run: Run, new_state: str, reason: str, *,
                    error_class: str | None = None) -> None:
-        from opentelemetry import trace as _t
-        from opentelemetry.propagate import extract as _ex
-        ctx = _ex({"traceparent": run.traceparent}) if run.traceparent else None
-        with _t.get_tracer("devcake").start_as_current_span(
+        from opentelemetry.trace import Status, StatusCode
+        ctx = extract({"traceparent": run.traceparent}) if run.traceparent else None
+        with tracer.start_as_current_span(
                 "watchdog.kill", context=ctx) as span:
             span.set_attribute("devcake.run.id", run.run_id)
             span.set_attribute("devcake.outcome", new_state)
             span.set_attribute("devcake.kill.reason", reason)
             span.set_attribute("devcake.verdict", f"{new_state}: {reason}")
-            span.set_status(_t.Status(_t.StatusCode.ERROR, reason))
+            span.set_status(Status(StatusCode.ERROR, reason))
             await self._kill_inner(run, new_state, reason, error_class=error_class)
 
     async def _ship_failure(self, run: Run, new_state: str, reason: str) -> None:
@@ -491,22 +482,22 @@ class RunManager:
         try:
             try:
                 await self.executor.stop(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: stop may raise on transport errors; ACL + terminal state must still run
                 log.exception("executor.stop failed for %s — continuing teardown",
                               run.run_id)
             try:
                 await self._ship_failure(run, new_state, reason)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: failure record may fail to ship; ACL + terminal state must still run
                 log.exception("ship_failure failed for %s — continuing teardown",
                               run.run_id)
         finally:
             try:
                 await self.messaging.delete_run_user(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: ACL delete is mandatory-attempt; continue past transport errors
                 log.exception("delete_run_user failed for %s", run.run_id)
             try:
                 await self.messaging.delete_reply_stream(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: reply-stream delete continues past transport errors
                 log.exception("delete_reply_stream failed for %s", run.run_id)
             # Two guards on one FRESH read, no await before save (atomic under
             # asyncio's cooperative scheduling):
@@ -560,7 +551,7 @@ class RunManager:
             # block is the fail-safe teardown, so belt-and-suspenders.
             try:
                 self.workspaces.cleanup(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: workspace cleanup is belt-and-suspenders; the sweep reclaims leftovers
                 log.exception("workspace cleanup failed for %s", run.run_id)
         # state_moved: the kill lost the race — the run's mover (finalize, or
         # another killer) now owns the mission transition, and restoring the
@@ -571,7 +562,7 @@ class RunManager:
         if self.finalizer and run.mission_pmo_id and not state_moved:
             try:
                 await self.finalizer.restore_after_failure(run)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: INV-3 restore must not undo a completed kill if PMO write fails
                 log.exception("restore_after_failure failed for %s", run.run_id)
         if self.oauth_mgr and run.run_id in self.oauth_mgr.sessions:
             self.oauth_mgr.sessions[run.run_id].update(

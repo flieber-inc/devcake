@@ -11,7 +11,7 @@ from ..ports.pmo import PMOPort
 
 class PMOSystemInfo(BaseModel):
     """Registry metadata for one PMO system. The secret_* fields feed
-    security.redact (docs/14 §5) and the admin SPA's paste guard — every
+    security.redact (docs/14 §7) and the admin SPA's paste guard — every
     registered system contributes its token shapes, configured or not.
     SPA field labels (team_key_*, needs_api_base) keep the Config form
     system-agnostic so adding an adapter never hardcodes Linear copy."""

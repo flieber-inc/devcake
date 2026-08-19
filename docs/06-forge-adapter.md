@@ -34,8 +34,9 @@ class ForgePort(Protocol):
             self, branch: str = "main") -> Optional[BranchProtection]: ...
         # protection state of the given branch (callers pass the resolved
         # repo's default_branch); None when unreadable
-    async def pr_files(self, pr_number: int) -> list[PRFile]: ...
-        # changed-file list for deliverable packaging (M11)
+    async def pr_files(self, pr_number: int) -> PRFilesResult: ...
+        # changed-file list for deliverable packaging (M11); truncated=True
+        # when the vendor withheld paths (names unknown)
     async def file_content(self, path: str, ref: str) -> bytes: ...
         # blob at path@ref for deliverable zip contents
     def approval_footer(self, pr_url: str) -> str: ...
@@ -49,6 +50,7 @@ Normalized DTOs (pydantic models in `ports/forge.py`):
 - `PullRequest` — `{number, url, state: "open"|"closed", merged: bool, merge_commit_sha: str|None}`. GitLab's `iid` maps to `number`; MR state `"merged"` normalizes to `state="closed"` + `merged=True`; GitHub *list* payloads carry `merged_at` (not `merged`), so the adapter derives `merged` from it. `merge_commit_sha` is populated on `pr_state` reads (GitLab squash merges map `squash_commit_sha` onto it) — it pins the deliverable zip to the actual merge commit instead of the moving default branch.
 - `BranchProtection` — `{protected: bool, requires_reviews: bool|None}` (`None` = couldn't determine).
 - `PRFile` — `{path, status, additions, deletions}` for deliverable packaging.
+- `PRFilesResult` — `{files: list[PRFile], truncated: bool}`. `truncated=True` means the vendor withheld some changed paths (names unknown). GitLab reads `/merge_requests/{iid}/changes` `overflow` and retries once with `access_raw_diffs=true`; residual overflow stays `truncated=True`. GitHub paginates to completion (`truncated=False`). Gitea passes through `paginate_rest`'s ceiling flag. Delivery discloses residual truncation in `MANIFEST.txt` and the feed note without inventing dropped filenames.
 - `ForgeHealth` — `{ok, repository, can_push, can_read, transient, detail}` from `health_probe`.
 - `ForgeCapabilities` — behavioral divergence between forges (§1a).
 
@@ -191,6 +193,7 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 - CLI in Dev images: `glab` (authenticated via `GITLAB_TOKEN`).
 - Merge: `PUT /merge_requests/:iid/merge` with `squash: true`.
 - Self-hosted: the API origin derives from the repo URL (§3b); the project path is URL-encoded (`grp/repo` → `grp%2Frepo`). `default_branch_protection`: a 404 on `/protected_branches/{branch}` means unprotected.
+- **`pr_files` truncation:** `GET /merge_requests/{iid}/changes` may set `overflow: true` when size limits withhold paths (names are not returned). The adapter retries once with `access_raw_diffs=true`; if overflow remains, `PRFilesResult.truncated=True` and delivery discloses that additional paths are unknown (MANIFEST + feed note), pointing at the MR as canonical.
 
 ## 7a. Gitea specifics
 

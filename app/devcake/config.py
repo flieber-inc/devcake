@@ -5,6 +5,7 @@ GUI-stored under /data/secrets/ — ADR-0011), adoption, polling, assignments,
 concurrency, merge policy, relations steward.
 """
 
+import contextlib
 import logging
 import os
 import re
@@ -1092,12 +1093,8 @@ class AppConfig(BaseModel):
                     raise ValueError(
                         f"pmos[{p.name}].{field} {unknown} name no configured "
                         f"repo (have: {sorted(repo_names)})")
-            overlap = set(p.repos) & set(p.reference_repos)
-            if overlap:
-                raise ValueError(
-                    f"pmos[{p.name}]: {sorted(overlap)} cannot be both a "
-                    f"work repo and a reference repo — reference repos are "
-                    f"read-only context, never routing targets")
+            # work∩reference disjointness lives in validate_memory_bindings
+            # (called next) — one chokepoint, not a parallel copy here.
         validate_memory_bindings(self)
         pmo_names = {p.name for p in self.pmos}
         for job in self.crons:
@@ -1338,13 +1335,20 @@ def reconcile_managed_pmos(current: list[dict], incoming: list[dict], *,
 
 
 def _atomic_yaml(path: Path, data: dict) -> None:
+    """tmp + fsync + replace; unlink temp on any failure after mkstemp
+    (same atomic-write cleanup contract as secrets._atomic_write_bytes)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        yaml.safe_dump(data, f, sort_keys=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 — temp cleanup then re-raise (atomic write contract)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
 
 
 def _refuse_stale_file(data: dict) -> None:

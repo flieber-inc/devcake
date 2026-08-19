@@ -42,9 +42,18 @@ fi
 # and every docker run below (tag lockstep, like up.sh); and when the live
 # app container is not running the freshly-baked image, the run is loudly
 # labeled so a mixed-version green can never read as tree evidence.
+# shellcheck disable=SC1091
+source scripts/lib/app_container.sh
+
 mixed_version_banner() {
-  local live_id local_id
-  live_id="$(docker inspect -f '{{.Image}}' devcake-app-1 2>/dev/null || true)"
+  local live_id local_id app
+  # Project name ≠ checkout dirname — do not hardcode `devcake-app-1`.
+  # Empty app → leave live_id empty (warn-not-fail); rest of suite uses compose exec.
+  app="$(devcake_app_container)"
+  live_id=""
+  if [[ -n "$app" ]]; then
+    live_id="$(docker inspect -f '{{.Image}}' "$app" 2>/dev/null || true)"
+  fi
   local_id="$(docker image inspect -f '{{.Id}}' "devcake/app:${DEVCAKE_TAG:-latest}" 2>/dev/null || true)"
   if [[ -n "$live_id" && -n "$local_id" && "$live_id" != "$local_id" ]]; then
     echo "⚠️  MIXED-VERSION RUN: the live app container is NOT running the"

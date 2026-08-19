@@ -384,3 +384,56 @@ def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
     assert payload["pmo_instances"]["sick"]["ok"] is False, (
         "the timeout must convert a hang into ok:False")
     assert payload["pmo_instances"]["fine"]["ok"] is True
+
+
+def test_pmo_probe_transport_failure_carries_detail(tmp_path, monkeypatch):
+    """A transport/timeout exception must leave a non-empty detail (like
+    _oo_ingest_check) — ok:False alone leaves the operator with no cause."""
+
+    async def boom(team):
+        raise ConnectionError("pmo upstream refused connection")
+
+    cfg, managers = _pmo_world(boom, tmp_path, monkeypatch)
+    payload = _pmo_payload(cfg, managers, monkeypatch)
+    inst = payload["pmo_instances"]["linear"]
+    assert inst["ok"] is False
+    assert inst.get("detail"), "transport failure must populate detail"
+    assert "refused" in inst["detail"].lower() or "connection" in inst["detail"].lower()
+
+
+def test_redis_connect_env_is_shared_chokepoint(monkeypatch):
+    """/health and build_services must resolve REDIS_* via the same helper
+    (ADR-0034) — no import-time frozen copy with a divergent default."""
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from devcake.adapters.redis import redis_connect_env
+    from devcake.adapters.redis.messaging import DEFAULT_REDIS_URL
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    url, password = redis_connect_env()
+    assert url == DEFAULT_REDIS_URL
+    assert password == ""
+    assert DEFAULT_REDIS_URL == "redis://redis:6379/0"
+
+    monkeypatch.setenv("REDIS_URL", "redis://custom:6379/1")
+    monkeypatch.setenv("REDIS_PASSWORD", "secret")
+    assert redis_connect_env() == ("redis://custom:6379/1", "secret")
+
+    health_src = Path(inspect.getfile(health_mod)).read_text()
+    # no module-level REDIS_URL = os.environ.get(...) freeze
+    tree = ast.parse(health_src)
+    frozen = [
+        n for n in tree.body
+        if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id in ("REDIS_URL", "REDIS_PASSWORD")
+                for t in n.targets)
+    ]
+    assert not frozen, "health.py must not freeze REDIS_* at import time"
+
+    services_path = Path(inspect.getfile(health_mod)).parent / "services.py"
+    services_src = services_path.read_text()
+    assert "redis_connect_env" in health_src
+    assert "redis_connect_env" in services_src

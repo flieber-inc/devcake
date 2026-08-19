@@ -36,12 +36,83 @@ def _rel(p: Path) -> str:
     return str(p.relative_to(ROOT)).replace("\\", "/")
 
 
-def _calls_attr(tree: ast.AST, attr: str) -> bool:
+def _attr_chain_names(node: ast.AST) -> list[str]:
+    """Names along an Attribute/Name chain (outermost attr first)."""
+    names: list[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        names.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        names.append(cur.id)
+    return names
+
+
+def _executor_aliases(tree: ast.AST) -> set[str]:
+    """Names bound to an attribute chain that contains ``executor``.
+
+    Catches ``ex = self.executor`` / ``ex = mgr.executor`` so a later
+    ``ex.start(...)`` cannot bypass the chokepoint ratchet.
+    """
+    aliases: set[str] = {"executor"}
+    changed = True
+    # Fixed-point: alias-of-alias (ex = self.executor; boot = ex).
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if not isinstance(target, ast.Name):
+                continue
+            names = _attr_chain_names(node.value)
+            if isinstance(node.value, ast.Name):
+                names = [node.value.id]
+            if any(n in aliases or n == "executor" for n in names):
+                if target.id not in aliases:
+                    aliases.add(target.id)
+                    changed = True
+    return aliases
+
+
+def module_calls_executor_start(tree: ast.AST) -> bool:
+    """True when the module AST calls ``.start`` on an executor (or alias)."""
+    aliases = _executor_aliases(tree)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == attr:
-                return True
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "start"):
+            continue
+        names = _attr_chain_names(node.func.value)
+        if any(n in aliases for n in names):
+            return True
+        # Direct ``something.executor.start(...)`` — chain contains executor.
+        if "executor" in names:
+            return True
     return False
+
+
+def test_executor_start_alias_bypass_is_detected():
+    """An aliased executor.start outside the allowlist must fail CI — the
+    literal-name-only scan let ``ex = self.executor; ex.start(...)`` through."""
+    aliased = ast.parse(
+        "async def launch(mgr):\n"
+        "    ex = mgr.executor\n"
+        "    await ex.start(run_id='r', params={})\n"
+    )
+    assert module_calls_executor_start(aliased)
+    chained = ast.parse(
+        "async def launch(self):\n"
+        "    await self.bootstrap.executor.start(run_id='r', params={})\n"
+    )
+    assert module_calls_executor_start(chained)
+    # httpx/asyncio .start must stay quiet (no executor in the chain).
+    noise = ast.parse(
+        "async def go(client):\n"
+        "    await client.start()\n"
+        "    await asyncio.TaskGroup().start(fn)\n"
+    )
+    assert not module_calls_executor_start(noise)
 
 
 def test_executor_start_only_from_run_bootstrap():
@@ -51,29 +122,8 @@ def test_executor_start_only_from_run_bootstrap():
         if rel in START_ALLOW:
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
-        if _calls_attr(tree, "start"):
-            # Narrow: only flag `.start(` where the receiver name looks like
-            # an executor (executor / self.executor / self.bootstrap.executor
-            # is in bootstrap only). Broad attr=="start" false-positives on
-            # httpx/asyncio — require the call is `something.start(` with
-            # args matching the ExecutorPort shape is hard in AST; instead
-            # require the attribute chain contains "executor".
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "start"):
-                    continue
-                # walk Attribute chain for a Name/Attribute "executor"
-                cur = node.func.value
-                names: list[str] = []
-                while isinstance(cur, ast.Attribute):
-                    names.append(cur.attr)
-                    cur = cur.value
-                if isinstance(cur, ast.Name):
-                    names.append(cur.id)
-                if "executor" in names:
-                    offenders.append(rel)
-                    break
+        if module_calls_executor_start(tree):
+            offenders.append(rel)
     assert not offenders, (
         "executor.start must only be called from RunBootstrap.launch "
         f"(clear-runs dispatch_lock chokepoint): {offenders}"

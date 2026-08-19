@@ -10,7 +10,8 @@ from typing import Any, Optional
 import httpx
 
 from ...ports.forge import (BranchProtection, ForgeCapabilities, ForgeDescriptor,
-                            ForgeError, ForgeHealth, PRFile, PullRequest)
+                            ForgeError, ForgeHealth, PRFile, PRFilesResult,
+                            PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -226,7 +227,7 @@ class GitHubForge:
             pass
         return BranchProtection(protected=protected, requires_reviews=requires_reviews)
 
-    async def pr_files(self, pr_number: int) -> list[PRFile]:
+    async def pr_files(self, pr_number: int) -> PRFilesResult:
         out: list[PRFile] = []
         page = 1
         while True:
@@ -241,7 +242,8 @@ class GitHubForge:
             if len(batch) < 100:
                 break
             page += 1
-        return out
+        # GitHub pagination walks to completion — no vendor truncation flag.
+        return PRFilesResult(files=out, truncated=False)
 
     async def file_content(self, path: str, ref: str) -> bytes:
         import base64

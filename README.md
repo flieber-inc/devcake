@@ -204,7 +204,8 @@ real EXECUTE: §9.
 # not published yet — pre-FOSS; do not invent one):
 git clone <this-repo-url> && cd devcake
 cp .env.example .env
-# Edit .env: strong ADMIN / REDIS / DAGU / OO / GITEA passwords only.
+# Edit .env: strong ADMIN_*, REDIS_PASSWORD, DAGU_PASSWORD, OO_ROOT_PASSWORD,
+# OO_INGEST_PASSWORD, GITEA_ADMIN_PASSWORD; also set OO_INGEST_EMAIL (blank refuses boot).
 # Leave DOCKER_GID blank. Empty/change-me* passwords refuse boot unless
 # DEVCAKE_ALLOW_INSECURE=1 (local sandbox only). Operator secrets
 # (PMO / forge / model) go in the admin Config UI after up — not in .env.

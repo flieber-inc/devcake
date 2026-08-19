@@ -6,6 +6,7 @@ attachment upload, and mission/relation creation.
 """
 
 import logging
+import mimetypes
 import re
 from datetime import datetime
 from typing import Any, Optional
@@ -14,7 +15,7 @@ import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionDocument, MissionRef,
-                             NormalizedStatus, Priority)
+                             NormalizedStatus, Priority, canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 from .._toolkit import label_write_lock
 
@@ -745,6 +746,9 @@ class LinearAdapter:
             self._refuse_truncated_rewrite(issue["labels"], f"issue {pmo_id}")
             team = await self._team(issue["team"]["key"])
             by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
+            # Presence map is mutated through the remove/add loops so
+            # remove∩add ends PRESENT (add wins) — same as project path
+            # `(current − remove) ∪ add` and forge-issue adapters.
             current = {l["name"].upper(): l["id"]
                        for l in issue["labels"]["nodes"]}
             for name in sorted(remove):
@@ -755,6 +759,7 @@ class LinearAdapter:
                     """mutation($id: String!, $lid: String!) {
                          issueRemoveLabel(id: $id, labelId: $lid) { success } }""",
                     {"id": pmo_id, "lid": lid})
+                current.pop(name.upper(), None)
             for name in sorted(add):
                 lid = by_name.get(name.upper())
                 if lid is None:
@@ -766,6 +771,7 @@ class LinearAdapter:
                     """mutation($id: String!, $lid: String!) {
                          issueAddLabel(id: $id, labelId: $lid) { success } }""",
                     {"id": pmo_id, "lid": lid})
+                current[name.upper()] = lid
 
     async def ensure_labels(self, team_ref: str, names: set[str] = frozenset(ALL_LABELS)) -> None:
         # team-scoped issue labels
@@ -931,16 +937,17 @@ class LinearAdapter:
 
     async def upload_attachment(self, pmo_id: str, filename: str, data: bytes) -> str:
         """Linear 3-step upload (docs/05 §4): fileUpload → PUT bytes → assetUrl."""
+        ct = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         up = (await self._gql(
             """mutation($ct: String!, $fn: String!, $size: Int!) {
                  fileUpload(contentType: $ct, filename: $fn, size: $size) {
                    success
                    uploadFile { uploadUrl assetUrl headers { key value } }
                  } }""",
-            {"ct": "text/markdown", "fn": filename, "size": len(data)}))["fileUpload"]
+            {"ct": ct, "fn": filename, "size": len(data)}))["fileUpload"]
         uf = up["uploadFile"]
         headers = {h["key"]: h["value"] for h in uf["headers"]}
-        headers["Content-Type"] = "text/markdown"
+        headers["Content-Type"] = ct
         try:
             async with httpx.AsyncClient(timeout=60,
                                          transport=self._transport) as client:
@@ -1051,7 +1058,7 @@ class LinearAdapter:
             description=n.get("description") or "",
             status=STATE_TYPE_MAP.get(n["state"]["type"], "backlog"),
             priority=PRIORITY_MAP.get(int(n.get("priority") or 0), "medium"),
-            labels={l["name"].upper() for l in label_nodes},
+            labels=canonicalize_labels(l["name"] for l in label_nodes),
             updated_at=n["updatedAt"], url=n.get("url") or "",
             parent_ref=(n.get("project") or {}).get("id"),
             blocked_by=[r["issue"]["id"] for r in relations
@@ -1076,6 +1083,6 @@ class LinearAdapter:
             description=n.get("content") or n.get("description") or "",
             status=PROJECT_STATUS_MAP.get(status_type, "backlog"),
             priority=PRIORITY_MAP.get(int(n.get("priority") or 0), "medium"),
-            labels={l["name"].upper() for l in label_nodes},
+            labels=canonicalize_labels(l["name"] for l in label_nodes),
             updated_at=n["updatedAt"], url=n.get("url") or "",
         )

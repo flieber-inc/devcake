@@ -8,7 +8,7 @@ import pytest
 
 from devcake.adapters.linear.adapter import (LABELS_PAGE, MAX_LABEL_PAGES,
                                              LinearAdapter)
-from devcake.domain.model import MissionRef
+from devcake.domain.model import LABEL_PLAN, MissionRef
 
 
 def run_coro(c):
@@ -75,6 +75,34 @@ def test_swap_issue_labels_skips_absent_removal_and_present_add():
     ad = _swap_adapter(3, mutations)
     run_coro(ad._swap_issue_labels("i1", remove={"NOPE"}, add={"L1"}))
     assert mutations == []
+
+
+def test_swap_issue_labels_remove_add_overlap_ends_present():
+    """remove∩add must end PRESENT (add wins) — same set math as the project
+    path and forge-issue adapters: (current − remove) ∪ add.
+
+    Overlap that was already on the issue: remove then re-add.
+    Overlap for a name absent initially: only add.
+    Pure remove / pure add keep their prior shapes."""
+    mutations = []
+    ad = _swap_adapter(3, mutations)
+    run_coro(ad._swap_issue_labels("i1", remove={"L1"}, add={"L1"}))
+    assert mutations == [("remove", "lid-1"), ("add", "lid-1")]
+
+    mutations.clear()
+    ad = _swap_adapter(3, mutations, extra_team_labels=["L99"])
+    run_coro(ad._swap_issue_labels("i1", remove={"L99"}, add={"L99"}))
+    assert mutations == [("add", "tid-L99")]
+
+    mutations.clear()
+    ad = _swap_adapter(3, mutations)
+    run_coro(ad._swap_issue_labels("i1", remove={"L1"}, add=set()))
+    assert mutations == [("remove", "lid-1")]
+
+    mutations.clear()
+    ad = _swap_adapter(3, mutations, extra_team_labels=["L99"])
+    run_coro(ad._swap_issue_labels("i1", remove=set(), add={"L99"}))
+    assert mutations == [("add", "tid-L99")]
 
 
 def test_swap_issue_labels_refuses_past_ceiling():
@@ -187,6 +215,48 @@ def test_get_issue_paginates_labels():
     ad._gql = _gql
     mission = run_coro(ad.get(MissionRef("i1", "issue")))
     assert "DEVCAKE-SKIP" in mission.labels
+
+
+def test_get_issue_canonicalizes_mission_labels():
+    """Mission.labels use canonicalize_labels: managed names → ALL_LABELS
+    spelling; unmanaged names keep vendor casing (not blanket .upper())."""
+    ad = LinearAdapter("key")
+
+    async def _gql(query, variables=None):
+        _ = query, variables
+        issue = {"id": "i1", "identifier": "T-1", "title": "t", "description": "",
+                 "url": "", "updatedAt": "2026-07-12T10:00:00.000Z", "priority": 2,
+                 "state": {"name": "In Progress", "type": "started"},
+                 "project": None, "inverseRelations": {"nodes": []},
+                 "labels": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [{"id": "a", "name": "Devcake-Plan"},
+                                      {"id": "b", "name": "Needs-QA"}]}}
+        return {"issue": issue}
+
+    ad._gql = _gql
+    mission = run_coro(ad.get(MissionRef("i1", "issue")))
+    assert mission.labels == {LABEL_PLAN, "Needs-QA"}
+
+
+def test_get_project_canonicalizes_mission_labels():
+    """Project Mission.labels follow the same canonicalize_labels contract."""
+    ad = LinearAdapter("key")
+
+    async def _gql(query, variables=None):
+        _ = query, variables
+        project = {
+            "id": "p1", "name": "Pay Revamp", "description": "", "content": "",
+            "url": "", "updatedAt": "2026-07-12T10:00:00.000Z", "priority": 2,
+            "status": {"name": "In Progress", "type": "started"},
+            "labels": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                       "nodes": [{"id": "a", "name": "Devcake-Plan"},
+                                 {"id": "b", "name": "Needs-QA"}]},
+        }
+        return {"project": project}
+
+    ad._gql = _gql
+    mission = run_coro(ad.get(MissionRef("p1", "project")))
+    assert mission.labels == {LABEL_PLAN, "Needs-QA"}
 
 
 def test_fully_walked_large_label_set_does_not_warn(caplog):

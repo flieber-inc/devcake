@@ -13,8 +13,8 @@ import usePoll from "../lib/usePoll.js";
 import { SERVICES, serviceValue, devTypeState } from "../lib/services.js";
 import { relTime, fullTime } from "../lib/format.js";
 import { get } from "../api.js";
-
-const STAGES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
+import { connRef } from "../lib/connectionFields.js";
+import { STAGES } from "../lib/missionStages.js";
 
 const ext = window.DEVCAKE || {};
 
@@ -178,12 +178,12 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
         const pmos = (cfg.pmos || []).filter((p) => p.team_key);
         const repos = cfg.repos || [];
         const conn = [
-          ...pmos.map((p) => `pmo:${p.name}:api_key`),
-          ...repos.map((r) => `repo:${r.name}:token`),
+          ...pmos.map((p) => connRef("pmo", p.name, "api_key")),
+          ...repos.map((r) => connRef("repo", r.name, "token")),
         ].join(",");
         const sc = conn ? await get(`/secrets-check?conn=${encodeURIComponent(conn)}`) : { conn: {} };
-        const pmoOk = pmos.some((p) => sc.conn[`pmo:${p.name}:api_key`]?.present);
-        const repoOk = repos.some((r) => sc.conn[`repo:${r.name}:token`]?.present);
+        const pmoOk = pmos.some((p) => sc.conn[connRef("pmo", p.name, "api_key")]?.present);
+        const repoOk = repos.some((r) => sc.conn[connRef("repo", r.name, "token")]?.present);
         const [dts, harnesses] = await Promise.all([get("/dev-types"), get("/harnesses")]);
         const envNames = [...new Set(dts.flatMap(
           (d) => harnesses[d.harness_template]?.credential_env || []))];

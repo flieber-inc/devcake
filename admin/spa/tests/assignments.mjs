@@ -4,8 +4,7 @@
 // confirms a Save — the flow restores the original selection so the dirty
 // bar clears and live config is untouched.
 import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
-
-const MTS = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
+import { MISSION_STAGES as MTS } from "../src/lib/missionStages.js";
 
 await withPage(async (page) => {
   await gotoFresh(page, "#/config/mission-types");

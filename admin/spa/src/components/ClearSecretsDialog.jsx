@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { get, send } from "../api.js";
+import { CONNECTION_FIELDS } from "../lib/connectionFields.js";
 import Button from "./Button.jsx";
 import { ConfirmDialog, Modal } from "./Modal.jsx";
 
@@ -108,12 +109,17 @@ function Group({ title, help, items, selected, setSelected, idOf, labelOf, descO
   );
 }
 
-const CONN_FIELD_LABEL = {
+// Operator-facing labels over secrets.CONNECTION_FIELDS vocabulary
+// (pinned via connectionFields.js / spa-contracts).
+const _CONN_FIELD_LABELS = {
   api_key: "API key",
   token: "Access token",
   token_ro: "Read-only token",
   reviewer_token: "Reviewer token",
 };
+const CONN_FIELD_LABEL = Object.fromEntries(
+  [...new Set(Object.values(CONNECTION_FIELDS).flat())].map(
+    (f) => [f, _CONN_FIELD_LABELS[f] || f]));
 
 // Internal selection keys use \0 (collision-proof for any printable filename).
 // DOM id/htmlFor cannot use NUL — encode only for attributes (Fable PR #54).

@@ -1,6 +1,6 @@
 """Generator for docs/contracts/spa-contracts.json (ADR-0034; 2026-08-12
-audit: the SPA hand-mirrors three backend contracts — the board derivation
-precedence, the instance-name rule, the card scaffolds — with "Mirrors X"
+audit: the SPA hand-mirrors backend contracts — board derivation, instance-
+name rule, card scaffolds, plus CAKE-88 vocabularies — with "Mirrors X"
 comments and no cross-language test).
 
 The committed JSON is generated FROM THE PYTHON SOURCE OF TRUTH here and
@@ -18,11 +18,15 @@ from __future__ import annotations
 
 import itertools
 import json
+from typing import get_args
 
-from devcake.config import (HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE,
-                            PMOInstance, RepoInstance, SkillSource)
-from devcake.domain.model import Mission, derive
+from devcake.api.mission_actions import ACTION_SPECS
+from devcake.config import (AppConfig, HARNESS_VAR_PATTERN, _CRON_ID_RE,
+                            _INSTANCE_NAME_RE, PMOInstance, RepoInstance,
+                            SkillSource)
+from devcake.domain.model import LABEL_MERGE, Mission, MissionType, derive
 from devcake.domain.run import TERMINAL_STATES
+from devcake.secrets import CONNECTION_FIELDS
 
 from datetime import datetime, timezone
 
@@ -72,6 +76,28 @@ def _board_vectors() -> tuple[list[str], list[list]]:
     return reasons, vectors
 
 
+def _literal_values(field_name: str) -> list[str]:
+    """Sorted Literal members from AppConfig — never hand-type the strings."""
+    return sorted(get_args(AppConfig.model_fields[field_name].annotation))
+
+
+def _action_preconditions() -> dict[str, dict[str, list[str]]]:
+    """Serializable ACTION_SPECS require_present/require_absent, plus
+    force_freshness (outside ACTION_SPECS; 409s without DEVCAKE-MERGE)."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for action, spec in ACTION_SPECS.items():
+        out[action] = {
+            "require_present": sorted(spec.require_present),
+            "require_absent": sorted(spec.require_absent),
+        }
+    # Not in ACTION_SPECS — attach beside so the SPA menu pin covers MERGE.
+    out["force_freshness"] = {
+        "require_present": [LABEL_MERGE],
+        "require_absent": [],
+    }
+    return out
+
+
 def build() -> dict:
     reasons, vectors = _board_vectors()
     terminal = sorted(TERMINAL_STATES)
@@ -79,6 +105,14 @@ def build() -> dict:
         "_generated_by": "app/tests/gen_spa_contracts.py — do not hand-edit",
         "instance_name_re": _INSTANCE_NAME_RE,
         "harness_var_pattern": HARNESS_VAR_PATTERN,
+        "cron_id_re": _CRON_ID_RE,
+        "continuation_policies": _literal_values("continuation_policy"),
+        "attempt_reset_policies": _literal_values("attempt_reset"),
+        "mission_stages": [m.value for m in MissionType],
+        "connection_fields": {
+            scope: sorted(fields)
+            for scope, fields in CONNECTION_FIELDS.items()},
+        "action_preconditions": _action_preconditions(),
         "run_terminal_states": terminal,
         "run_stopped_states": sorted(set(terminal) | {"finalizing"}),
         "pmo_card_defaults": {

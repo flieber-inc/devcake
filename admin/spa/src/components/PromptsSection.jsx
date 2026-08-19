@@ -12,12 +12,12 @@ import MarkdownBody, {
   MarkdownViewShell,
 } from "./MarkdownBody.jsx";
 import { stripYamlFrontmatter } from "../lib/markdown.js";
+import { MISSION_TYPES } from "../lib/missionStages.js";
 
 // Per-Mission-Type prompt templates (v0.1.1). Template bodies create/edit/
 // delete IMMEDIATELY (the dev-type precedent — the modal has its own explicit
 // Save); only the ACTIVE selection rides the unified config draft
 // (cfg.active_prompt_templates.<TYPE> → the page-level Save review).
-const MISSION_TYPES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 
 function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSaved }) {
   const editing = !!initial;

@@ -9,8 +9,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { columnOf, needsHumanReason } from "../src/lib/board.js";
+import {
+  ACTION_PRECONDITIONS, columnOf, contextActions, needsHumanReason,
+} from "../src/lib/board.js";
 import { newPmoCard, newRepoCard, newSkillSourceCard } from "../src/lib/cards.js";
+import {
+  ATTEMPT_RESET_POLICIES, CONTINUATION_POLICIES,
+} from "../src/lib/configEnums.js";
+import { CONNECTION_FIELDS } from "../src/lib/connectionFields.js";
+import { MISSION_STAGES } from "../src/lib/missionStages.js";
 import { STOPPED_STATES, TERMINAL_STATES } from "../src/lib/runStates.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -49,6 +56,18 @@ check("harness-var regex matches config.HARNESS_VAR_PATTERN", () => {
   assert.ok(!re.test("not-a-var"), "rejects lowercase / hyphen");
 });
 
+check("cron-id regex matches config._CRON_ID_RE", () => {
+  const src = readFileSync(join(here, "../src/lib/draftErrors.js"), "utf8");
+  assert.ok(src.includes(`/${contracts.cron_id_re}/`),
+    "draftErrors.js CRON_ID_RE drifted from the contract");
+  // cron_id_re already carries ^…$ (same shape as instance_name_re)
+  const re = new RegExp(contracts.cron_id_re);
+  assert.ok(re.test("memory-curator"), "accepts a valid cron id");
+  assert.ok(re.test("nightly_sync"), "accepts underscore");
+  assert.ok(!re.test("Bad-Id"), "rejects uppercase");
+  assert.ok(!re.test("1starts-digit"), "rejects leading digit");
+});
+
 check("runStates.js TERMINAL_STATES matches spa-contracts", () => {
   assert.deepEqual([...TERMINAL_STATES].sort(),
     [...contracts.run_terminal_states].sort());
@@ -57,6 +76,71 @@ check("runStates.js TERMINAL_STATES matches spa-contracts", () => {
 check("runStates.js STOPPED_STATES matches spa-contracts", () => {
   assert.deepEqual([...STOPPED_STATES].sort(),
     [...contracts.run_stopped_states].sort());
+});
+
+check("configEnums CONTINUATION_POLICIES matches spa-contracts", () => {
+  assert.deepEqual([...CONTINUATION_POLICIES].sort(),
+    [...contracts.continuation_policies].sort());
+});
+
+check("configEnums ATTEMPT_RESET_POLICIES matches spa-contracts", () => {
+  assert.deepEqual([...ATTEMPT_RESET_POLICIES].sort(),
+    [...contracts.attempt_reset_policies].sort());
+});
+
+check("missionStages.js MISSION_STAGES matches spa-contracts", () => {
+  assert.deepEqual(MISSION_STAGES, contracts.mission_stages);
+});
+
+check("connectionFields.js CONNECTION_FIELDS matches spa-contracts", () => {
+  assert.deepEqual(CONNECTION_FIELDS, contracts.connection_fields);
+});
+
+check("board.js ACTION_PRECONDITIONS matches spa-contracts", () => {
+  assert.deepEqual(ACTION_PRECONDITIONS, contracts.action_preconditions);
+});
+
+check("contextActions offers each action when preconditions hold", () => {
+  for (const [action, spec] of Object.entries(contracts.action_preconditions)) {
+    const labels = [...spec.require_present];
+    // Satisfy require_absent by omitting those labels; for park (absent
+    // SKIP) an empty set is enough. For mutual exclusion, SKIP present
+    // implies unpark not park.
+    const row = { labels, status: "in_progress" };
+    const ids = contextActions(row).map((it) => it.id);
+    assert.ok(ids.includes(action),
+      `${action} missing for labels=[${labels}] (got ${ids})`);
+  }
+});
+
+check("contextActions withholds actions when required labels missing", () => {
+  const ids = contextActions({ labels: ["DEVCAKE"], status: "backlog" })
+    .map((it) => it.id);
+  assert.ok(!ids.includes("retry"));
+  assert.ok(!ids.includes("resume"));
+  assert.ok(!ids.includes("force_freshness"));
+  assert.ok(!ids.includes("unpark"));
+  assert.ok(ids.includes("park"), "park when SKIP absent");
+});
+
+check("park/unpark mutual exclusion preserved", () => {
+  const withSkip = contextActions({
+    labels: ["DEVCAKE-SKIP"], status: "backlog",
+  }).map((it) => it.id);
+  assert.ok(withSkip.includes("unpark"));
+  assert.ok(!withSkip.includes("park"));
+  const without = contextActions({
+    labels: ["DEVCAKE"], status: "backlog",
+  }).map((it) => it.id);
+  assert.ok(without.includes("park"));
+  assert.ok(!without.includes("unpark"));
+});
+
+check("MERGE offers force_freshness", () => {
+  const ids = contextActions({
+    labels: ["DEVCAKE", "DEVCAKE-MERGE"], status: "in_progress",
+  }).map((it) => it.id);
+  assert.ok(ids.includes("force_freshness"));
 });
 
 check("PMO card scaffold equals the server-model defaults", () => {

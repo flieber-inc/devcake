@@ -4,7 +4,7 @@
 // with no counter, no empty state, nothing (founder report 2026-08-05).
 import assert from "node:assert/strict";
 import {
-  bucketize, columnOf, contextActions, unadoptedHiddenCount,
+  bucketize, columnOf, unadoptedHiddenCount,
 } from "../src/lib/board.js";
 
 let failed = 0;
@@ -64,18 +64,8 @@ check("empty / missing input is 0, never a crash", () => {
   assert.equal(unadoptedHiddenCount([null], "opt_in"), 0);
 });
 
-console.log("board helpers — contextActions");
-
-check("MERGE rows offer Re-check freshness", () => {
-  const items = contextActions(row(["DEVCAKE", "DEVCAKE-MERGE"], "in_progress"));
-  assert.ok(items.some((it) => it.id === "force_freshness"));
-  assert.ok(items.some((it) => it.id === "park"));
-});
-
-check("non-MERGE rows do not offer force_freshness", () => {
-  const items = contextActions(row(["DEVCAKE", "DEVCAKE-REVIEW"], "in_progress"));
-  assert.ok(!items.some((it) => it.id === "force_freshness"));
-});
+// contextActions precondition replay lives in contracts.mjs (CAKE-88) —
+// do not keep a second SPA-only expectation set here.
 
 if (failed) {
   console.log(`\n${failed} board helper check(s) failed`);

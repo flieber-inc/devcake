@@ -1,28 +1,49 @@
-# DevCake 🍰
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/brand/A-devcake-full-color-transparent.svg">
+    <img src="docs/img/brand/C-devcake-full-black-transparent.svg" alt="DevCake" width="380">
+  </picture>
 
-**Your board is the interface. Tickets in, pull requests out.**
+### Your board is the interface. Tickets in, pull requests out.
 
-<img width="350" height="350" alt="devcake" src="docs/img/readme-hero.png" />
+</div>
 
-DevCake staffs the task board you already use with AI developers. You write a
-ticket in plain language; disposable containers triage, plan, implement, and
-pass every mission through REVIEW; work comes back as a pull request with a
-**transcript and a token bill** on the ticket. Labels are the control plane. A
-human edit always beats an in-flight agent. **Done means merged** — with
-auto-merge off, DevCake waits for you; with it on, the app merges an approved
-pull request before marking the mission Done.
+DevCake turns the task board you already run into a software team. Write a
+ticket the way you would brief a colleague; DevCake staffs it with an AI
+developer in a fresh, disposable container — it triages, plans, implements,
+and passes every mission through REVIEW — and the work comes back as a **pull
+request**, with the full **transcript and token bill** attached to the ticket.
 
-It runs on **your** machine, with **your** model subscriptions or API
-credentials and **your** forge (code-hosting platform — GitHub / GitLab /
-Gitea). There is no hosted SaaS and no second day-to-day work queue: the board
-drives missions, while the bundled admin UI handles configuration and
-operations.
+You steer with labels. You own the merge. **Done means merged** — with
+auto-merge off (the default), DevCake parks approved work and waits for you.
 
-> Anyone who can write tickets on the configured team (or land content in a
-> configured repo) can influence agents that hold forge and model credentials.
-> You own branch protection (what stops Devs from merging), team membership,
-> and whether the **app** may auto-merge after REVIEW. Full contract:
+- **Board-native.** Linear or GitHub / GitLab / Gitea Issues — no second
+  work queue, no chat window pretending to be one. The bundled admin UI is
+  for configuration and operations; the board drives the work. A human edit
+  always beats an in-flight agent.
+- **Receipts, not vibes.** Missions post their transcript and token cost to
+  the ticket (the documented invariant, named exceptions and all), and every
+  dispatch, kill, sweep, and merge is traced end to end.
+- **Your box, your rules.** Self-hosted on a dedicated machine, with **your**
+  model subscriptions or API keys and **your** forge (code-hosting platform)
+  credentials. There is no hosted SaaS; the control plane does not ship your
+  secrets anywhere.
+- **A workforce, not a bot.** Six CLI harnesses — Claude Code, Grok Build,
+  Codex, Pi, OpenCode, Qwen Code — staffable per role: judgment work here,
+  volume work there. Every harness release upgrades your workforce without a
+  line of DevCake changing.
+
+> **The deal, stated plainly:** anyone who can write tickets on the
+> configured team (or land content in a configured repo) can influence agents
+> that hold forge and model credentials. You own branch protection, team
+> membership, and whether the **app** may auto-merge after REVIEW. That
+> ownership is *why* the output can be trusted. Full contract:
 > [`docs/14-security.md`](docs/14-security.md).
+
+**Proof over promises:** we pointed DevCake at its own codebase — one board
+prompt became 54 self-decomposed tickets, 257 agent runs, and 42 human-merged
+pull requests, receipts included. Read the field report:
+[`docs/evidence/2026-08-devcake-audits-devcake.md`](docs/evidence/2026-08-devcake-audits-devcake.md).
 
 Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning.md).
 

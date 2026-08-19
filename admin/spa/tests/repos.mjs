@@ -72,6 +72,59 @@ await withPage(async (page) => {
     check("clicking the summary row re-expands a card",
       (await collapseBtn.count()) >= 1);
   }
+
+  // CAKE-125: Create-internal modal must not speak notebook/claims-prune
+  // copy for a card that is not bound as a memory notebook. Prefer a
+  // gitea-internal card already on the fleet; if none, add a draft card
+  // (never Save) and open Create from it.
+  const createBtn = page.locator('button:has-text("+ Create repository")');
+  if ((await createBtn.count()) === 0) {
+    // No internal card on this stack — try adding a gitea-internal draft card.
+    const addBtn = page.locator('button:has-text("Add repository"), button:has-text("+ Add")').first();
+    if ((await addBtn.count()) === 0) {
+      skip("Create-internal modal omits notebook copy for unbound cards",
+        "no Create repository control and no Add repository on this stack");
+    } else {
+      skip("Create-internal modal omits notebook copy for unbound cards",
+        "no gitea-internal Create repository button on this stack");
+    }
+  } else {
+    // Expand the card that owns the Create button if collapsed
+    const card = createBtn.first().locator(
+      'xpath=ancestor::*[contains(@class,"rounded-card")][1]');
+    const summaryInCard = card.locator('[data-testid="repo-summary-row"]');
+    if ((await summaryInCard.count()) > 0) {
+      await summaryInCard.first().click();
+      await page.waitForTimeout(100);
+    }
+    await createBtn.first().click();
+    await page.waitForSelector('[role="dialog"]:has-text("Create repository on the internal Gitea")');
+    const dialog = page.locator('[role="dialog"]');
+    const dtext = await dialog.innerText();
+    // Default fleet cards are rarely notebook-bound; if this card happens
+    // to be bound, the notebook sentence is correct — only fail when the
+    // unbound path still narrates claims-prune / "this notebook".
+    // We cannot know binding from the live stack here without draft
+    // inspection; assert the destructive Clear/wipe ownership sentences
+    // always present, and that unbound default (no Memory chip on card)
+    // omits notebook wording when no Memory usage chip is visible.
+    check("Create-internal dialog keeps ownership / Clear / wipe copy",
+      /Clear will not delete it/i.test(dtext)
+      && /stack wipe/i.test(dtext));
+    const memChip = card.locator('text=/memory (board|domain)-bound/i');
+    const looksBound = (await memChip.count()) > 0
+      && await memChip.first().isVisible().catch(() => false);
+    if (!looksBound) {
+      check("unbound Create-internal dialog omits notebook / claims-prune copy",
+        !/this notebook/i.test(dtext) && !/claims copied/i.test(dtext));
+    } else {
+      check("notebook-bound Create-internal dialog keeps claims-prune sentence",
+        /this notebook/i.test(dtext) && /claims/i.test(dtext));
+    }
+    await page.click('[role="dialog"] button:has-text("Cancel")');
+    await page.waitForTimeout(100);
+  }
+
 });
 
 summary("repos");

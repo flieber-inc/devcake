@@ -74,15 +74,16 @@ export function unadoptedHiddenCount(rows, adoptionMode) {
   ).length;
 }
 
-// Buckets an array of rows into COLUMNS. Done column caps to `doneCap`
-// newest by `updated_at` (default 30) to keep the board scannable.
-export function bucketize(rows, adoptionMode, { doneCap = 30 } = {}) {
+// Buckets an array of rows into COLUMNS. Every stage keeps its full set
+// after adoption filtering — Done counts are true totals; the Missions
+// page owns scannability via its 10-row Done preview + "Show all N".
+export function bucketize(rows, adoptionMode) {
   const buckets = Object.fromEntries(COLUMNS.map((c) => [c.id, []]));
   for (const row of rows || []) {
     const col = columnOf(row, adoptionMode);
     if (col) buckets[col].push(row);
   }
-  // Newest updated first per column. Done is capped.
+  // Newest updated first per column.
   for (const col of COLUMNS) {
     buckets[col.id].sort((a, b) => {
       const ta = Date.parse(a.updated_at || 0) || 0;
@@ -90,7 +91,6 @@ export function bucketize(rows, adoptionMode, { doneCap = 30 } = {}) {
       return tb - ta;
     });
   }
-  if (buckets.done.length > doneCap) buckets.done = buckets.done.slice(0, doneCap);
   return buckets;
 }
 

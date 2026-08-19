@@ -22,6 +22,14 @@ export function serviceValue(health, key) {
   return health[key];
 }
 
+// Runs list Overview must feed into `devTypeState` for busy coloring.
+// Must be the active-only poll (`/runs?active_only=true`) — never the
+// recent-25 page, which can omit still-running runs older than the window
+// while the masthead's health.active_runs still counts them (CAKE-125).
+export function runsForDevActivity(activeOnlyRuns) {
+  return Array.isArray(activeOnlyRuns) ? activeOnlyRuns : [];
+}
+
 // Devs-card state per Dev Type (the Runs-table color code): red = broken
 // (breaker latched / no credentials), blue = a run is using it, green = ok.
 export function devTypeState(dt, health, runs) {
@@ -34,3 +42,4 @@ export function devTypeState(dt, health, runs) {
     (r) => r.dev_type === dt.name && !TERMINAL_STATES.includes(r.state));
   return busy ? { state: "running" } : { state: "ok" };
 }
+

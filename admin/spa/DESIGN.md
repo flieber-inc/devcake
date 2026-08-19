@@ -36,8 +36,13 @@ color family in a component.**
 
 ### Type
 
-- **Display face** (`font-display`, Bricolage Grotesque Variable): wordmark, page
+- **Display face** (`font-display`, Bricolage Grotesque Variable): page
   titles, big numerals — **nowhere else**. Body/UI text stays on the system stack.
+  (The wordmark is no longer set in type: the brand mark and wordmark are SVG
+  artwork — canonical files in `docs/img/brand/`, bundled copies in
+  `src/assets/` — rendered per theme: black-violet on light, cream-violet on
+  dark. The artwork's own palette is the one sanctioned exception to the
+  single-accent rule; UI accents stay `accent-*`.)
 - Mono (`font-mono`) for machine identifiers: run ids, mission keys, env var
   names, InstantZone eyebrow labels.
 - Numerals that line up in columns get `tabular-nums`.
@@ -151,7 +156,9 @@ glyph slot (reserved even when empty so keys align), mono key, full-width
 truncating title, needs-human badge, deviating reason, repo, priority DOT
 (tooltip — labelled chips repeat "medium" fleet-wide and carry no scan
 value), age, ↗, ⋯. A reason all rows of a section share is hoisted into its
-header. Done previews its 10 newest behind "Show all N". Invariants carried
+header. Done counts are true totals (strip chip and section badge); the
+section previews its 10 newest and "Show all N" unfolds the full Done set
+(`N` = true total — never a second silent ceiling). Invariants carried
 over from the board: row click opens the drawer, context actions stay behind
 the ⋯, the PMO is the source of truth. The list owes rendering at ANY
 viewport width with no horizontal scroll — retiring the board also deleted

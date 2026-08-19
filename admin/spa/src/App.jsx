@@ -183,7 +183,7 @@ export default function App() {
               {lastOkAt
                 ? `showing data from ${lastOkAt.toLocaleTimeString()}`
                 : "no data received yet"}
-              . Controls are disabled until it responds.
+              . Actions will fail until it responds.
             </span>
           </div>
         )}

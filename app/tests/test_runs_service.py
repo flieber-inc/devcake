@@ -31,11 +31,12 @@ CLAUDE_TR = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
 
 
 def _run(i, *, pmo_ref="alpha", created=None, tr=None, minutes=7,
-         key=None, spec_prompt="SECRET PROMPT"):
+         key=None, spec_prompt="SECRET PROMPT", state="finished",
+         dev_type="senior-dev"):
     created = created or (T0 + timedelta(hours=i))
     return Run(run_id=f"A-{i}-1-EXECUTE-{'Z' * 6}", mission_key=key or f"A-{i}",
                mission_pmo_id=f"p{i}", pmo_ref=pmo_ref, mission_type="EXECUTE",
-               dev_type="senior-dev", seq=1, state="finished",
+               dev_type=dev_type, seq=1, state=state,
                created_at=created, started_at=created,
                ended_at=created + timedelta(minutes=minutes),
                spec_prompt=spec_prompt, token_report=tr,
@@ -452,3 +453,32 @@ def test_csv_sort_orders_the_whole_set_and_leaks_nothing(tmp_path):
 def test_csv_empty_store_is_header_only(tmp_path):
     rows = _csv_rows(runs_csv_response(_store(tmp_path, []), CostInputs()))
     assert len(rows) == 1
+
+
+def test_active_only_returns_non_terminal_runs(tmp_path):
+    """CAKE-125: Overview Devs card needs a list that cannot omit actives."""
+    terminal = _run(1, state="finished")
+    timed = _run(2, state="timed_out")
+    failed = _run(3, state="failed")
+    orphaned = _run(4, state="orphaned")
+    running = _run(5, state="running")
+    dispatched = _run(6, state="dispatched")
+    finalizing = _run(7, state="finalizing")
+    store = _store(tmp_path, [
+        terminal, timed, failed, orphaned, running, dispatched, finalizing,
+    ])
+    # Default (active_only=False) still returns the full filtered set.
+    all_out = list_runs_response(store, CostInputs(), limit=25, offset=0)
+    assert {r["run_id"] for r in all_out["runs"]} == {
+        terminal.run_id, timed.run_id, failed.run_id, orphaned.run_id,
+        running.run_id, dispatched.run_id, finalizing.run_id,
+    }
+    # Explicit expected id set — not a second filter algorithm copy.
+    expected_active = {running.run_id, dispatched.run_id, finalizing.run_id}
+    out = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                             active_only=True)
+    got = {r["run_id"] for r in out["runs"]}
+    assert got == expected_active
+    assert out["total"] == 3
+    assert all(r["state"] in ("dispatched", "running", "finalizing")
+               for r in out["runs"])

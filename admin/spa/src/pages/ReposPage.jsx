@@ -18,6 +18,7 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 import { newRepoCard } from "../lib/cards.js";
 import { unusedRepoNames } from "../lib/unusedRepos.js";
+import { isMemoryNotebookCard } from "../lib/memoryNotebook.js";
 import { fleetSeedIndexes } from "../lib/fleetExpand.js";
 import { CONNECTION_FIELDS, connRef } from "../lib/connectionFields.js";
 
@@ -123,7 +124,7 @@ const giteaVariantOf = (repo) =>
   repo.url && repo.url.includes(INTERNAL_ORIGIN_MARK)
     ? "gitea-internal" : "gitea-external";
 
-function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
+function CreateInternalRepoModal({ initialName, onClose, onCreated, isNotebook }) {
   const [name, setName] = useState(initialName || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -158,9 +159,11 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
       </p>
       <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
         This repository is yours. Clear will not delete it. A full
-        stack wipe will, unless you use the Gitea backup. After
-        Clear, claims copied from the wiped board are removed from
-        this notebook; notes stay.
+        stack wipe will, unless you use the Gitea backup.
+        {isNotebook && (
+          <> After Clear, claims copied from the wiped board are removed from
+          this notebook; notes stay.</>
+        )}
       </p>
       <div className="space-y-3">
         <Field label="Repository name"
@@ -690,6 +693,8 @@ export default function ReposPage({ onHealthChange }) {
       {createFor !== null && (
         <CreateInternalRepoModal
           initialName={cfg.repos[createFor]?.name || ""}
+          isNotebook={isMemoryNotebookCard(
+            cfg.repos[createFor]?.name || "", cfg, dr.draft.devTypes || {})}
           onClose={() => setCreateFor(null)}
           onCreated={(out) => {
             // the created repo name IS the card name (tokens are stored

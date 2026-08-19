@@ -4,7 +4,7 @@
     <img src="docs/img/brand/C-devcake-full-black-transparent.svg" alt="DevCake" width="380">
   </picture>
 
-### Your board is the interface. Tickets in, pull requests out.
+### Your personal software factory. Tickets in, pull requests out.
 
 </div>
 

@@ -81,7 +81,9 @@ in `api/poll.py` as `PollRuntime`; health probes in `api/health.py`.
 The dominant private seams are legitimized, not relocated:
 `transitions.transition`, `sweeps.merge_sweep`/`tracking_sweep`,
 `dispatch.attempt_number`/`resolve_repo`, `review.finalize_review`,
-`decomposition.finalize_decomposition`, `mapper.apply_mapper_edges` become
+`decomposition.finalize_decomposition`, `mapper.apply_mapper_edges`
+*(historical name — live public seams are `steward.apply_steward_edges` /
+`finalize_steward` under `domain/orchestrator/steward.py`)* become
 their modules' public functions and the tests call them as such (AGENTS.md "no
 private tests / agree the seam first"). `_feed`/`_checkpoint` stay methods, so
 their test sites stand.

@@ -52,7 +52,9 @@ Rotation is four different motions depending on the secret:
    **Skill sources** card (Configuration → Skills). The write path
    hot-reloads adapters ([`11`](11-admin-panel.md)).
 2. **Model / harness credentials** — upload via the Dev Type card under
-   Configuration (OAuth wizard, credential upload, or `scripts/grok_login.sh`).
+   Configuration (OAuth wizard, credential upload, or `scripts/grok_login.sh`
+   — defaults to seeded `implementer`; override with `DEVCAKE_DEV_TYPE` or a
+   positional name; app container via `DEVCAKE_APP_CONTAINER` / compose `ps`).
    The write clears any `DEV_AUTH` breaker for Dev Types using that credential
    ([`15`](15-errors-and-retries.md) §4).
 3. **Stack bootstrap passwords** (`ADMIN_*`, `REDIS_*`, `DAGU_*`, `OO_*`,

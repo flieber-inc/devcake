@@ -47,7 +47,7 @@ prose.
 
 | Class | Retryable | Counts toward `max_attempts` | Who retries | User-visible surface |
 |---|---|---|---|---|
-| `PMO_TRANSIENT` | yes — **no in-adapter retry ladder.** Adapter raises `PMOTransient`; the poll cycle **skips that PMO instance's segment** and continues with the others; the next poll tick (`poll_interval_seconds`, default 30) re-attempts the sick instance | no | app (next poll tick) | `poll.cycle` outcome / logs; not latched into `poll_degraded` (that field is for permanent per-instance failures) |
+| `PMO_TRANSIENT` | yes — **no in-adapter retry ladder.** Adapter raises `PMOTransient`; the poll cycle **skips that PMO instance's segment** and continues with the others; the next poll tick (`poll_interval_seconds`, default 30) re-attempts the sick instance | no | app (next poll tick) | `poll.instance` outcome / logs; not latched into `poll_degraded` (that field is for permanent per-instance failures) |
 | `PMO_PERMANENT` | no | no | — | `poll_degraded` for that instance + SPA alert; other instances keep polling |
 | `PMO_GONE` | n/a — residual class only | no | — | *not implemented as a dedicated path* — do not expect a WARN+cancel special case |
 | `FORGE_TRANSIENT` | yes — **no exp-backoff matrix.** Poll re-probes forge health each cycle (latched breakers self-heal on a green probe; the re-probe sweep is bounded-parallel — `ForgeRuntime.refresh_all`, at most 8 in flight); finalization re-enters via ingress reclaim; adapters may short-sleep only where code has them (e.g. Gitea merge "try again later" 405 retries, GitHub 409 race retries — `06-forge-adapter.md` §5/§7a; the `.claims/` writer replays its checkout+commit+push cycle ONCE on a push race — ADR-0035). Dev clone/push is single-shot (exit 13 on failure) | no | app (poll / finalize resume) | health / breaker surfaces if a probe becomes definitive |
@@ -320,9 +320,9 @@ the script (period is minutes; threshold is the SQL result `>=` count):
 | `devcake-kills` | `operation_name = 'watchdog.kill'` | 10 | 1 |
 | `devcake-needs-human` | `audit.event` with `devcake_audit_action = 'devcake_needs_human'` (audit log is span-mirrored so this can fire) | 15 | 1 |
 | `devcake-dev-auth-breaker` | `operation_name = 'breaker.trip'` (DEV_AUTH or forge). Separately, `dev.backend_degraded` spans signal model-backend throttling (§4a) — **not** this alert | 15 | 1 |
-| `devcake-pmo-forge-transient` | `poll.cycle` with `devcake_outcome = 'PMO_TRANSIENT'` **or** `forge.probe_transient` | 15 | 3 |
+| `devcake-pmo-forge-transient` | `poll.instance` with `devcake_outcome = 'PMO_TRANSIENT'` **or** `forge.probe_transient` | 15 | 3 |
 | `devcake-poison` | `operation_name = 'ingress.poison'` | 10 | 1 |
-| `devcake-daily-cost` | `SUM(devcake_cost_usd)` where not null | 1440 (24 h) | `OO_DAILY_COST_ALERT_USD` (default **50**) |
+| `devcake-daily-cost` | `SUM(devcake_cost_usd)` on `run.finalize` where not null | 1440 (24 h) | `OO_DAILY_COST_ALERT_USD` (default **50**) |
 
 Without `OO_ALERT_WEBHOOK`, the script skips alerts (exit 0). Re-post is
 idempotent: an “already exists” body is success; other errors fail loud

@@ -27,8 +27,8 @@ observability gap.
 
 | Span | Parent | Emitted by | Content |
 |---|---|---|---|
-| `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `PMO_TRANSIENT`/`cycle_error` outcomes |
-| `poll.instance` | `poll.cycle` | app | one child per configured PMO instance (`devcake.instance`); a per-instance failure marks THIS span, not the cycle |
+| `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `cycle_error` outcome on the cycle itself |
+| `poll.instance` | `poll.cycle` | app | one child per configured PMO instance (`devcake.instance`); per-instance failures (`PMO_TRANSIENT` / `INSTANCE_ERROR`) mark THIS span, not the cycle |
 | `mission.dispatch` | `poll.cycle` (steward runs: `steward.periodic` / `steward.discovery`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
 | `mission.give_up` | `poll.cycle` | app | ERROR status; covers the `DEVCAKE-FAILED` label write + feed post |
 | `sweep.merge` | `poll.cycle` | app | emitted only when the sweep acts (`merged`/`closed`); covers the PMO writes |
@@ -36,10 +36,10 @@ observability gap.
 | `sweep.tracking` | `poll.cycle` | app | emitted when a project auto-completes; covers the PMO writes |
 | `steward.periodic` | `poll.cycle` | app | how a DUE periodic steward run resolved: `dispatched` / `already_active` / `concurrency_deferred` / `degraded_skip` (ERROR). Emitted on outcome **transitions** (and every dispatch), not per tick — a steward stuck degraded for hours yields one span, not thousands |
 | `steward.discovery` | `poll.cycle` (or the harvest kick's task) | app | how a discovery-lane pass resolved: `dispatched` / `already_active` / `concurrency_deferred` / `degraded_skip` / `mirror_stale` / `secret_env_gate` / `dispatch_skipped` (ADR-0033). Same on-transition emission rule as `steward.periodic` |
-| `dev.run` | *linked to `mission.dispatch` via TRACEPARENT env* | Dev entrypoint | full registry incl. `devcake.tokens.*`, `devcake.cost.usd`, `devcake.outcome` |
-| `harness.exec` | `dev.run` | Dev entrypoint | `devcake.harness` |
+| `dev.run` | *linked to `mission.dispatch` via TRACEPARENT env* | Dev entrypoint | identity (`devcake.run.id`, `devcake.dev_type`, `devcake.harness`), `devcake.outcome` (harness-exit shaped), `devcake.continuations` — **not** tokens/cost |
+| `harness.exec` | `dev.run` | Dev entrypoint | `devcake.harness`; `devcake.continuation` per attempt |
 | `ingress.handle` | `dev.run` (via the run's traceparent) | app | one span per handled ingress message (`devcake.kind`: `run.started`, `runspec.get`, `activity.get`, `oauth.result`, `run.artifacts`, OAuth-shaped `run.log`, …). Deliberately span-free: `run.heartbeat` (2/min/run) and streamed `run.log {lines}` batches (one every few seconds while a harness talks) — pure liveness/output noise that would drown the trace |
-| `run.finalize` | `dev.run` (via the run's traceparent) | app | `devcake.run.id`, `devcake.outcome`, `devcake.tokens.*`, `devcake.cost.usd`, `devcake.verdict` (+ ERROR status on rejections) |
+| `run.finalize` | `dev.run` (via the run's traceparent) | app | `devcake.run.id`, `devcake.outcome` (mission vocabulary), `devcake.tokens.*`, `devcake.cost.usd` / `usd_estimated` / `rate_card`, `devcake.verdict`, `devcake.continuations` (+ ERROR status on rejections) |
 | `watchdog.kill` | `dev.run` (via the run's traceparent) | app | ERROR status, kill reason, resulting state |
 | `baker.dead` / `baker.alive` | root (poll.cycle sibling) | app | Transition only. The host baker heartbeats on `/data`; the **poll cycle** observes it (same chokepoint as `run_failures`). `baker.dead` is ERROR — restart with `./up.sh`. Quiet ticks are span-free. |
 | `baker.reconcile` | root | app (replay) | One claimed keep-set order. Children: `baker.compile`, `baker.probe.<row>` (`devcake.baker.cause` = aim/stub/dialect/auth), `baker.prune`. Host baker writes span records to the outbox; poll replays them. Quiet ticks emit nothing. |
@@ -61,22 +61,71 @@ Deliberately span-free besides heartbeats: the watchdog's quiet 10 s scan (its
 
 ## 3. Attribute registry (normative — spelled exactly)
 
+Authoritative source: `app/devcake/telemetry/attributes.py` (`ATTRIBUTES`).
+The fenced list below is a pinned mirror of that frozenset — every
+`set_attribute("devcake.…")` name that is queryable or cross-span must appear
+here; OpenObserve flattens dots to underscores (`devcake.run.id` →
+`devcake_run_id`). Dropped (never emitted): `devcake.mission.id`,
+`devcake.run.seq`.
+
 ```
-devcake.mission.id          devcake.mission.key        devcake.mission.type
-devcake.dev_type            devcake.harness
-devcake.run.id              devcake.run.seq            devcake.run.attempt
-devcake.tokens.input        devcake.tokens.output      devcake.tokens.total
-devcake.tokens.cache_read   devcake.tokens.cache_write devcake.tokens.reasoning
-devcake.cost.usd            devcake.cost.usd_estimated devcake.cost.rate_card
-devcake.outcome             (result.json outcome | error class)
-devcake.discoveries.harvested  (run.finalize; count only — discovery CONTENT
-                                never leaves the board, ADR-0033 D8)
-devcake.steward.duty           (mission.dispatch — "relations" | "discovery")
-devcake.steward.edges_created  devcake.steward.edges_rejected   (run.finalize,
-                                relations flavor)
-devcake.steward.routes_delivered  devcake.steward.routes_rejected
-                               (run.finalize, discovery flavor; counts only)
+devcake.audit.action
+devcake.audit.detail
+devcake.baker.cause
+devcake.baker.detail
+devcake.baker.state
+devcake.breaker
+devcake.cause
+devcake.children
+devcake.clear.dagu_deleted
+devcake.clear.ok
+devcake.clear.runs_deleted
+devcake.cli_version
+devcake.continuation
+devcake.continuations
+devcake.cost.rate_card
+devcake.cost.usd
+devcake.cost.usd_estimated
+devcake.dev_type
+devcake.discoveries.harvested
+devcake.harness
+devcake.instance
+devcake.kill.reason
+devcake.kind
+devcake.merge.verdict
+devcake.mission.key
+devcake.mission.type
+devcake.missions.candidates
+devcake.missions.dispatched
+devcake.missions.seen
+devcake.outcome
+devcake.pmo.id
+devcake.poison.entries
+devcake.poll.cycle
+devcake.reason
+devcake.repo
+devcake.run.attempt
+devcake.run.id
+devcake.steward.duty
+devcake.steward.edges_created
+devcake.steward.edges_rejected
+devcake.steward.routes_delivered
+devcake.steward.routes_rejected
+devcake.tokens.cache_read
+devcake.tokens.cache_write
+devcake.tokens.input
+devcake.tokens.output
+devcake.tokens.reasoning
+devcake.tokens.total
+devcake.verdict
 ```
+
+Notes (not attribute names): `devcake.outcome` carries result.json outcomes /
+error classes; `devcake.discoveries.harvested` is a count only (discovery
+CONTENT never leaves the board, ADR-0033 D8); steward edge/route attrs are
+counts on `run.finalize`; `devcake.steward.duty` is stamped on
+`mission.dispatch` (`relations` | `discovery`). Tokens and cost attrs home on
+`run.finalize` only.
 
 Every log line from app and Dev entrypoint carries `devcake.run.id` and `devcake.mission.key` for correlation.
 
@@ -138,7 +187,7 @@ default `default` — same multi-org footgun as fluent-bit, §1 / `13` §7):
 | # | Panel title | Primary signal |
 |---|---|---|
 | 1 | **Cost per hour (USD, by dev type)** | `devcake_cost_usd` (harness-reported) |
-| 2 | **Dev runs by outcome (daily)** | `dev.run` by `devcake_outcome` |
+| 2 | **Dev runs by outcome (daily)** | `run.finalize` by `devcake_outcome` |
 | 3 | **Failure signals (kills, give-ups)** | `watchdog.kill`, `mission.give_up` |
 | 4 | **Estimated cost per hour (USD, by dev type — rate card)** | `devcake_cost_usd_estimated` (ADR-0021) |
 

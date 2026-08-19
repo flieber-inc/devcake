@@ -86,6 +86,7 @@ docker run --rm \
   -v "$(pwd)/images/Dockerfile:/srv/images.Dockerfile:ro" \
   -v "$(pwd)/docs:/srv/docs:ro" \
   -v "$(pwd)/admin/spa/src/lib/registry_fallback.json:/srv/admin-registry-fallback.json:ro" \
+  -v "$(pwd)/admin/spa/src/pages/RunsPage.jsx:/srv/admin-runs-page.jsx:ro" \
   -v "$(pwd)/scripts:/srv/repo-scripts:ro" \
   -v "$(pwd)/up.sh:/srv/up.sh:ro" \
   -w /srv \

@@ -685,3 +685,59 @@ def test_existing_user_is_still_tolerated():
                               tolerate=(409, 422),
                               tolerate_only_if="already exists",
                               json={"username": "svc-x"})) is None
+
+
+def test_ensure_pmo_board_enables_deps_without_disabling_time_tracker(
+        tmp_path, monkeypatch):
+    """ADR-0030 board provision must turn issue dependencies on without
+    force-disabling the built-in time tracker (CAKE-69 honesty)."""
+    from devcake.adapters.gitea.provision import BOARD_REPO, BOARD_USER, PMO_ORG
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    (tmp_path / "secrets" / "connections").mkdir(parents=True)
+    patches = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        body = {}
+        if request.content:
+            try:
+                body = json.loads(request.content)
+            except json.JSONDecodeError:
+                body = {}
+        if method == "POST" and path == "/api/v1/orgs":
+            return httpx.Response(409, json={})
+        if method == "GET" and path == f"/api/v1/repos/{PMO_ORG}/{BOARD_REPO}":
+            return httpx.Response(200, json={"name": BOARD_REPO})
+        if method == "PATCH" and path == f"/api/v1/repos/{PMO_ORG}/{BOARD_REPO}":
+            patches.append(body)
+            return httpx.Response(200, json={"name": BOARD_REPO})
+        if method == "POST" and path == "/api/v1/admin/users":
+            return httpx.Response(422, json={"message": "user already exists"})
+        if method == "PUT" and f"/collaborators/{BOARD_USER}" in path:
+            return httpx.Response(204)
+        if method == "GET" and path == f"/api/v1/users/{BOARD_USER}/tokens":
+            return httpx.Response(200, json=[{
+                "name": "devcake-board", "token_last_eight": "deadbeef"}])
+        if method == "DELETE" and "/tokens/" in path:
+            return httpx.Response(204)
+        if method == "POST" and path.endswith("/tokens"):
+            return httpx.Response(201, json={"sha1": "boardtok-deadbeef"})
+        return httpx.Response(404, json={"message": f"unhandled {method} {path}"})
+
+    # Seed a live-looking board PAT so mint is skipped (token_last_eight match).
+    from devcake import secrets as secrets_store
+    from devcake.config import MANAGED_BOARD_NAME
+    secrets_store.write_connection_secret(
+        "pmo", MANAGED_BOARD_NAME, "api_key", "xxxxxxxxdeadbeef")
+
+    prov = GiteaProvisioner(url="http://gitea:3000", admin_user="a",
+                            admin_password="p",
+                            transport=httpx.MockTransport(handler))
+    info = run_coro(prov.ensure_pmo_board())
+    assert info["team_key"] == f"{PMO_ORG}/{BOARD_REPO}"
+    assert patches, "board PATCH must enable issue dependencies"
+    tracker = patches[0].get("internal_tracker") or {}
+    assert tracker.get("enable_issue_dependencies") is True
+    assert "enable_time_tracker" not in tracker
+    assert "allow_only_contributors_to_track_time" not in tracker

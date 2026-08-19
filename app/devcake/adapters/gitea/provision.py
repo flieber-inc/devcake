@@ -302,11 +302,10 @@ class GiteaProvisioner:
             await self._req("POST", f"/orgs/{PMO_ORG}/repos",
                             json={"name": BOARD_REPO, "private": True,
                                   "auto_init": True, "default_branch": "main"})
-        # dependencies are off by default and gate blocked_by (docs/05 §9)
+        # dependencies are off by default and gate blocked_by (docs/05 §9).
+        # Only enable_issue_dependencies — do not force-disable the time tracker.
         await self._req("PATCH", f"/repos/{PMO_ORG}/{BOARD_REPO}",
                         json={"internal_tracker": {
-                            "enable_time_tracker": False,
-                            "allow_only_contributors_to_track_time": False,
                             "enable_issue_dependencies": True,
                         }})
         await self._req("POST", "/admin/users", tolerate=(409, 422),

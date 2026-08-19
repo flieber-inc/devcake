@@ -61,9 +61,12 @@ class Router:
         }
         self.comments: dict[int, list] = {1: [], 2: []}
         self.deps: dict[int, list[int]] = {1: [], 2: []}  # blocked → [blockers]
+        # Optional per-issue status override for GET …/dependencies (honesty tests).
+        self.dep_get_status: dict[int, int] = {}
         self.next_label = 10
         self.next_comment = 1
         self.calls: list[str] = []
+        self.patch_bodies: list[dict] = []
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = urlsplit_path(req.url.path)
@@ -78,6 +81,7 @@ class Router:
 
         # PATCH repo (enable dependencies)
         if method == "PATCH" and path == "/api/v1/repos/o/r":
+            self.patch_bodies.append(body)
             return httpx.Response(200, json={"name": "r"})
 
         # labels collection (pagination-aware: the adapter must walk pages —
@@ -167,9 +171,16 @@ class Router:
                 self.issues[num]["labels"] = labs
                 return httpx.Response(200, json=labs)
             if rest == "/dependencies" and method == "GET":
+                status = self.dep_get_status.get(num)
+                if status is not None and status != 200:
+                    return httpx.Response(
+                        status, json={"message": f"deps status {status}"})
                 blockers = self.deps.get(num, [])
-                return httpx.Response(
-                    200, json=[self.issues[b] for b in blockers if b in self.issues])
+                page = int(req.url.params.get("page", 1))
+                limit = int(req.url.params.get("limit", 50))
+                items = [self.issues[b] for b in blockers if b in self.issues]
+                start = (page - 1) * limit
+                return httpx.Response(200, json=items[start:start + limit])
             if rest == "/dependencies" and method == "POST":
                 blocker = int(body.get("index"))
                 if blocker in self.deps.get(num, []):
@@ -727,3 +738,93 @@ def test_swap_labels_refuses_when_issue_has_more_than_the_ceiling():
         run(pmo.swap_labels(MissionRef("1", "issue"),
                             remove=set(), add={"DEVCAKE-PLAN"}))
     assert not any(c.startswith("PUT") for c in router.calls)
+
+
+# --- dependency honesty (CAKE-69) --------------------------------------------
+
+
+def test_blocked_by_raises_on_permanent_dependency_failure():
+    """A 403 on GET …/dependencies must not collapse to blocked_by=[].
+    The old 'depend' in str(e) guard always matched because _req embeds the
+    /dependencies path in every error message."""
+    router = Router()
+    router.dep_get_status[1] = 403
+    pmo = make_pmo(router)
+    with pytest.raises(RuntimeError) as ei:
+        run(pmo.get(MissionRef("1", "issue")))
+    assert "403" in str(ei.value)
+    assert "→ 403" in str(ei.value) or getattr(ei.value, "status_code", None) == 403
+
+
+def test_blocked_by_empty_on_dependencies_404():
+    """HTTP 404 on the dependencies endpoint = deps unavailable → empty blockers."""
+    router = Router()
+    router.dep_get_status[1] = 404
+    pmo = make_pmo(router)
+    m = run(pmo.get(MissionRef("1", "issue")))
+    assert m.blocked_by == []
+
+
+def test_blocked_by_status_match_not_issue_number_substring():
+    """Issue index 404 must not be mistaken for HTTP 404 via substring match."""
+    router = Router()
+    router.issues[404] = _issue(404, title="high-number")
+    router.comments[404] = []
+    router.deps[404] = [1]
+    pmo = make_pmo(router)
+    m = run(pmo.get(MissionRef("404", "issue")))
+    assert m.blocked_by == ["1"]
+
+
+def test_blocked_by_paginates_past_first_page():
+    """F8 twin: a one-shot dependencies GET under-blocks the scheduler gate.
+    Walk every page so enrich sees the full blocker set."""
+    router = Router()
+    # 55 blockers of issue 2 → page size 50 needs a second page
+    for i in range(10, 65):
+        router.issues[i] = _issue(i, title=f"blocker-{i}")
+        router.comments[i] = []
+        router.deps[i] = []
+    router.deps[2] = list(range(10, 65))
+    pmo = make_pmo(router)
+    m = run(pmo.get(MissionRef("2", "issue")))
+    assert sorted(m.blocked_by, key=int) == [str(i) for i in range(10, 65)]
+    dep_gets = [c for c in router.calls
+                if c.startswith("GET") and "/issues/2/dependencies" in c]
+    assert len(dep_gets) >= 2, "must page past the first dependencies page"
+
+
+def test_blocked_by_ceiling_warns(monkeypatch, caplog):
+    """Hitting the dependencies page ceiling warns (Linear relations posture)
+    and returns what was fetched — never silently only page 1."""
+    import logging
+
+    from devcake.adapters.gitea_issues import adapter as gi
+    monkeypatch.setattr(gi, "MAX_DEP_PAGES", 2)
+    monkeypatch.setattr(gi, "DEPS_PAGE", 2)
+    router = Router()
+    for i in range(10, 20):
+        router.issues[i] = _issue(i, title=f"b-{i}")
+        router.comments[i] = []
+        router.deps[i] = []
+    router.deps[2] = list(range(10, 20))  # 10 blockers, ceiling = 4
+    pmo = make_pmo(router)
+    with caplog.at_level(logging.WARNING, logger="devcake.adapters"):
+        m = run(pmo.get(MissionRef("2", "issue")))
+    assert len(m.blocked_by) == 4
+    assert sorted(m.blocked_by, key=int) == ["10", "11", "12", "13"]
+    assert any("dependencies" in r.message and "ceiling" in r.message
+               for r in caplog.records)
+
+
+def test_ensure_labels_enables_deps_without_touching_time_tracker():
+    """ensure_labels still turns issue dependencies on, but must not force
+    disable the built-in time tracker (or its contributor gate)."""
+    router = Router()
+    pmo = make_pmo(router)
+    run(pmo.ensure_labels("o/r", {"DEVCAKE"}))
+    assert router.patch_bodies, "repo PATCH must run to enable dependencies"
+    tracker = router.patch_bodies[0].get("internal_tracker") or {}
+    assert tracker.get("enable_issue_dependencies") is True
+    assert "enable_time_tracker" not in tracker
+    assert "allow_only_contributors_to_track_time" not in tracker

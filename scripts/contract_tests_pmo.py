@@ -103,10 +103,9 @@ class GiteaPmoFixture:
                   json={"name": self.repo, "private": True, "auto_init": True,
                         "default_branch": "main"})
         # dependencies off by default — enable before the adapter's first write
+        # (only enable_issue_dependencies; leave the time tracker alone)
         self._req("PATCH", f"/repos/{admin_user}/{self.repo}",
                   json={"internal_tracker": {
-                      "enable_time_tracker": False,
-                      "allow_only_contributors_to_track_time": False,
                       "enable_issue_dependencies": True,
                   }})
         self.token = self._req(

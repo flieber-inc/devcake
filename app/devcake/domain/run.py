@@ -42,6 +42,23 @@ def auth_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def is_pre_wipe(store, run: "Run") -> bool:
+    """True when ``run`` is not stamped for the store's current wipe generation.
+
+    Prefer ``store.is_current_generation`` (RunStore / honest StatePort fakes).
+    Fallback for a store that only exposes ``wipe_generation``: wipe_gen ≤ 0
+    means current; otherwise any ``store_gen != wipe_gen`` is pre-wipe.
+    """
+    check = getattr(store, "is_current_generation", None)
+    if callable(check):
+        return not check(run)
+    wipe_gen = int(getattr(store, "wipe_generation", 0) or 0)
+    gen = int(getattr(run, "store_gen", 0) or 0)
+    if wipe_gen <= 0:
+        return False
+    return gen != wipe_gen
+
+
 class Run(BaseModel):
     schema_version: int = 2
     # lost-update fence (2026-08-12 audit F8): bumped by RunStore.save() on

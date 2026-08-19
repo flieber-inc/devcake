@@ -159,6 +159,20 @@ def _read_strict(path: Path) -> dict:
             f"delete or repair the file under /data/secrets/") from e
 
 
+# ── redaction registration keys (write + boot-register must match) ──────────
+
+def conn_redact_key(scope: str, instance: str, field: str) -> str:
+    return f"conn:{scope}:{instance}:{field}"
+
+
+def harness_redact_key(var: str) -> str:
+    return f"harness:{var}"
+
+
+def cred_redact_key(dev_type: str, filename: str) -> str:
+    return f"cred:{dev_type}:{filename}"
+
+
 # ── connection secrets (pmo/repo credentials) ───────────────────────────────
 
 def write_connection_secret(scope: str, instance: str, field: str,
@@ -168,7 +182,8 @@ def write_connection_secret(scope: str, instance: str, field: str,
     data[field] = value
     _atomic_write(path, data)
     if value:
-        security.register_runtime_secret(f"conn:{scope}:{instance}:{field}", value)
+        security.register_runtime_secret(
+            conn_redact_key(scope, instance, field), value)
 
 
 def read_connection_secret(scope: str, instance: str, field: str) -> str:
@@ -226,7 +241,7 @@ def rename_connection_instance(scope: str, old: str, new: str) -> None:
     for field, value in data.items():
         if isinstance(value, str) and value:
             security.register_runtime_secret(
-                f"conn:{scope}:{new}:{field}", value)
+                conn_redact_key(scope, new, field), value)
 
 
 # ── harness/model secrets ───────────────────────────────────────────────────
@@ -234,7 +249,7 @@ def rename_connection_instance(scope: str, old: str, new: str) -> None:
 def write_harness_secret(var: str, value: str) -> None:
     _atomic_write(_harness_path(var), {"value": value})
     if value:
-        security.register_runtime_secret(f"harness:{var}", value)
+        security.register_runtime_secret(harness_redact_key(var), value)
 
 
 def read_harness_secret(var: str) -> str:
@@ -305,7 +320,7 @@ def write_credential_file(dev_type: str, filename: str, content: str) -> Path:
     _atomic_write_bytes(path, data)
     if len(raw) >= 8:
         security.register_runtime_secret(
-            f"cred:{dev_type}:{filename}", raw)
+            cred_redact_key(dev_type, filename), raw)
     return path
 
 
@@ -337,7 +352,25 @@ def _status(path: Path, field: str | None = None) -> dict:
 
 
 def connection_status(scope: str, instance: str, field: str) -> dict:
-    return _status(_conn_path(scope, instance), field)
+    """Presence for one connection field.
+
+    ``updated_at`` is the shared file mtime only when this field is the sole
+    present value — multi-field connection files share one clock, so reporting
+    that mtime for every field falsely bumps siblings after a single-field
+    write. Prefer null over lying when more than one field is set
+    (harness_status keeps mtime — one value per file).
+    """
+    path = _conn_path(scope, instance)
+    if not path.exists():
+        return {"present": False, "updated_at": None}
+    data = _read(path)
+    present = bool(data.get(field))
+    if not present:
+        return {"present": False, "updated_at": None}
+    present_fields = [k for k, v in data.items() if isinstance(v, str) and v]
+    if len(present_fields) == 1 and present_fields[0] == field:
+        return {"present": True, "updated_at": _iso(path.stat().st_mtime)}
+    return {"present": True, "updated_at": None}
 
 
 def harness_status(var: str) -> dict:
@@ -448,9 +481,9 @@ def register_all() -> None:
         scope, _, instance = key.partition("-")
         for field, value in fields.items():
             security.register_runtime_secret(
-                f"conn:{scope}:{instance}:{field}", value)
+                conn_redact_key(scope, instance, field), value)
     for var, value in list_harness_secrets().items():
-        security.register_runtime_secret(f"harness:{var}", value)
+        security.register_runtime_secret(harness_redact_key(var), value)
     for cf in inventory().get("credential_files") or []:
         dev, fname = cf.get("dev_type"), cf.get("filename")
         if not dev or not fname:
@@ -463,7 +496,7 @@ def register_all() -> None:
                       dev, fname, e)
             continue
         if len(raw) >= 8:
-            security.register_runtime_secret(f"cred:{dev}:{fname}", raw)
+            security.register_runtime_secret(cred_redact_key(dev, fname), raw)
 
 
 # ── profile secret snapshots (ADR-0013) ─────────────────────────────────────

@@ -128,7 +128,7 @@ def save_template(mission_type: str, name: str, text: str) -> None:
                          f"create a copy under a new name)")
     if not _NAME_RE.fullmatch(name):
         raise ValueError("template name must match "
-                         "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+                         "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     validate_template(mission_type, text)
     _atomic_yaml(_dir(mission_type) / f"{name}.yaml",
                  {"schema_version": 1, "mission_type": mission_type,

@@ -127,7 +127,7 @@ class Messaging:
             raise MessagingError(
                 f"create_run_user({run_id}): network/ACL failure: {e}") from e
         # the only place the plaintext exists app-side — register it here so
-        # redact() masks it in everything PMO-bound (docs/14 §5)
+        # redact() masks it in everything PMO-bound (docs/14 §7)
         register_runtime_secret(run_id, password)
         return password
 

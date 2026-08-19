@@ -501,6 +501,29 @@ def test_security_warnings_mono_repo_different_hosts_no_warning(
     assert "pmo-forge-mono-repo:missions" not in ids
 
 
+def test_security_warnings_mono_repo_github_api_host_alias(
+        tmp_path, monkeypatch):
+    """Registry host_aliases: API origin matches clone host for overlap."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(
+            name="code",
+            forge="github",
+            url="https://github.com/acme/missions.git",
+        )],
+        pmos=[PMOInstance(
+            name="ghiss",
+            system="github_issues",
+            team_key="acme/missions",
+            api_base="https://api.github.com",
+        )],
+    )
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert "pmo-forge-mono-repo:ghiss" in ids
+
+
 def test_profile_secret_snapshots_are_covered_by_the_redaction_glob(tmp_path, monkeypatch):
     """ADR-0013 glob tripwire: /data/secrets/profiles/{name}.json sits at
     scan level two, so a DORMANT profile's values must mask with ZERO

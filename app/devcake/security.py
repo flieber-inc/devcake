@@ -307,9 +307,10 @@ def security_warnings(config) -> list[dict]:
     # forge-issues board lives in the same repository a Dev holds a forge
     # token for, the Dev can reach Issues via the forge API even though the
     # app remains the sole PMO client. Warning only — not a save/dispatch gate.
+    # Host/alias knowledge lives on PMO_SYSTEMS (adapters/) so this module
+    # stays free of forge-host literals (F1 / test_agnosticism).
     from urllib.parse import urlsplit
-    _FORGE_ISSUE_SYSTEMS = frozenset(
-        {"gitea_issues", "github_issues", "gitlab_issues"})
+    from .adapters.registry import PMO_SYSTEMS
 
     def _repo_path(url: str) -> str:
         parts = urlsplit(url if "://" in url else f"https://{url}")
@@ -320,14 +321,22 @@ def security_warnings(config) -> list[dict]:
             return ""
         parts = urlsplit(
             url_or_base if "://" in url_or_base else f"https://{url_or_base}")
-        host = (parts.hostname or "").lower()
-        # GitHub Issues api_base is api.github.com; clone URLs use github.com.
-        if host == "api.github.com":
-            return "github.com"
-        return host
+        return (parts.hostname or "").lower()
+
+    def _hosts_equivalent(a: str, b: str, aliases: list[list[str]]) -> bool:
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        for group in aliases:
+            members = {h.lower() for h in group}
+            if a in members and b in members:
+                return True
+        return False
 
     for pmo in config.pmos:
-        if not pmo.configured or pmo.system not in _FORGE_ISSUE_SYSTEMS:
+        info = PMO_SYSTEMS.get(pmo.system)
+        if not pmo.configured or info is None or not info.forge_issue:
             continue
         board_path = pmo.team_key.strip().strip("/").lower()
         if not board_path:
@@ -335,8 +344,8 @@ def security_warnings(config) -> list[dict]:
         api_base = (pmo.api_base or "").strip()
         if api_base:
             pmo_host = _host(api_base)
-        elif pmo.system == "github_issues":
-            pmo_host = "github.com"
+        elif info.default_host:
+            pmo_host = info.default_host.lower()
         else:
             # No api_base to compare — treat host check as satisfied only when
             # a repo path matches (operator gave no host to disambiguate).
@@ -348,7 +357,8 @@ def security_warnings(config) -> list[dict]:
             if _repo_path(repo.url) != board_path:
                 continue
             repo_host = _host(repo.url)
-            if pmo_host is None or pmo_host == repo_host:
+            if pmo_host is None or _hosts_equivalent(
+                    pmo_host, repo_host, info.host_aliases):
                 overlap_path = board_path
                 break
         if overlap_path:

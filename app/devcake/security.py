@@ -303,4 +303,70 @@ def security_warnings(config) -> list[dict]:
                          f"REFERENCE material: move it to the instance's "
                          f"Reference repos, or add a write token."),
             })
+    # INV-4 mono-repo residual (CAKE-55 decision 2 / CAKE-113): when a
+    # forge-issues board lives in the same repository a Dev holds a forge
+    # token for, the Dev can reach Issues via the forge API even though the
+    # app remains the sole PMO client. Warning only — not a save/dispatch gate.
+    from urllib.parse import urlsplit
+    _FORGE_ISSUE_SYSTEMS = frozenset(
+        {"gitea_issues", "github_issues", "gitlab_issues"})
+
+    def _repo_path(url: str) -> str:
+        parts = urlsplit(url if "://" in url else f"https://{url}")
+        return (parts.path or "").strip("/").removesuffix(".git").lower()
+
+    def _host(url_or_base: str) -> str:
+        if not (url_or_base or "").strip():
+            return ""
+        parts = urlsplit(
+            url_or_base if "://" in url_or_base else f"https://{url_or_base}")
+        host = (parts.hostname or "").lower()
+        # GitHub Issues api_base is api.github.com; clone URLs use github.com.
+        if host == "api.github.com":
+            return "github.com"
+        return host
+
+    for pmo in config.pmos:
+        if not pmo.configured or pmo.system not in _FORGE_ISSUE_SYSTEMS:
+            continue
+        board_path = pmo.team_key.strip().strip("/").lower()
+        if not board_path:
+            continue
+        api_base = (pmo.api_base or "").strip()
+        if api_base:
+            pmo_host = _host(api_base)
+        elif pmo.system == "github_issues":
+            pmo_host = "github.com"
+        else:
+            # No api_base to compare — treat host check as satisfied only when
+            # a repo path matches (operator gave no host to disambiguate).
+            pmo_host = None
+        overlap_path = None
+        for repo in config.repos:
+            if not repo.configured:
+                continue
+            if _repo_path(repo.url) != board_path:
+                continue
+            repo_host = _host(repo.url)
+            if pmo_host is None or pmo_host == repo_host:
+                overlap_path = board_path
+                break
+        if overlap_path:
+            warns.append({
+                "id": f"pmo-forge-mono-repo:{pmo.name}",
+                "severity": "warning",
+                "title": (f"PMO '{pmo.name}' Issues board overlaps a "
+                          f"work-repo forge token"),
+                "body": (
+                    f"Forge-issues PMO '{pmo.name}' watches '{overlap_path}', "
+                    f"which is also a configured repository Devs receive a "
+                    f"forge token for. The app remains the sole PMO client "
+                    f"(INV-4), but a Dev forge token can still reach that "
+                    f"Issues board over the forge API — a residual, not a "
+                    f"hard product gate (docs/14 §8). Prefer a dedicated "
+                    f"Issues repo (e.g. owner/missions) or a Linear PMO so "
+                    f"board credentials stay disjoint from work-repo forge "
+                    f"tokens."
+                ),
+            })
     return warns

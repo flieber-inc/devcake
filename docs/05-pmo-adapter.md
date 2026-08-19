@@ -262,7 +262,7 @@ First **forge-issue** PMO: issue trackers that are not Linear-style product PMOs
 | `team_key` | Exactly `owner/repo` of a **dedicated issues board** (e.g. `devcake-pmo/missions`). Not a per-mission internal-forge work repo. |
 | `api_key` | PAT with issue (and label) write on that repo. GUI-stored; **empty `token_patterns`** (40-hex tokens collide with git SHAs — value registration only, same posture as the Gitea forge). |
 
-Internal vs external is **only** `api_base` + token + board path — one system, not two registry entries. Credential separation is mandatory: PMO PAT ≠ forge write tokens ≠ `GITEA_ADMIN_*`.
+Internal vs external is **only** `api_base` + token + board path — one system, not two registry entries. Credential separation is mandatory: PMO PAT ≠ forge write tokens ≠ `GITEA_ADMIN_*`. When `team_key` overlaps a configured work-repo URL, `/health` surfaces dismissable `pmo-forge-mono-repo:*` (`14` §8) — warning only, not a save/dispatch gate.
 
 ### 9.2 Normalization (forge-issue profile)
 

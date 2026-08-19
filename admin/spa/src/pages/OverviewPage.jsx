@@ -10,7 +10,7 @@ import StatusPill from "../components/StatusPill.jsx";
 import RunTerminal, { TERMINAL_STATES } from "../components/RunTerminal.jsx";
 import StageGlyph from "../components/StageGlyph.jsx";
 import usePoll from "../lib/usePoll.js";
-import { SERVICES, serviceValue, devTypeState } from "../lib/services.js";
+import { SERVICES, serviceValue, devTypeState, runsForDevActivity } from "../lib/services.js";
 import { relTime, fullTime } from "../lib/format.js";
 import { get } from "../api.js";
 import { connRef } from "../lib/connectionFields.js";
@@ -354,16 +354,21 @@ export default function OverviewPage({
   dismissedKeys = [], onDismissInternalForge,
 }) {
   const [recent, setRecent] = useState(null);
+  const [activeRuns, setActiveRuns] = useState(null);
   const [devTypes, setDevTypes] = useState(null);
   const [openRun, setOpenRun] = useState(null);
   const [showDismissed, setShowDismissed] = useState(false);
-  // limit=25 (not 5): the Devs card scans for ACTIVE runs per dev type; the
-  // Recent-runs card slices the first five below
+  // Recent-runs card: newest 25 (UI slices first five). Devs-card busy
+  // coloring uses a separate active_only poll so a still-running run
+  // cannot fall off a recent page while health.active_runs still counts it.
   usePoll(() => get("/runs?limit=25&offset=0").then(setRecent).catch(() => {}), 10000);
+  usePoll(() => get("/runs?active_only=true&limit=500&offset=0")
+    .then(setActiveRuns).catch(() => {}), 10000);
   usePoll(() => get("/dev-types").then(setDevTypes).catch(() => {}), 10000);
 
+  const busyRuns = runsForDevActivity(activeRuns?.runs);
   const devStates = (devTypes || []).map((dt) => ({
-    dt, ...devTypeState(dt, health, recent?.runs),
+    dt, ...devTypeState(dt, health, busyRuns),
   }));
   const devsOk = devStates.filter((s) => s.state !== "broken").length;
   const paused = !!health.intake_paused;

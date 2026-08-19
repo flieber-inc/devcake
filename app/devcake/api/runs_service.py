@@ -24,7 +24,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from ..config import CostInputs
 from ..domain import costing
-from ..domain.run import Run
+from ..domain.run import TERMINAL_STATES, Run
 
 _TOKEN_SUMS = ("input_tokens", "output_tokens", "cache_read_tokens",
                "cache_write_tokens", "total_tokens")
@@ -249,13 +249,16 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
                        sort: str | None = None,
                        direction: str | None = None,
                        group_by: str | None = None,
-                       missions_cache: list[dict] | None = None) -> dict:
+                       missions_cache: list[dict] | None = None,
+                       active_only: bool = False) -> dict:
     if group_by not in (None, "mission"):
         raise HTTPException(400, f"invalid group_by {group_by!r} — mission")
     runs, everything, descending = _filtered_runs(
         store, cost_inputs, mission_key=mission_key, pmo_ref=pmo_ref,
         created_from=created_from, created_to=created_to, sort=sort,
         direction=direction, flat_sort=group_by is None)
+    if active_only:
+        runs = [r for r in runs if r.state not in TERMINAL_STATES]
 
     out = {
         "offset": offset, "limit": limit,

@@ -296,7 +296,8 @@ async def list_runs(limit: int = 25, offset: int = 0,
                     mission_key: str | None = None, pmo_ref: str | None = None,
                     created_from: str | None = None,
                     created_to: str | None = None, sort: str | None = None,
-                    dir: str | None = None, group_by: str | None = None):
+                    dir: str | None = None, group_by: str | None = None,
+                    active_only: bool = False):
     from .runs_service import list_runs_response
     s = svc()
     return list_runs_response(s.store, s.config.cost_inputs, limit=limit,
@@ -304,7 +305,8 @@ async def list_runs(limit: int = 25, offset: int = 0,
                               pmo_ref=pmo_ref, created_from=created_from,
                               created_to=created_to, sort=sort,
                               direction=dir, group_by=group_by,
-                              missions_cache=s.poll_rt.missions_cache)
+                              missions_cache=s.poll_rt.missions_cache,
+                              active_only=active_only)
 
 
 @app.get("/api/v1/runs.csv")

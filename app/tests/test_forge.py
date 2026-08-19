@@ -644,7 +644,7 @@ def test_descriptor_complete_and_renderable(cls):
         assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"
     # token_patterns/secret_shape_prefixes MAY be deliberately empty (Gitea:
     # 40-hex tokens collide with git SHAs — value registration is the
-    # redaction line, docs/14 §5); when present they must compile/behave
+    # redaction line, docs/14 §7); when present they must compile/behave
     # templates must render without KeyError against the documented placeholders
     d.pr_instructions.format(key="DEV-1", title="t", default="main",
                              branch="devcake/DEV-1")

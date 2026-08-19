@@ -182,8 +182,24 @@ def main() -> None:
         "result": {"schema_version": 1, "outcome": "hello",
                    "summary": f"hello from stub dev {RUN_ID}"},
         "transcript_md": transcript,
-        "token_report": {"model": "stub", "extraction_method": "unavailable",
-                         "total_tokens": None},
+        # TokenReport v1 (ADR-0029) — closed key set; hello is standalone so
+        # the shape is mirrored here (no runtime dep on tokens.py).
+        "token_report": {
+            "schema": 1,
+            "model": "stub",
+            "input_tokens": None,
+            "output_tokens": None,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
+            "total_tokens": None,
+            "reasoning_tokens": None,
+            "num_turns": None,
+            "duration_ms": None,
+            "cost_usd_native": None,
+            "cost_usd_estimated": None,
+            "source": "unavailable",
+            "raw": {},
+        },
     })
     provider.force_flush()
     print(f"hello dev {RUN_ID} done")

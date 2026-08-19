@@ -11,8 +11,9 @@ from fastapi import HTTPException
 
 from devcake.adapters.files.run_store import RunStore
 from devcake.config import CostInputs, ModelRate
-from devcake.api.runs_service import (list_runs_response, run_detail,
-                                      runs_csv_response)
+from devcake.api.runs_service import (get_run_log_response, get_run_response,
+                                      list_runs_response, run_detail,
+                                      runs_csv_response, stream_run_log_response)
 from devcake.domain.run import Run
 
 T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -332,6 +333,45 @@ def test_rows_and_detail_never_leak_prompts_results_or_notes(tmp_path):
         assert banned not in detail
     assert detail["cost_usd_estimated"] == 5.60
     assert detail["input_tokens"] == 1_000_000
+
+
+def test_get_run_response_404_when_missing(tmp_path):
+    store = _store(tmp_path, [])
+    with pytest.raises(HTTPException) as ei:
+        get_run_response("missing", store, CostInputs())
+    assert ei.value.status_code == 404
+
+
+def test_get_run_response_returns_detail(tmp_path):
+    store = _store(tmp_path, [_run(1, tr=GROK_TR)])
+    body = get_run_response("A-1-1-EXECUTE-ZZZZZZ", store, CostInputs())
+    assert body["run_id"] == "A-1-1-EXECUTE-ZZZZZZ"
+    assert body["input_tokens"] == 1_000_000
+
+
+def test_get_run_log_response_404_when_missing(tmp_path):
+    store = _store(tmp_path, [])
+
+    class _Log:
+        def read(self, run_id, tail=None):
+            raise AssertionError("read must not run for missing run")
+
+    with pytest.raises(HTTPException) as ei:
+        get_run_log_response("missing", store, _Log())
+    assert ei.value.status_code == 404
+
+
+def test_stream_run_log_response_404_when_missing(tmp_path):
+    store = _store(tmp_path, [])
+
+    class _Log:
+        def stream(self, run_id, is_terminal):
+            raise AssertionError("stream must not run for missing run")
+
+    with pytest.raises(HTTPException) as ei:
+        stream_run_log_response(
+            "missing", store, _Log(), terminal_states={"finished"})
+    assert ei.value.status_code == 404
 
 
 # ── CSV export (docs/11: the Runs ⋯ menu's spreadsheet) ──────────────────────

@@ -45,8 +45,9 @@ def _over_file_cap(size) -> bool:
 # of re-fetching per mission. Operator edits reach new runs within ~TTL.
 CACHE_TTL_SECONDS = 30.0
 _CACHE_BYTES_MAX = 4 * MAX_TOTAL_BYTES   # bound on cached file bytes
-# same shape as the DevType.skills validator in config.py (kept in sync by
-# test_skills — a name that saves here must be selectable there)
+# Skill dir name (slash-free). DevType.skills composes this with
+# config.INSTANCE_NAME_BODY via skill_ref_pattern() — lockstep canary:
+# test_repeated_constants.test_skill_name_shapes_lockstep.
 SKILL_NAME_RE = r"[a-z0-9][a-z0-9_-]{0,63}"
 
 
@@ -293,7 +294,8 @@ class SkillService:
 
     async def _get_external(self, name: str) -> dict:
         source, _, skill = name.partition("/")
-        if not (re.fullmatch(r"[a-z][a-z0-9]{0,11}", source)
+        from ..config import INSTANCE_NAME_BODY
+        if not (re.fullmatch(INSTANCE_NAME_BODY, source)
                 and re.fullmatch(SKILL_NAME_RE, skill)):
             raise SkillStoreError(422, f"invalid skill name {name!r}")
         if self._skill_source(source) is None or self.repo_cache is None:

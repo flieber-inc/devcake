@@ -392,7 +392,8 @@ class RepoCache:
         skill regex never surface. Sizes come from `ls-tree -r -l` so the
         caller can apply payload caps BEFORE reading content."""
         import re as _re
-        skill_re = _re.compile(r"[a-z0-9][a-z0-9_-]{0,63}$")
+        from .skills import SKILL_NAME_RE
+        skill_re = _re.compile(rf"{SKILL_NAME_RE}$")
         p = self.mirror_path(name)
         spec = f"{sha}:{subdir}" if subdir else sha
         r = await self.git(["-C", str(p), "ls-tree", "-r", "-l", spec])

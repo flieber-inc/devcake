@@ -2,6 +2,8 @@
 // for the sidebar services list (previously duplicated in Sidebar and
 // Overview) and the Devs-card state derivation.
 
+import { TERMINAL_STATES } from "./runStates.js";
+
 // [health key, display label] — 3×2 grid: row 1 control plane, row 2 run
 // infrastructure. Gitea reports as health.internal_forge ({ok,detail} or
 // null when GITEA_ADMIN_PASSWORD is unset → unknown/grey).
@@ -20,8 +22,6 @@ export function serviceValue(health, key) {
   return health[key];
 }
 
-const TERMINAL = ["finished", "failed", "timed_out", "orphaned"];
-
 // Devs-card state per Dev Type (the Runs-table color code): red = broken
 // (breaker latched / no credentials), blue = a run is using it, green = ok.
 export function devTypeState(dt, health, runs) {
@@ -31,6 +31,6 @@ export function devTypeState(dt, health, runs) {
     return { state: "broken", why: "no credentials configured" };
   }
   const busy = (runs || []).some(
-    (r) => r.dev_type === dt.name && !TERMINAL.includes(r.state));
+    (r) => r.dev_type === dt.name && !TERMINAL_STATES.includes(r.state));
   return busy ? { state: "running" } : { state: "ok" };
 }

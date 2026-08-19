@@ -25,7 +25,19 @@ CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "co
 # alnum, ≤12 chars, NO hyphens: the name is embedded uppercased in branch
 # names and run ids ({INSTANCE}-{key}), where a hyphen would make the
 # compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
-_INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
+# Body (no anchors) is shared by skill refs, repo markers, etc. (CAKE-87).
+INSTANCE_NAME_BODY = r"[a-z][a-z0-9]{0,11}"
+_INSTANCE_NAME_RE = rf"^{INSTANCE_NAME_BODY}$"
+
+
+def skill_ref_pattern() -> str:
+    """DevType.skills entry shape: optional ``source/`` + skill dir name.
+
+    Composed from INSTANCE_NAME_BODY + domain.skills.SKILL_NAME_RE — do not
+    re-spell either half inline.
+    """
+    from .domain.skills import SKILL_NAME_RE
+    return rf"(?:{INSTANCE_NAME_BODY}/)?{SKILL_NAME_RE}"
 
 # Cron job ids (and any other non-instance slug): lowercase alnum +
 # hyphen/underscore, no slash. Wider than instance names so reserved
@@ -641,15 +653,14 @@ class DevType(BaseModel):
 
     @staticmethod
     def _dedupe_skill_names(v: list[str], *, field: str) -> list[str]:
-        # `<card>/<skill>` selects a skill from an EXTERNAL repo card's tree
-        # (ADR-0016 addendum): one slash max, prefix in repo-card shape.
+        # `<card>/<skill>` selects a skill from an EXTERNAL skill source
+        # (ADR-0016 addendum): one slash max, prefix instance-shaped.
         # SKILL_NAME_RE (store/builtin authoring) stays slash-free, so the
         # namespaces are structurally disjoint — no precedence rules exist.
+        pattern = skill_ref_pattern()
         out: list[str] = []
         for name in v:
-            if not re.fullmatch(
-                    r"(?:[a-z][a-z0-9]{0,11}/)?[a-z0-9][a-z0-9_-]{0,63}",
-                    name):
+            if not re.fullmatch(pattern, name):
                 raise ValueError(
                     f"{field} name {name!r}: lowercase alnum with - or _ "
                     "(≤64 chars), starting alphanumeric; external skills as "
@@ -718,10 +729,12 @@ class DevType(BaseModel):
             raise ValueError(
                 "cli_version cannot be 'latest' — resolve the remote "
                 "number first, then store that semver")
-        if pin and not re.fullmatch(
-                r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?", pin):
-            raise ValueError(
-                "cli_version must be empty (house pin) or a semver like 2.1.250")
+        if pin:
+            from .versions import CLI_VERSION_SEMVER_RE
+            if not CLI_VERSION_SEMVER_RE.fullmatch(pin):
+                raise ValueError(
+                    "cli_version must be empty (house pin) or a semver "
+                    "like 2.1.250")
         return pin
 
     @model_validator(mode="after")
@@ -1228,8 +1241,9 @@ def validate_memory_bindings(cfg: "AppConfig", dev_types=None) -> None:
             raise ValueError(
                 f"pmos[{p.name}]: {sorted(overlap_rm)} cannot be both a "
                 f"reference repo and a memory notebook")
-        if len(p.memory_repos) != len(set(p.memory_repos)):
-            raise ValueError(f"pmos[{p.name}].memory_repos: duplicate entries")
+        # memory_repos duplicates are refused by _dedupe_card_names on the
+        # field (and again in AppConfig._pmo_repo_sets_valid) — no second
+        # refuse story here.
     M = memory_bound_names(cfg, dev_types)
     for p in cfg.pmos:
         for m in sorted(M):

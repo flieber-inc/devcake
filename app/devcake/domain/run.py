@@ -25,6 +25,12 @@ RunState = Literal[
     "dispatched", "running", "finalizing", "finished", "failed", "timed_out", "orphaned"
 ]
 
+# Terminal subset of RunState — ONE definition (ADR-0034 / CAKE-87). Consumers
+# import this; do not re-spell the four strings. SPA mirrors via spa-contracts.
+TERMINAL_STATES: frozenset[str] = frozenset(
+    {"finished", "failed", "timed_out", "orphaned"}
+)
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)

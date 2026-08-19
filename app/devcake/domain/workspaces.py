@@ -20,6 +20,8 @@ import shutil
 import time
 from pathlib import Path
 
+from .run import TERMINAL_STATES
+
 log = logging.getLogger("devcake.workspaces")
 
 # Same charset AND length as make_run_id output + the DAG precondition
@@ -29,7 +31,6 @@ log = logging.getLogger("devcake.workspaces")
 # stray file if the base is misconfigured onto a shared directory (R10).
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 SENTINEL_REL = ".devcake/created-by-app"
-TERMINAL_STATES = ("finished", "failed", "timed_out", "orphaned")
 SWEEP_AGE_SECONDS = 600  # belt-and-suspenders on top of record-before-dir
 
 

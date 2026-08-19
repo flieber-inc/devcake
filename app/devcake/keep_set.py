@@ -12,14 +12,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 
-KEEP_SET_NAME = "harness_keep_set.json"
+from .versions import CLI_VERSION_SEMVER_RE as _SEMVER
 
-# Same shape as DevType.cli_version / host factory _SEMVER.
-_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
+KEEP_SET_NAME = "harness_keep_set.json"
 
 
 def publish_keep_set(dev_types: dict, *, root: Path | None = None) -> Path:

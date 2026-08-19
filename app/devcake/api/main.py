@@ -31,6 +31,7 @@ from .. import security
 from ..domain.model import ALL_LABELS
 from ..domain.orchestrator import StewardBusy, StewardUnconfigured
 from ..domain.reconcile import reconcile_runs
+from ..domain.run import TERMINAL_STATES
 from ..domain.watchdog import watchdog_loop
 from ..prompts import templates as prompt_templates
 from ..settings_bundle import BundleError, validate_config_semantics
@@ -327,9 +328,6 @@ async def get_run(run_id: str):
     s = svc()
     return get_run_response(run_id, s.store, s.config.cost_inputs,
                             missions_cache=s.poll_rt.missions_cache)
-
-
-TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
 
 
 # ── Missions actions (docs/05 §1): the admin UI writes through here so

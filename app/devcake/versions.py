@@ -1,4 +1,8 @@
-"""Resolve-once `latest` gesture. Never stored; never called on editor open."""
+"""Resolve-once `latest` gesture. Never stored; never called on editor open.
+
+Also owns the CLI-version semver shape (ADR-0034 / CAKE-87) — keep_set,
+config DevType.cli_version, and the host factory import this constant.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,9 @@ import re
 from .house_pins import LAUNCH_SUPPORTED
 from .harness import HARNESSES
 
-_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
+# ONE CLI pin shape: major.minor.patch with optional pre-release suffix.
+CLI_VERSION_SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?"
+CLI_VERSION_SEMVER_RE = re.compile(CLI_VERSION_SEMVER)
 
 
 def resolve_latest(template: str, *, source) -> str:
@@ -19,6 +25,6 @@ def resolve_latest(template: str, *, source) -> str:
     pin = (source.latest(template) or "").strip()
     if not pin:
         raise ValueError(f"no latest version for {template}")
-    if not _SEMVER.fullmatch(pin):
+    if not CLI_VERSION_SEMVER_RE.fullmatch(pin):
         raise ValueError(f"remote version is not a semver: {pin!r}")
     return pin

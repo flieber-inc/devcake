@@ -59,3 +59,34 @@ def composed_launch(
     return dialect.argv(
         prompt, plan_mode=plan_mode, model=model,
         extra=list(extra), out_dir=out_dir)
+
+
+def composed_launch_resume_or_none(
+    template: str,
+    prompt: str,
+    *,
+    plan_mode: bool = False,
+    model: str = "",
+    extra: tuple[str, ...] | list[str] = (),
+    script: str = "",
+    override: bool = False,
+    out_dir=None,
+    session_id: str | None = None,
+) -> list[str] | None:
+    """Resume argv, or None when the dialect has no resume arm.
+
+    ``composed_launch`` stays fail-closed for direct callers. The Dev
+    entrypoint resume path uses this so a missing resume dialect degrades
+    to fresh (``cmd is None``) instead of burning the attempt on ValueError.
+    Other ValueErrors (unknown harness, additive refuse, empty override)
+    still propagate.
+    """
+    try:
+        return composed_launch(
+            template, prompt, plan_mode=plan_mode, model=model,
+            extra=extra, script=script, override=override, out_dir=out_dir,
+            session_id=session_id)
+    except ValueError as e:
+        if "no resume dialect" in str(e):
+            return None
+        raise

@@ -5,7 +5,8 @@ Module map (entrypoint façade imports these; do not re-fork spines):
 * ``dialect`` / ``dialects`` — fail-closed ``HarnessDialect`` registry
   (docs/16 H1); unknown id raises, never Claude fall-through.
 * ``launch`` — ``composed_launch`` (dialect argv, or fail-closed override
-  script); additive setup is ``workspace.setup.run_mcp_setup``.
+  script) and ``composed_launch_resume_or_none`` (entrypoint resume degrade);
+  additive setup is ``workspace.setup.run_mcp_setup``.
 * ``aim`` — backend adaptor (docs/08 §8), not fault classification.
 * ``argv`` / ``render`` / ``tokens`` — CLI argv, live log lines, TokenReport v1.
 * ``continuation`` — ADR-0022 policy, nudges, session chains, token merge.

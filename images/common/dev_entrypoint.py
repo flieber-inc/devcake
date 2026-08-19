@@ -180,7 +180,10 @@ from devcake_dev.workspace.forensics import (  # noqa: E402
     workspace_forensics,
     _git_tracked,
 )
-from devcake_dev.harness.launch import composed_launch  # noqa: E402
+from devcake_dev.harness.launch import (  # noqa: E402
+    composed_launch,
+    composed_launch_resume_or_none,
+)
 from devcake_dev.workspace.setup import (  # noqa: E402
     MCP_SETUP_TIMEOUT_SECS,
     install_skills,
@@ -1014,15 +1017,17 @@ def harness_main() -> None:
                     budget=cont_cfg.max_continuations, stray_note=note)
                 os.environ["DEVCAKE_PROMPT"] = inv_prompt
                 # Additive setup already ran once (launch_script=""); resume
-                # argv via composed_launch(session_id=…) — same as
-                # harness_resume_argv when the body is empty (CAKE-62 + 63).
-                cmd = composed_launch(
+                # argv via composed_launch_resume_or_none(session_id=…) —
+                # same as harness_resume_argv when the body is empty
+                # (CAKE-62 + 63). Missing resume dialect → None so the
+                # fresh arm below runs (degrade to fresh, never crash).
+                cmd = composed_launch_resume_or_none(
                     harness, inv_prompt, plan_mode=False, model=model,
                     extra=extra, script=launch_script, override=False,
                     session_id=last_sid(chains))
             if relaunch == "fresh" or cmd is None:
-                # `cmd is None` is defensive only: a harness in RESUME_SPECS
-                # always has a builder arm — degrade to fresh, never crash
+                # `cmd is None` is defensive: missing resume dialect (or a
+                # future builder gap) must degrade to fresh, never crash.
                 mode = "fresh"
                 inv_prompt = fresh_nudge_prompt(
                     prompt, mission_type, legal, attempt=cont.used,

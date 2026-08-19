@@ -163,6 +163,54 @@ def test_entrypoint_continuations_pass_empty_additive_script():
     assert "script=script," not in src
 
 
+# ── CAKE-123: missing resume dialect degrades to fresh (never crash) ─────────
+
+
+def test_composed_launch_raises_when_dialect_has_no_resume():
+    """Chokepoint stays fail-closed for direct callers (pi has no resume)."""
+    launch = _composed_launch()
+    with pytest.raises(ValueError, match="no resume dialect"):
+        launch(
+            "pi", "NUDGE", plan_mode=False, model="", extra=(),
+            script="", override=False, session_id="SID")
+
+
+def test_missing_resume_dialect_degrades_to_none():
+    """Resume arm helper: missing resume dialect → None (then fresh relaunch)."""
+    helper = _composed_launch_resume_or_none()
+    assert helper(
+        "pi", "NUDGE", plan_mode=False, model="", extra=(),
+        script="", override=False, session_id="SID") is None
+
+
+def test_resume_or_none_still_composes_supported_resume():
+    helper = _composed_launch_resume_or_none()
+    resume = _harness_resume_argv()
+    prompt = "NUDGE"
+    sid = "SID"
+    got = helper(
+        "grok-build", prompt, plan_mode=False, model="stub-model",
+        extra=(), script="", override=False, session_id=sid)
+    assert got == resume(
+        "grok-build", sid, prompt, model="stub-model")
+
+
+def test_resume_or_none_reraises_unrelated_valueerror():
+    helper = _composed_launch_resume_or_none()
+    with pytest.raises(ValueError, match="run_mcp_setup"):
+        helper(
+            "grok-build", "NUDGE", plan_mode=False, model="stub-model",
+            extra=(), script="false", override=False, session_id="SID")
+
+
+def test_entrypoint_resume_arm_wires_missing_dialect_to_fresh():
+    """Resume arm must use the degrade helper and still fall through to fresh."""
+    src = (_images_common_root() / "dev_entrypoint.py").read_text()
+    assert "composed_launch_resume_or_none" in src
+    assert 'mode = "fresh"' in src
+    assert "degrade to fresh, never crash" in src
+
+
 def _images_common_root() -> Path:
     roots = [
         Path(__file__).resolve().parents[2] / "images" / "common",
@@ -184,6 +232,17 @@ def _composed_launch():
     _images_common_root()
     from devcake_dev.harness.launch import composed_launch
     return composed_launch
+
+
+def _composed_launch_resume_or_none():
+    import os
+    os.environ.setdefault("DEVCAKE_RUN_ID", "T-LAUNCH")
+    os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6399/0")
+    os.environ.setdefault("REDIS_USER", "t")
+    os.environ.setdefault("REDIS_PASSWORD", "t")
+    _images_common_root()
+    from devcake_dev.harness.launch import composed_launch_resume_or_none
+    return composed_launch_resume_or_none
 
 
 def _harness_resume_argv():

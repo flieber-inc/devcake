@@ -42,7 +42,7 @@ cp .env.example .env
 |---|---|
 | App unit suite (rebakes `app-test` first) | `./scripts/pytest_app.sh` |
 | Admin hermetic helpers | `npm run test:helpers --prefix admin/spa` |
-| Full local suite (stack + forge battery + dispatch smoke) | `scripts/ci_suite.sh` — needs a host that can run the stack |
+| Full local suite (stack + forge battery + dispatch smoke) | `scripts/ci_suite.sh` — requires a healthy compose stack already up |
 
 **Stale image trap:** `devcake/app-test` copies `app/devcake` and `app/tests`
 at bake time. Re-running pytest on an old image grades the last bake, not your

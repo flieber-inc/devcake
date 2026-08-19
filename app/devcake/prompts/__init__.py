@@ -1,7 +1,8 @@
 """Playbook prompts (docs/03 §7). The playbook restates the binding rules from
 docs/03 — workspace boundaries, result.json contract, bounded effort. Prompts
 inline only the mission title/description; activity/ (MISSION.md brief +
-ACTIVITY.md feed mirror + attached files, ADR-0014) is reference material.
+ACTIVITY.md feed mirror + attached files, ADR-0014; plus
+upstream/{MISSION-KEY}/ ancestor mirrors, ADR-0036) is reference material.
 
 Operator-editable templates (v0.1.1): each Mission Type's playbook can be
 replaced by a stored template (prompts/templates.py; /data/config/
@@ -67,9 +68,13 @@ the EXECUTE step, from the plan you attach.
   (ONBOARD never writes to it; the EXECUTE step does the work, from your plan).
 - `/workspace/activity/` — the mission's knowledge base: MISSION.md (the
   brief), ACTIVITY.md (a faithful mirror of the mission's feed — full posts,
-  replies, `[attachment: …]` markers), and every attached file — including
-  prior steps' full session transcripts (`N_TYPE.md`). Reference material:
-  grep or read what you need; do not assume you must read all of it.
+  replies, `[attachment: …]` markers), every attached file — including prior
+  steps' full session transcripts (`N_TYPE.md`) — and, when this mission is a
+  decomposition child, `upstream/{MISSION-KEY}/` mirrors of every ancestor
+  toward the graph root (parent, grandparent, …). Read upstream context from
+  those folders; do not assume a parent-delivered attachment lands at the
+  activity root. Reference material: grep or read what you need; do not
+  assume you must read all of it.
 - `/workspace/out/` — where your outputs go.
 
 ### The mission
@@ -191,6 +196,15 @@ where they conflict with the mission description or with older comments, the
 most recent human comment wins.
 """
 
+# ADR-0036 / CAKE-124 — decomposition children receive ancestor activity under
+# upstream/{KEY}/. Appended next to the human-comments note so every playbook
+# (including operator template overrides that keep the epilogues) tells Devs
+# where parent/grandparent context lives.
+UPSTREAM_ACTIVITY_NOTE = """
+### Upstream mission activity (decomposition ancestors)
+When this mission is a child in a decomposition graph, `/workspace/activity/upstream/{MISSION-KEY}/` holds a mirror of each ancestor's activity (MISSION.md, ACTIVITY.md, attachments) — nearest parent first, toward the graph root. Parent-delivered attachments (plans, ledgers, handoffs) live there, not necessarily at the activity root. ACTIVITY.md banners disclose gaps and oldest-first truncation under the payload byte cap. Direct `blocked_by` work-repo mounts are a separate contract under `/workspace/repo/`.
+"""
+
 # Appended to every playbook that must WRITE result.json (all but PLAN, whose
 # result.json the entrypoint synthesizes from the final message). Weaker models
 # end a turn to narrate an intention ("Let me continue with…"); a turn without
@@ -258,7 +272,7 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "decomposition_rule": decomposition_rule})
     return (identifying_prompt + "\n" + text
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
-            + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
+            + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
 
 PLAN_PLAYBOOK = """
@@ -300,7 +314,8 @@ def plan_prompt(identifying_prompt: str, mission: Mission,
          "description": mission.description or "(no description)",
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos})
-    return identifying_prompt + "\n" + text + HUMAN_COMMENTS_NOTE
+    return (identifying_prompt + "\n" + text + HUMAN_COMMENTS_NOTE
+            + UPSTREAM_ACTIVITY_NOTE)
 
 
 EXECUTE_PLAYBOOK = """
@@ -371,7 +386,7 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "blocker_repos": blocker_repos})
     return (identifying_prompt + "\n" + text
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
-            + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
+            + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
 
 REVIEW_PLAYBOOK = """
@@ -437,7 +452,7 @@ def review_prompt(identifying_prompt: str, mission: Mission,
          "blocker_repos": blocker_repos})
     return (identifying_prompt + "\n" + text
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
-            + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
+            + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
 
 # The relations steward's RESULT CONTRACT — code-owned on purpose: the

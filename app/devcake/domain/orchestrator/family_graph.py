@@ -7,6 +7,11 @@ context). Never cross-instance by construction: the walk runs over ONE
 instance's poll snapshot, and DevCake creates no cross-instance edges.
 Pure graph arithmetic over Mission records plus one repo-union helper; no
 PMO calls, no adapters.
+
+Also owns the *directed* decomposition ancestor walk
+(`decomposition_ancestors`, ADR-0036 / CAKE-124) — parent_ref chain toward
+the graph root only. That walk deliberately does NOT follow blocked_by
+edges (ADR-0017 stays the blocker-mount contract).
 """
 
 from __future__ import annotations
@@ -32,6 +37,41 @@ class Family:
         return {m.key.upper(): m for m in self.members if m.key}
 
 
+def _resolve_in_pool(ref: str | None, by_id: dict[str, Mission],
+                     by_key: dict[str, Mission]) -> Mission | None:
+    """Match a parent=/blocked_by token against a snapshot: pmo_id first,
+    mission key as a defensive alias (same rule as family_of)."""
+    if not ref:
+        return None
+    return by_id.get(ref) or by_key.get(ref.upper())
+
+
+def decomposition_ancestors(source: Mission,
+                             missions: list[Mission]) -> list[Mission]:
+    """Directed walk up the decomposition parent_ref chain toward the
+    graph root (CAKE-124 / ADR-0036). Returns [parent, grandparent, …,
+    root] — nearest first. Cycle-safe (stops when a parent id repeats).
+    Does NOT follow blocked_by edges (those stay on ADR-0017's direct
+    blocker-mount contract). Parent trust is decomposition_parent_ref
+    (LABEL_CREATED gate) — same chokepoint as family_of / the family gate.
+    Depth is finite by construction (ADR-0012 decomposition-depth limit)."""
+    pool = [m for m in missions if m.pmo_id]
+    by_id = {m.pmo_id: m for m in pool}
+    by_key = {m.key.upper(): m for m in pool if m.key}
+    out: list[Mission] = []
+    seen: set[str] = {source.pmo_id}
+    cur = source
+    while True:
+        pref = decomposition_parent_ref(cur)
+        parent = _resolve_in_pool(pref, by_id, by_key)
+        if parent is None or parent.pmo_id in seen:
+            break
+        out.append(parent)
+        seen.add(parent.pmo_id)
+        cur = parent
+    return out
+
+
 def family_of(source: Mission, missions: list[Mission]) -> Family:
     """DFS/stack walk over the undirected union of blocked_by and
     decomposition-parent edges, seeded at `source`. `missions` is one
@@ -45,9 +85,7 @@ def family_of(source: Mission, missions: list[Mission]) -> Family:
     by_key = {m.key.upper(): m for m in pool if m.key}
 
     def resolve(ref: str | None) -> Mission | None:
-        if not ref:
-            return None
-        return by_id.get(ref) or by_key.get(ref.upper())
+        return _resolve_in_pool(ref, by_id, by_key)
 
     adj: dict[str, set[str]] = {m.pmo_id: set() for m in pool}
 

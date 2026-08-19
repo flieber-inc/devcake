@@ -32,7 +32,7 @@ const POLL_MS = 10_000;
 const PROJECTION_MAX_POLLS = 6;
 
 // Done is history, not work: the section previews the newest few and unfolds
-// on demand (bucketize itself already caps Done at its 30 newest).
+// on demand to the true Done total (bucketize keeps every Done row).
 const DONE_PREVIEW = 10;
 
 // Sections render Needs human first (it answers "what needs me"), then the

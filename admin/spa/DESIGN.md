@@ -151,7 +151,9 @@ glyph slot (reserved even when empty so keys align), mono key, full-width
 truncating title, needs-human badge, deviating reason, repo, priority DOT
 (tooltip — labelled chips repeat "medium" fleet-wide and carry no scan
 value), age, ↗, ⋯. A reason all rows of a section share is hoisted into its
-header. Done previews its 10 newest behind "Show all N". Invariants carried
+header. Done counts are true totals (strip chip and section badge); the
+section previews its 10 newest and "Show all N" unfolds the full Done set
+(`N` = true total — never a second silent ceiling). Invariants carried
 over from the board: row click opens the drawer, context actions stay behind
 the ⋯, the PMO is the source of truth. The list owes rendering at ANY
 viewport width with no horizontal scroll — retiring the board also deleted

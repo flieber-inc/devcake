@@ -17,7 +17,7 @@ const DONE_REASON = "terminal — ignored";
 const LONG_REPO = "acme-corp/very-long-repo-name-with-hyphens-that-could-wrap";
 
 // Every stage populated + every needs-human variant + 35 done entries so
-// bucketize exercises its 30-cap and the section its 10-row preview.
+// Done keeps its true total and the section its 10-row preview.
 const COLUMN_SEEDS = [
   { col: "backlog",     status: "backlog",     labels: [] },
   { col: "plan",        status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-PLAN"] },
@@ -88,7 +88,7 @@ async function assertList(width, height) {
     check(`strip carries all 7 stages at ${width}`, strip.chips === 7, `got ${strip.chips}`);
     check(`strip: every populated stage is a jump button at ${width}`,
       strip.buttons === 7, `got ${strip.buttons} (all stages are seeded)`);
-    check(`strip shows the capped Done count at ${width}`, /Done\s*30/.test(strip.text));
+    check(`strip shows the true Done count at ${width}`, /Done\s*35/.test(strip.text));
 
     // sections: only non-empty stages, Needs human first, Done last, no
     // "empty" placeholders anywhere
@@ -132,7 +132,9 @@ async function assertList(width, height) {
     // shared reason so rows don't repeat it
     const doneRows = () =>
       page.locator('section[aria-label="Done"] [role="button"]').count();
-    check(`Done previews ${10} of 30 at ${width}`, (await doneRows()) === 10);
+    check(`Done section header shows the true count at ${width}`,
+      (await page.locator('section[aria-label="Done"] header span.tabular-nums').textContent()) === "35");
+    check(`Done previews ${10} of 35 at ${width}`, (await doneRows()) === 10);
     check(`Done header hoists the majority reason at ${width}`,
       (await page.locator(`section[aria-label="Done"] header:has-text("${DONE_REASON}")`).count()) === 1);
     check(`rows never repeat the hoisted reason at ${width}`,
@@ -141,8 +143,8 @@ async function assertList(width, height) {
       check(`the deviating row spells out its own reason at ${width}`,
         (await page.locator('section[aria-label="Done"] [role="button"] :text-is("terminal — done")').count()) === 1);
     }
-    await page.click('section[aria-label="Done"] button:has-text("Show all 30")');
-    check(`Show all unfolds the capped 30 at ${width}`, (await doneRows()) === 30);
+    await page.click('section[aria-label="Done"] button:has-text("Show all 35")');
+    check(`Show all unfolds the true Done total at ${width}`, (await doneRows()) === 35);
     await page.click('section[aria-label="Done"] button:has-text("Show fewer")');
     check(`Show fewer folds back at ${width}`, (await doneRows()) === 10);
 

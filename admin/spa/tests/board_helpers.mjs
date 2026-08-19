@@ -64,6 +64,37 @@ check("empty / missing input is 0, never a crash", () => {
   assert.equal(unadoptedHiddenCount([null], "opt_in"), 0);
 });
 
+console.log("board helpers — Done / stage totals (CAKE-127)");
+
+check("Done keeps every row — no silent 30-cap", () => {
+  const rows = Array.from({ length: 35 }, (_, i) =>
+    row(["DEVCAKE"], "done", {
+      key: `t/done#${i + 1}`,
+      updated_at: new Date(Date.UTC(2026, 7, 1, i)).toISOString(),
+    }),
+  );
+  const buckets = bucketize(rows, "opt_in");
+  assert.equal(buckets.done.length, 35);
+});
+
+check("Done stays newest-updated first after keeping the full set", () => {
+  const rows = [
+    row(["DEVCAKE"], "done", { key: "old", updated_at: "2026-08-01T00:00:00Z" }),
+    row(["DEVCAKE"], "done", { key: "new", updated_at: "2026-08-19T00:00:00Z" }),
+    row(["DEVCAKE"], "done", { key: "mid", updated_at: "2026-08-10T00:00:00Z" }),
+  ];
+  const keys = bucketize(rows, "opt_in").done.map((r) => r.key);
+  assert.deepEqual(keys, ["new", "mid", "old"]);
+});
+
+check("non-Done buckets stay uncapped", () => {
+  const rows = Array.from({ length: 40 }, (_, i) =>
+    row(["DEVCAKE"], "backlog", { key: `t/backlog#${i + 1}` }),
+  );
+  const buckets = bucketize(rows, "opt_in");
+  assert.equal(buckets.backlog.length, 40);
+});
+
 // contextActions precondition replay lives in contracts.mjs (CAKE-88) —
 // do not keep a second SPA-only expectation set here.
 

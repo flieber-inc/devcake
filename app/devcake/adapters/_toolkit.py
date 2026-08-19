@@ -19,11 +19,33 @@ import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
 import httpx
 
 log = logging.getLogger("devcake.adapters")
+
+
+def gitea_internal_tracker_enable_deps(
+        current: Mapping[str, Any] | None = None) -> dict[str, bool]:
+    """Build a Gitea ``internal_tracker`` PATCH that enables issue deps.
+
+    Gitea (v1.24+) replaces the whole issues-unit config from the three
+    plain ``bool`` fields whenever ``internal_tracker`` is present —
+    JSON-omitted keys unmarshal to ``false``. Callers must GET the repo,
+    pass the existing tracker here, and PATCH the returned object so
+    time-tracker settings are preserved while dependencies turn on.
+
+    Defaults when a field is absent match Gitea's new-repo issues unit
+    (time tracker on, contributor-only gate on, deps off).
+    """
+    cur = current or {}
+    return {
+        "enable_time_tracker": bool(cur.get("enable_time_tracker", True)),
+        "allow_only_contributors_to_track_time": bool(
+            cur.get("allow_only_contributors_to_track_time", True)),
+        "enable_issue_dependencies": True,
+    }
 
 _REDIRECTS = (301, 302, 303, 307, 308)
 

@@ -121,13 +121,14 @@ class GiteaPmoFixture:
         self._req("POST", "/user/repos",
                   json={"name": self.repo, "private": True, "auto_init": True,
                         "default_branch": "main"})
-        # dependencies off by default — enable before the adapter's first write
+        # dependencies off by default — enable before the adapter's first write.
+        # Gitea replaces the whole internal_tracker (plain bools); RMW so the
+        # time tracker is preserved (same chokepoint as ensure_labels / board).
+        from devcake.adapters._toolkit import gitea_internal_tracker_enable_deps
+        repo = self._req("GET", f"/repos/{admin_user}/{self.repo}")
         self._req("PATCH", f"/repos/{admin_user}/{self.repo}",
-                  json={"internal_tracker": {
-                      "enable_time_tracker": False,
-                      "allow_only_contributors_to_track_time": False,
-                      "enable_issue_dependencies": True,
-                  }})
+                  json={"internal_tracker": gitea_internal_tracker_enable_deps(
+                      (repo or {}).get("internal_tracker"))})
         self.token = self._req(
             "POST", f"/users/{admin_user}/tokens",
             json={"name": self.token_name,

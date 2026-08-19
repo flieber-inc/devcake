@@ -70,12 +70,26 @@ async def reconcile_runs(manager) -> None:
     drop mid-finalize work once terminal redelivery is a no-op. Reclaim
     (step 4) resumes them.
 
+    Also skip (promote to finalizing) when Dagu is dead but unresolved
+    messaging still holds the run's entry — docs/04 §6 "artifacts present →
+    resume finalization"; orphaning first then reclaim would hit the
+    terminal-state guard and drop a first delivery (CAKE-73).
+
     `manager` is the RunManager — it already carries the store, executor,
     messaging, and finalizer (RunFinalizer seam) this needs; separate params
     would let callers wire mismatched objects.
     """
     store, executor = manager.store, manager.executor
     messaging, finalizer = manager.messaging, manager.finalizer
+    # Fail-closed: if the probe fails we cannot prove the ingress is empty,
+    # so we must not orphan (CAKE-73). None ⇒ unknown; skip orphan this boot.
+    try:
+        unresolved: set[str] | None = await messaging.unresolved_run_ids()
+    except Exception:  # noqa: BLE001 — messaging probe fail-closed: prefer leave-for-reclaim over orphaning a first delivery we cannot rule out
+        log.exception(
+            "reconciliation: unresolved_run_ids failed — skipping orphan "
+            "kills this boot (fail-closed)")
+        unresolved = None
     for r in store.active():
         if r.state == "finalizing":
             # keep for reclaim, but born into this process's wipe generation
@@ -87,6 +101,22 @@ async def reconcile_runs(manager) -> None:
         try:
             status = await executor.status(r.run_id)
             if dagu_run_not_alive(status):
+                if unresolved is None or r.run_id in unresolved:
+                    if unresolved is not None:
+                        # docs/04 §6 + CAKE-73: artifacts pending → resume finalize
+                        r.state = "finalizing"
+                        store.save(r)
+                        log.info(
+                            "reconciliation: leaving dead-Dagu run %s for "
+                            "reclaim (artifacts still on ingress)",
+                            r.run_id)
+                    else:
+                        log.info(
+                            "reconciliation: skipping orphan of %s "
+                            "(unresolved probe failed)",
+                            r.run_id)
+                    _restamp_store_gen(store, r)
+                    continue
                 try:
                     node_errors = await executor.node_errors(r.run_id) if status else []
                 except Exception:  # noqa: BLE001 — error-detail probe is optional enrichment; empty detail is the safe default, the orphan kill proceeds

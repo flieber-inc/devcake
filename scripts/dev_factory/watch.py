@@ -398,7 +398,14 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     trace_id, root_id = "", ""
     t0 = time.time_ns()
     if claimed is None:
-        has_dev = any(str(ref).startswith("devcake/dev-") for ref in listed)
+        # Hello is baked by every ./up.sh — not evidence of staffing
+        # (matches core.reconcile virgin semantics).
+        has_dev = any(
+            str(ref).startswith("devcake/dev-")
+            and not str(ref).startswith("devcake/dev-hello:")
+            and not str(ref).startswith("devcake/dev-hello<")
+            for ref in listed
+        )
         status = write_status(work / STATUS, {
             "state": "ready" if has_dev else "virgin",
             "digest": digest,

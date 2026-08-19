@@ -85,12 +85,13 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         if forge is None:
             return False
         state = await forge.pr_state(pr.number)
-        # the fresh pr_state read is the best source (all adapters normalize
-        # it onto the DTO now); the raw-payload probe is a legacy fallback —
-        # on GitLab it always misses (no /pulls route) and zips at "main"
-        merge_sha = (state.merge_commit_sha
-                     or getattr(pr, "merge_commit_sha", None)
-                     or await _merge_sha(forge, pr.number))
+        # Fresh pr_state is the sole SHA source (all adapters normalize
+        # merge_commit_sha onto the DTO). Missing SHA → default branch name.
+        merge_sha = (
+            state.merge_commit_sha
+            or getattr(pr, "merge_commit_sha", None)
+            or "main"
+        )
         files = [f for f in await forge.pr_files(pr.number)
                  if f.status != "removed"]
         cap = mgr._attachment_cap()
@@ -125,16 +126,6 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         except Exception:
             log.exception("could not post the delivery-failure notice")
         return False
-
-
-async def _merge_sha(forge, pr_number: int) -> str:
-    """Best-effort merge commit sha via a direct PR read (adapters that don't
-    surface it on the DTO expose it on the raw payload)."""
-    try:
-        raw = await forge._req("GET", f"/pulls/{pr_number}")
-        return raw.get("merge_commit_sha") or "main"
-    except Exception:  # noqa: BLE001 — best-effort probe per docstring: any failure falls back to zipping at the "main" ref
-        return "main"
 
 
 async def _build_zip(forge, files: list[PRFile], ref: str,

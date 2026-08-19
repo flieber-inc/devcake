@@ -1045,11 +1045,14 @@ def _derive_seq(activity) -> int:
     return (max(steps) + 1) if steps else 1
 
 
-def _last_giveup_at(pmo_id: str) -> datetime | None:
+def _last_giveup_at(mgr, pmo_id: str) -> datetime | None:
     """Delegates to the incremental audit-tail reader (markers.last_giveup_at
     — 2026-08 evaluation F8: the full-file rescan per candidate per cycle is
-    gone). Kept as a seam: tests and attempt_number call through here."""
-    return markers.last_giveup_at(pmo_id)
+    gone). Kept as a seam: tests and attempt_number call through here.
+    Instance-scoped so colliding bare pmo_ids across PMO instances do not
+    share a watermark (matches feed._audit's `instance` field)."""
+    return markers.last_giveup_at(
+        pmo_id, instance=getattr(mgr, "instance_name", "") or "")
 
 
 # ADR-0018 — classes whose failures NEVER burn a mission's attempts. Both latch
@@ -1109,7 +1112,7 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
     all_runs = [r for r in mgr.runs.store.all()
                 if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r)]
     history = [r for r in all_runs if r.mission_type == mission_type]
-    anchors = [t for t in [_last_giveup_at(pmo_id),
+    anchors = [t for t in [_last_giveup_at(mgr, pmo_id),
                            *(aware(r.created_at) for r in all_runs
                              if r.state == "finished")] if t]
     if activity is not None:
@@ -1208,21 +1211,86 @@ async def _unlimited_warn(mgr, mission: Mission, mtype: MissionType,
                 mission.key, mtype.value, failures)
 
 
+def _last_counted_failure(mgr, pmo_id: str, mission_type: str):
+    """Newest counted failed/timed_out/orphaned run for (pmo_id, step) under
+    the same ownership rules as attempt_number — one source for give-up
+    detail, not a second counter."""
+    candidates = [
+        r for r in mgr.runs.store.all()
+        if r.mission_pmo_id == pmo_id
+        and r.mission_type == mission_type
+        and mgr._run_is_ours(r)
+        and r.state in ("failed", "timed_out", "orphaned")
+        and counts_toward_attempts(r)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: aware(r.created_at))
+
+
+def _give_up_feed_body(mission: Mission, mtype: MissionType, attempts: int,
+                       last) -> str:
+    """docs/15 §3: last error class + message, attempt count, concrete
+    final-attempt trace pointer (run_id; + OO UI URL / trace_id when set)."""
+    from ...security import redact
+
+    cls = (getattr(last, "error_class", None) or "") if last else ""
+    raw = (getattr(last, "error", None) or "") if last else ""
+    if cls and raw.startswith(f"{cls}:"):
+        msg = raw[len(cls) + 1:].strip()
+    else:
+        msg = raw.strip()
+    msg = redact(msg)[:500] if msg else ""
+
+    detail = ""
+    if cls and msg:
+        detail = f" Last error: `{cls}` — {msg}."
+    elif cls:
+        detail = f" Last error: `{cls}`."
+    elif msg:
+        detail = f" Last error: {msg}."
+
+    run_id = (last.run_id or "") if last is not None else ""
+    tp = (last.traceparent or "") if last is not None else ""
+    # same extraction as domain/runs.failure_record
+    trace_id = tp.split("-")[1] if tp and "-" in tp else ""
+    oo = (os.environ.get("OO_UI_URL") or "").rstrip("/")
+
+    if run_id and oo and trace_id:
+        pointer = (f"Final attempt: run `{run_id}`, trace `{trace_id}` "
+                   f"(OpenObserve: {oo}).")
+    elif run_id and trace_id:
+        pointer = f"Final attempt: run `{run_id}`, trace `{trace_id}`."
+    elif run_id:
+        pointer = f"Final attempt: run `{run_id}`."
+    else:
+        pointer = (f"Traces: search run ids `{mission.key}-*` "
+                   f"in OpenObserve.")
+
+    return (
+        f"⚠️ **DevCake gave up on this mission's {mtype.value} step** after "
+        f"{attempts} failed attempts.{detail} Remove the `DEVCAKE-FAILED` "
+        f"label to retry. ({pointer})")
+
+
 async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> None:
     if LABEL_FAILED in mission.labels:
         return
+    last = _last_counted_failure(mgr, mission.pmo_id, mtype.value)
     with tracer.start_as_current_span("mission.give_up") as span:
         span.set_attribute("devcake.mission.key", mission.key)
         span.set_attribute("devcake.mission.type", mtype.value)
         span.set_attribute("devcake.run.attempt", attempts)
+        if last is not None:
+            if last.error_class:
+                span.set_attribute("devcake.error.class", last.error_class)
+            span.set_attribute("devcake.run.id", last.run_id)
         span.set_status(Status(StatusCode.ERROR,
                                f"gave up after {attempts} attempts"))
         await mgr.pmo.swap_labels(mission.ref, remove=set(), add={LABEL_FAILED})
         await mgr._feed(
             mission.pmo_id, mission.pmo_kind,
-            f"⚠️ **DevCake gave up on this mission's {mtype.value} step** after "
-            f"{attempts} failed attempts. Remove the `DEVCAKE-FAILED` label to retry. "
-            f"(Traces: search run ids `{mission.key}-*` in OpenObserve.)")
+            _give_up_feed_body(mission, mtype, attempts, last))
         mgr._audit(mission.pmo_id, "devcake_failed", mtype.value)
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 

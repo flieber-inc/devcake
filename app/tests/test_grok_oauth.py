@@ -194,3 +194,88 @@ def test_ensure_fresh_lock_serializes_second_refresh(tmp_path):
     once()
     once()
     assert state["n"] == 1
+
+
+def test_runspec_get_oauth_refresh_does_not_block_event_loop(
+        tmp_path, monkeypatch):
+    """runspec.get must leave the asyncio loop free while host Grok OAuth
+    refresh blocks (flock + sync token POST). A concurrent probe on the
+    same loop must complete before the blocking refresh returns."""
+    import asyncio
+
+    from devcake.adapters.files.run_store import RunStore
+    from devcake.config import AppConfig, DevType, PMOInstance, RepoInstance
+    from devcake.domain.run import Run
+    from devcake.domain.runs import RunManager
+    from fakes import FakeForgeRuntime, make_mission_manager
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_store
+    secrets_store.write_connection_secret(
+        "repo", "main", "token", "ghp_write_token_for_tests_0001")
+
+    now = time.time()
+    auth_path = tmp_path / "secrets" / "main-dev" / "grok-auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text(_cli_file(exp_unix=now - 60, refresh="rt-block"))
+
+    order: list[str] = []
+    block_s = 0.35
+
+    class BlockingPort:
+        def refresh(self, *, refresh_token, client_id=None, token_url="",
+                    timeout=15.0):
+            assert refresh_token == "rt-block"
+            time.sleep(block_s)
+            order.append("refresh_return")
+            return TokenRefreshResult(
+                access_token=_jwt(int(now + 9000), iat=int(now)),
+                refresh_token="rt-new",
+                expires_in=9000.0,
+            )
+
+    cfg = AppConfig()
+    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
+    mission_mgr = make_mission_manager(
+        config=cfg,
+        instance=PMOInstance(name="linear", team_key="DEV", repos=["main"]),
+        forge_runtime=FakeForgeRuntime(object(), inst=cfg.repos[0]),
+        dev_types={
+            "main-dev": DevType(name="main-dev", harness_template="grok-build"),
+        },
+    )
+    mission_mgr.oidc_tokens = BlockingPort()
+
+    replies: list[tuple] = []
+
+    class FakeMessaging:
+        async def reply(self, run_id, kind, payload):
+            replies.append((kind, payload))
+
+        async def delete_runspec_result(self, rid):
+            pass
+
+    store = RunStore(tmp_path / "runs")
+    manager = RunManager(store, FakeMessaging(), executor=None,
+                         finalizer=mission_mgr)
+    run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
+              mission_type="EXECUTE", dev_type="main-dev", seq=1,
+              repo_ref="main", state="dispatched")
+    store.save(run)
+
+    async def probe():
+        await asyncio.sleep(0.05)
+        order.append("probe")
+
+    async def exercise():
+        await asyncio.gather(
+            manager.handle(run.run_id, "runspec.get", {}),
+            probe(),
+        )
+
+    asyncio.new_event_loop().run_until_complete(exercise())
+
+    assert replies and replies[-1][0] == "runspec.result"
+    assert "probe" in order and "refresh_return" in order
+    assert order.index("probe") < order.index("refresh_return"), (
+        f"event loop starved during OAuth refresh; order={order}")

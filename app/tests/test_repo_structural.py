@@ -211,3 +211,26 @@ def test_exit_handler_reclaims_workspace_ownership():
     assert w["host"] == {"NetworkMode": "none"}
     assert w["auto_remove"] is True
     assert h["timeout_sec"] > 0
+
+
+def test_dag_timeout_clears_max_legal_app_timeout():
+    """docs/13 §4 + docs/04 §5: app watchdog owns the kill. DAG timeout_sec
+    is belt-and-suspenders only and must clear every legal
+    AppConfig.dev_timeout_minutes (Field le) plus the documented 30-minute
+    margin — otherwise Dagu aborts first for long legal settings."""
+    from annotated_types import Le
+    from devcake.config import AppConfig
+
+    field = AppConfig.model_fields["dev_timeout_minutes"]
+    le_values = [m.le for m in field.metadata if isinstance(m, Le)]
+    assert le_values, "dev_timeout_minutes must carry a Field le= constraint"
+    field_le_minutes = le_values[0]
+
+    timeout_sec = _dag()["timeout_sec"]
+    # Independent expected rule: docs/13 §4 margin is the literal 30 minutes.
+    min_belt = (field_le_minutes + 30) * 60
+    assert timeout_sec >= min_belt, (
+        f"DAG timeout_sec={timeout_sec} must be >= "
+        f"(dev_timeout_minutes.le={field_le_minutes} + 30) * 60 "
+        f"= {min_belt} so the app watchdog owns the kill"
+    )

@@ -294,6 +294,27 @@ def test_resolve_blocker_work_unmountable_skipped(tmp_path):
     assert any("unavailable" in s for s in skips)
 
 
+def test_resolve_blocker_work_sorts_mixed_naive_aware_created_at(tmp_path):
+    """Naive + aware Run.created_at must not TypeError the blocker sort;
+    newest wall-clock after aware() (naive treated as UTC) wins the mount."""
+    a = _mission("a", "T-A", status="done")
+    b = _mission("b", "T-B", blocked_by=["a"])
+    older = _run(
+        "a", "T-A", "repo-older",
+        created=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+    newer = _run(
+        "a", "T-A", "repo-newer",
+        created=datetime(2026, 1, 2, 12, 0, 0))  # naive
+    newer.run_id = "LINEAR-T-A-2-EXECUTE-BBBBBB"
+    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}),
+                               internal_forge=_ROInternal())
+    entries, skips, _notes = run_coro(
+        dispatch.resolve_blocker_work(
+            mgr, b, "primary", [older, newer]))
+    assert entries == [{"repo_ref": "repo-newer", "mission_key": "T-A"}]
+    assert skips == []
+
+
 def test_blocker_repos_note_lists_paths(tmp_path):
     mgr = make_mission_manager(tmp_path)
     note = dispatch._blocker_repos_note(

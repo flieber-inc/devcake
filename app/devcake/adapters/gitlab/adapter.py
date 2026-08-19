@@ -97,10 +97,16 @@ class GitLabForge:
             # 401/403/404 indict the credential; anything else is transient
             definitive = e.status in (401, 403, 404) and not (
                 e.status == 403 and "rate limit" in str(e).lower())
+            if e.status is None:
+                detail = "repository access failed (network)"
+            else:
+                detail = (
+                    f"repository access failed (HTTP {e.status}); grant api and "
+                    "write_repository scopes"
+                )
             return ForgeHealth(
                 ok=False, repository=self.project, transient=not definitive,
-                detail=f"repository access failed (HTTP {e.status}); grant api and "
-                       "write_repository scopes",
+                detail=detail,
             )
         permissions = project.get("permissions") or {}
         levels = [int((permissions.get(name) or {}).get("access_level") or 0)

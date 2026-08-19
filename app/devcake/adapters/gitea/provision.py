@@ -212,8 +212,10 @@ class GiteaProvisioner:
             "GET", f"/repos/{owner_repo}/branch_protections/main",
             tolerate=(404,))
         if existing is None:
+            # 409 only: concurrent create race. 403/422 must fail loud —
+            # silent protect-skip left required_approvals unenforceable.
             await self._req("POST", f"/repos/{owner_repo}/branch_protections",
-                            tolerate=(403, 409, 422), json=desired)
+                            tolerate=(409,), json=desired)
             existing = await self._req(
                 "GET", f"/repos/{owner_repo}/branch_protections/main",
                 tolerate=(404,))
@@ -221,7 +223,6 @@ class GiteaProvisioner:
                 existing.get("approvals_whitelist_username") or []):
             await self._req(
                 "PATCH", f"/repos/{owner_repo}/branch_protections/main",
-                tolerate=(403, 404, 422),
                 json={"enable_approvals_whitelist": True,
                       "approvals_whitelist_username": [REVIEWER_USER]})
 
@@ -556,30 +557,31 @@ class GiteaProvisioner:
             username=ACTIVITY_RO_USER, token=token)
 
     async def list_activity_repos(self) -> list[InternalRepo]:
-        """Every activity-* repo in OPERATOR_ORG — PAGINATED (unlike the
-        legacy list_repos limit=50 read; activity repos will exceed a page),
-        prefix-filtered so operator repos and the skill-store never appear."""
-        repos, page = [], 1
-        while True:
-            batch = await self._req(
+        """Every activity-* repo in OPERATOR_ORG — paginated via
+        paginate_rest, prefix-filtered so operator repos and the skill-store
+        never appear."""
+        from .._toolkit import paginate_rest
+        batch, _ = await paginate_rest(
+            lambda page: self._req(
                 "GET", f"/orgs/{OPERATOR_ORG}/repos?limit=50&page={page}",
-                tolerate=(404,)) or []
-            for r in batch:
-                name = r.get("name") or ""
-                if not name.startswith(ACTIVITY_PREFIX):
-                    continue
-                # activity-{instance}-{key}: mission key = after the first
-                # hyphen past the instance (the admin-surface idiom)
-                stem = name[len(ACTIVITY_PREFIX):]
-                repos.append(InternalRepo(
-                    name=name, mission_key=stem.split("-", 1)[-1],
-                    html_url=f"{self.public_url}/{OPERATOR_ORG}/{name}",
-                    clone_url=f"{self.url}/{OPERATOR_ORG}/{name}.git",
-                    size_kb=int(r.get("size") or 0),
-                    updated_at=r.get("updated_at") or ""))
-            if len(batch) < 50:
-                return repos
-            page += 1
+                tolerate=(404,)) or [],
+            page_size=50, max_pages=40,
+            what="gitea list_activity_repos", on_ceiling="warn")
+        repos = []
+        for r in batch:
+            name = r.get("name") or ""
+            if not name.startswith(ACTIVITY_PREFIX):
+                continue
+            # activity-{instance}-{key}: mission key = after the first
+            # hyphen past the instance (the admin-surface idiom)
+            stem = name[len(ACTIVITY_PREFIX):]
+            repos.append(InternalRepo(
+                name=name, mission_key=stem.split("-", 1)[-1],
+                html_url=f"{self.public_url}/{OPERATOR_ORG}/{name}",
+                clone_url=f"{self.url}/{OPERATOR_ORG}/{name}.git",
+                size_kb=int(r.get("size") or 0),
+                updated_at=r.get("updated_at") or ""))
+        return repos
 
     async def delete_activity_repo(self, repo_name: str) -> None:
         """Clear-sweep delete. Belt-and-braces: refuses non-activity names
@@ -625,15 +627,18 @@ class GiteaProvisioner:
     # ── admin surface ────────────────────────────────────────────────────────
 
     async def list_repos(self) -> list[InternalRepo]:
-        repos = await self._req("GET", f"/orgs/{ORG}/repos?limit=50") or []
+        from .._toolkit import paginate_rest
+        repos, _ = await paginate_rest(
+            lambda page: self._req(
+                "GET", f"/orgs/{ORG}/repos?limit=50&page={page}") or [],
+            page_size=50, max_pages=40,
+            what="gitea list_repos", on_ceiling="warn")
         out = []
         for r in repos:
-            html = r.get("html_url", "")
-            # rewrite the in-container ROOT_URL host to the operator-facing one
             out.append(InternalRepo(
                 name=r["name"],
                 mission_key=r["name"].split("-", 1)[-1].upper(),
-                html_url=html,
+                html_url=r.get("html_url", ""),
                 clone_url=f"{self.url}/{ORG}/{r['name']}.git",
                 size_kb=int(r.get("size") or 0),
                 open_prs=int(r.get("open_pr_counter") or 0),

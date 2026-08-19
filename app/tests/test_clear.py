@@ -469,3 +469,66 @@ def test_clear_all_without_run_manager_still_wipes(monkeypatch):
 
     out = run_coro(clear_mod.clear_all(None, None, None))
     assert out["stopped"]["skipped"] == "no run_manager"
+
+
+def test_run_clear_runs_acquires_locks_then_clears_advisories(monkeypatch):
+    """Public clear-runs entrypoint: poll→dispatch lock order, then advisory
+    clears (missions cache, grace maps, backend-degraded). Wipe body is
+    clear_all — this test owns the route-orchestration seam only."""
+    import devcake.api.clear as clear_mod
+
+    order: list[str] = []
+
+    class _Lock:
+        def __init__(self, name: str):
+            self.name = name
+
+        async def __aenter__(self):
+            order.append(f"enter:{self.name}")
+            return self
+
+        async def __aexit__(self, *exc):
+            order.append(f"exit:{self.name}")
+            return False
+
+    class _Grace:
+        def __init__(self, name: str):
+            self.name = name
+            self.cleared = 0
+
+        def clear(self):
+            self.cleared += 1
+            order.append(f"clear:{self.name}")
+
+    async def fake_clear_all(*args, **kwargs):
+        order.append("clear_all")
+        return {"ok": True, "local": {"runs_deleted": 3},
+                "dagu": {"deleted": 2}}
+
+    monkeypatch.setattr(clear_mod, "clear_all", fake_clear_all)
+
+    poll_lock = _Lock("poll")
+    dispatch_lock = _Lock("dispatch")
+    missions_cache = _Grace("missions")
+    grace = _Grace("grace")
+    grace_next = _Grace("grace_next")
+    degraded = _Grace("degraded")
+    managers = {"eng": SimpleNamespace(_grace=grace, _grace_next=grace_next)}
+
+    out = run_coro(clear_mod.run_clear_runs(
+        store=None, executor=None, messaging=None, runlog=None,
+        internal_forge=None, run_manager=None, claims=None, config=None,
+        poll_lock=poll_lock, dispatch_lock=dispatch_lock,
+        missions_cache=missions_cache, managers=managers,
+        shared_backend_degraded=degraded,
+    ))
+
+    assert out["ok"] is True
+    assert order[:3] == ["enter:poll", "enter:dispatch", "clear_all"]
+    # both locks released before advisory clears (async with exits after body)
+    assert order.index("exit:dispatch") < order.index("clear:missions")
+    assert order.index("exit:poll") < order.index("clear:missions")
+    assert grace.cleared == 1 and grace_next.cleared == 1
+    assert missions_cache.cleared == 1 and degraded.cleared == 1
+    # unlock order is LIFO for `async with a, b`
+    assert order.index("exit:dispatch") < order.index("exit:poll")

@@ -1,17 +1,18 @@
 """How a Dev starts.
 
-Default: aim() has already written env/files; an operator script is
-additive (MCP add, PATH) and then the dialect argv is exec'd.
-override=True: dialect argv is not used — the operator script is the process.
-session_id set (and not override): resume dialect argv, then the same
-additive-prelude wrap as a fresh launch.
+Default: aim() has already written env/files; additive operator setup runs
+via ``run_mcp_setup`` (docs/07 §5) before this function is called with an
+empty script, then the dialect argv (or resume argv when ``session_id`` is
+set) is returned for exec.
+override=True: dialect argv is not used — the operator script is the
+process (fail-closed with ``set -e``). ``session_id`` is ignored under
+override — the entrypoint degrades resume→fresh so mode stays truthful
+(CAKE-62 honesty).
 
 Prod entrypoint and the hermetic probe call this one function.
 """
 
 from __future__ import annotations
-
-import shlex
 
 from .dialect import get_dialect
 
@@ -34,7 +35,17 @@ def composed_launch(
             raise ValueError(
                 "override_harness_adapter is set but the entrypoint "
                 "script is empty")
-        return ["bash", "--noprofile", "--norc", "-c", body]
+        # Fail-closed: a failing line aborts instead of continuing. Hangs are
+        # the run wall-clock / watchdog (DEV_TIMEOUT), not the 300 s additive
+        # per-command cap — override is the whole process, often a long agent.
+        return ["bash", "--noprofile", "--norc", "-c", f"set -e\n{body}\n"]
+    if body:
+        # Additive setup must not be inlined here: a bash prelude without
+        # set -e used to swallow failures and still exec the dialect
+        # (CAKE-63). Call run_mcp_setup first, then pass script="".
+        raise ValueError(
+            "additive entrypoint setup must run via run_mcp_setup; "
+            "pass script='' to composed_launch")
     dialect = get_dialect(template)
     if session_id:
         # Plan never continues — no plan_mode on resume (ADR-0022).
@@ -44,12 +55,7 @@ def composed_launch(
         if dialect_argv is None:
             raise ValueError(
                 f"harness {template!r} has no resume dialect")
-    else:
-        dialect_argv = dialect.argv(
-            prompt, plan_mode=plan_mode, model=model,
-            extra=list(extra), out_dir=out_dir)
-    if not body:
         return dialect_argv
-    quoted = " ".join(shlex.quote(p) for p in dialect_argv)
-    return ["bash", "--noprofile", "--norc", "-c",
-            f"{body}\nexec {quoted}\n"]
+    return dialect.argv(
+        prompt, plan_mode=plan_mode, model=model,
+        extra=list(extra), out_dir=out_dir)

@@ -289,7 +289,7 @@ additional, attempt-labeled transcript segments.
 
 ## 7. MCP registration syntax
 
-What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must emit — one command per line, executed verbatim by the entrypoint (failure ⇒ exit 14):
+What the admin panel's free-text entrypoint / MCP command area (`11-admin-panel.md` §3) must emit — one command per line. **Additive (override off):** each non-empty line runs once via `run_mcp_setup` before harness launch (stdin closed, own process group, 300 s per command; first failure ⇒ exit 14 / `DEV_MCP_SETUP`). Lines are discrete shells — an `export` on one line does not carry into the harness process (use the ADR-0023 PATH floor for user-bin installs). **Override on:** the textbox is the whole process (`set -e`, stdin closed); non-zero ⇒ exit 14; hangs are the run watchdog, not the 300 s per-line cap.
 
 | Template | Syntax |
 |---|---|
@@ -308,7 +308,7 @@ pip install --user --quiet "git+https://${PLUGIN_GIT_TOKEN}@github.com/OWNER/REP
 claude mcp add <name> -e SOME_KEY=$SOME_KEY -- python -m <package_module>
 ```
 
-Mechanics: commands run before harness launch as uid 1000 with stdin closed, a 300 s cap each, and full outbound network (`07-dev-runtime.md` §5/§7). `$VAR` expands from the Dev Type's secret env vars (`11-admin-panel.md` §3) — a private-repo install token is just another secret env var (fine-grained PAT, Contents read-only; drop the `${PLUGIN_GIT_TOKEN}@` part when the repo goes public). `~/.local/bin` and `~/.npm-global/bin` are ON `PATH` in every harness image (ADR-0023 toolchain floor — this used to be a claude/codex trap requiring absolute-path registration), so `pip install --user` console scripts and user-space `npm i -g` binaries are directly invocable. Always pin a release tag — a run must not float with a moving branch. This hook is also the general per-Dev-Type **setup** lever beyond MCP: one `pip install --user` / `npm i -g` line self-provisions any user-space tool the `07` §7a floor does not bake.
+Mechanics: additive commands run **once** before harness launch (and are not re-run on continuation relaunches) as uid 1000 with stdin closed, a 300 s cap each, and full outbound network (`07-dev-runtime.md` §5/§7). `$VAR` expands from the Dev Type's secret env vars (`11-admin-panel.md` §3) — a private-repo install token is just another secret env var (fine-grained PAT, Contents read-only; drop the `${PLUGIN_GIT_TOKEN}@` part when the repo goes public). `~/.local/bin` and `~/.npm-global/bin` are ON `PATH` in every harness image (ADR-0023 toolchain floor — this used to be a claude/codex trap requiring absolute-path registration), so `pip install --user` console scripts and user-space `npm i -g` binaries are directly invocable. Always pin a release tag — a run must not float with a moving branch. This hook is also the general per-Dev-Type **setup** lever beyond MCP: one `pip install --user` / `npm i -g` line self-provisions any user-space tool the `07` §7a floor does not bake.
 
 ## 7a. Skills (all harnesses; registry-driven skills dir)
 

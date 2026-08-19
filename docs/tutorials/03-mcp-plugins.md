@@ -74,8 +74,8 @@ Mechanics worth knowing (`../07-dev-runtime.md` §5, `../08-harness-templates.md
 | Symptom | Meaning / fix |
 |---|---|
 | Mission never dispatches; `/api/v1/health` `blocked_reasons` names a var | The var is **referenced** by a setup command but has no stored value — dispatch refuses deterministically (`../14-security.md` §8). Paste the value; the next poll cycle dispatches. |
-| Run fails with `DEV_MCP_SETUP: <command>: exit N: …` | That setup command failed — the run error carries its stderr tail (typo'd install URL, revoked/mis-scoped token, nonexistent tag, bad `mcp add` flag). Counted attempt; fix the command or secret and the scheduler retries. |
-| Run fails with `DEV_MCP_SETUP: <command>: timed out after 300s` | The command hung (registry stall, interactive prompt). Each command has a hard 300 s cap — split slow installs across lines or pin a closer mirror. |
+| Run fails with `DEV_MCP_SETUP: <command>: exit N: …` | That additive setup command failed — the run error carries its stderr tail (typo'd install URL, revoked/mis-scoped token, nonexistent tag, bad `mcp add` flag). Counted attempt; fix the command or secret and the scheduler retries. Override-mode script aborts land here too (`set -e` / non-zero). |
+| Run fails with `DEV_MCP_SETUP: <command>: timed out after 300s` | The additive setup command hung (registry stall, interactive prompt). Each additive line has a hard 300 s cap — split slow installs across lines or pin a closer mirror. (Override-mode hangs are the run wall-clock / `DEV_TIMEOUT`, not this row.) |
 | Declared-but-unused name shows ✗ | Harmless: unreferenced missing values warn-and-proceed; only referenced ones gate. |
 | Plugin tools error at call time (e.g. `DD_API_KEY … not set`) | The register line doesn't pass the var with `-e`, or the stored value is wrong — the plugin's own error message names the variable. |
 

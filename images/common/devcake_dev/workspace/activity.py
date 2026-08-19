@@ -71,14 +71,13 @@ def clone_activity_repo(activity, dest, runner=None):
     step-by-step evolution IS the payload: `git log -p ACTIVITY.md` works
     in-container) with the shared RO token via the askpass env override.
     Non-fatal on every failure; (ok, note)."""
-    import re as _re
+    from .clone import inject_clone_user
     if not activity or not activity.get("url"):
         return False, "activity repo: no clone spec (Redis fallback)"
     runner = runner or subprocess.run
     url = activity["url"]
     user = activity.get("clone_user") or ""
-    clone_url = (_re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
-                 if user else url)
+    clone_url = inject_clone_user(url, user)
     env = {**os.environ, "DEVCAKE_FORGE_TOKEN": activity.get("token") or ""}
     r = runner(["git", "clone", clone_url, str(dest)],
                capture_output=True, text=True, env=env)

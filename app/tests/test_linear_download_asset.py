@@ -152,3 +152,57 @@ def test_upload_attachment_maps_http_status_to_domain_errors():
     a._gql = _file_upload_gql  # type: ignore[method-assign]
     with pytest.raises(PMOTransient, match="upload"):
         run(a.upload_attachment("issue-id", "plan.md", b"# plan"))
+
+
+def _capture_upload_content_types(filename: str, data: bytes) -> tuple[str, str]:
+    """Drive upload_attachment; return (fileUpload ct, PUT Content-Type)."""
+    gql_cts: list[str] = []
+    put_cts: list[str] = []
+
+    async def _gql(query, variables=None):
+        _ = query
+        v = dict(variables or {})
+        gql_cts.append(v["ct"])
+        return {
+            "fileUpload": {
+                "success": True,
+                "uploadFile": {
+                    "uploadUrl": "https://uploads.linear.app/put",
+                    "assetUrl": "https://uploads.linear.app/asset/x",
+                    "headers": [{"key": "Upload-Key", "value": "v"}],
+                },
+            },
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT"
+        put_cts.append(request.headers.get("content-type", ""))
+        return httpx.Response(200)
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(handler))
+    a._gql = _gql  # type: ignore[method-assign]
+    url = run(a.upload_attachment("issue-id", filename, data))
+    assert url == "https://uploads.linear.app/asset/x"
+    assert len(gql_cts) == 1 and len(put_cts) == 1
+    return gql_cts[0], put_cts[0]
+
+
+def test_upload_attachment_content_type_from_filename():
+    """fileUpload contentType and PUT Content-Type follow the filename
+    (mimetypes), not a hardcoded text/markdown — deliverable zips must not
+    be declared as markdown."""
+    gql_ct, put_ct = _capture_upload_content_types(
+        "deliverable.zip", b"PK\x03\x04fake")
+    assert gql_ct == "application/zip"
+    assert put_ct == "application/zip"
+
+    gql_ct, put_ct = _capture_upload_content_types("plan.md", b"# plan")
+    assert gql_ct == "text/markdown"
+    assert put_ct == "text/markdown"
+
+    gql_ct, put_ct = _capture_upload_content_types(
+        "blob.unknownext", b"\x00\x01")
+    assert gql_ct == "application/octet-stream"
+    assert put_ct == "application/octet-stream"

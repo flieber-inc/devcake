@@ -16,7 +16,7 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 | `description` | `str` | Markdown body. |
 | `status` | `"backlog" \| "in_progress" \| "done" \| "canceled"` | Normalized (mapping tables in `05-pmo-adapter.md` §3). |
 | `priority` | `"urgent" \| "high" \| "medium" \| "low"` | Normalized; a Mission with no priority in the PMO System is `medium`. Always read live (INV-1). |
-| `labels` | `set[str]` | Label names as they appear in the PMO System. Managed `DEVCAKE-*` names are canonicalized case-insensitively onto `ALL_LABELS` (`canonicalize_labels`) — GitHub/Gitea/GitLab fold case, and `derive()`/`swap_labels` are exact-string. |
+| `labels` | `set[str]` | Label names as they appear in the PMO System. Managed `DEVCAKE-*` names are canonicalized case-insensitively onto `ALL_LABELS` (`canonicalize_labels`) — Linear and the forge-issue adapters (GitHub/Gitea/GitLab) all emit that contract, and `derive()`/`swap_labels` are exact-string. |
 | `updated_at` | `datetime` | PMO-side last update. Scheduling tiebreaker. |
 | `url` | `str` | Deep link into the PMO System. |
 | `parent_ref` | `str \| None` | For Issues that belong to a Project: the project's `pmo_id`. |

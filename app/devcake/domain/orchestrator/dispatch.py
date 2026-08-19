@@ -6,7 +6,7 @@ import base64
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from opentelemetry import trace
@@ -54,7 +54,7 @@ def resolve_repo(mgr, mission: Mission, all_runs: list | None = None):
         (r for r in all_runs
          if r.mission_pmo_id == mission.pmo_id and mgr._run_is_ours(r)
          and r.mission_type != "STEWARD"),
-        key=lambda r: r.created_at, reverse=True)
+        key=lambda r: aware(r.created_at), reverse=True)
     return resolve_repo(mission, mgr.instance,
                         set(mgr.forges.instances), history)
 
@@ -187,8 +187,7 @@ async def resolve_blocker_work(
                 if getattr(r, "pmo_ref", "") in res.accepted_pmo_refs]
         runs_sorted = sorted(
             runs,
-            key=lambda r: getattr(r, "created_at", None) or datetime.min.replace(
-                tzinfo=timezone.utc),
+            key=lambda r: aware(r.created_at),
             reverse=True)
         repo_ref = next((r.repo_ref for r in runs_sorted if r.repo_ref), None)
         if not repo_ref:

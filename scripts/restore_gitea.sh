@@ -4,8 +4,9 @@
 # REPLACES the volume's current contents — but never destructively: the
 # payload validates the whole archive and its kind marker first, moves the
 # current contents aside, and deletes the aside only after a clean extract
-# (2026-08-12 audit OPS-H1; on failure the previous contents survive at the
-# printed .pre-restore-* path).
+# (2026-08-12 audit OPS-H1; on failure the previous tree is put back on its
+# original paths under the volume root — prior .pre-restore-* leftovers are
+# kept, not nested or wiped).
 #
 # Usage: docker compose stop gitea && scripts/restore_gitea.sh <backup.tar.gz>
 set -euo pipefail

@@ -119,6 +119,7 @@ jobs:
             -v "${{ github.workspace }}/images/Dockerfile:/srv/images.Dockerfile:ro" \
             -v "${{ github.workspace }}/docs:/srv/docs:ro" \
             -v "${{ github.workspace }}/admin/spa/src/lib/registry_fallback.json:/srv/admin-registry-fallback.json:ro" \
+            -v "${{ github.workspace }}/admin/spa/src/pages/RunsPage.jsx:/srv/admin-runs-page.jsx:ro" \
             -v "${{ github.workspace }}/scripts:/srv/repo-scripts:ro" \
             -v "${{ github.workspace }}/up.sh:/srv/up.sh:ro" \
             -w /srv \

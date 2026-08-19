@@ -27,7 +27,6 @@ log = logging.getLogger("devcake.grok_oauth")
 # Refresh slightly early so an access token never expires mid-boot.
 EXPIRY_SLACK_S = 120.0
 DEFAULT_TOKEN_URL = "https://auth.x.ai/oauth2/token"
-GROK_AUTH_FILENAME = "grok-auth.json"
 
 
 class CredentialRefreshError(Exception):

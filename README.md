@@ -318,3 +318,8 @@ Self-hosted operator software. Prefer PRs with tests at public seams
 succeeded.” Full contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md) ·
 coding agents: [`AGENTS.md`](AGENTS.md) · vulnerability reporting:
 [`SECURITY.md`](SECURITY.md).
+
+## License
+
+DevCake is free software, released under the **GNU General Public License,
+version 3** — see [`LICENSE`](LICENSE) for the full text.

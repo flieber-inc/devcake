@@ -292,13 +292,16 @@ def test_work_reference_disjointness_single_chokepoint():
 
     Scans JoinedStr/Constant payloads (not raw source) so a raise whose
     message is split across adjacent f-string literals still counts.
+    Walks every FunctionDef/AsyncFunctionDef via ast.walk (not only
+    module-level tree.body) so a reintroduction inside a class method
+    such as AppConfig._pmo_repo_sets_valid is an offender.
     """
     found_in_authority = False
     offenders: set[str] = set()
     for path in APP.rglob("*.py"):
         rel = path.relative_to(APP)
         tree = ast.parse(path.read_text(), filename=str(path))
-        for node in tree.body:
+        for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             # Prefer JoinedStr payloads so split f-string raises count once.

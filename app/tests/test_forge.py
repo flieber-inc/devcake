@@ -405,6 +405,67 @@ def test_gitea_get_pr_by_branch_no_server_head_filter():
     assert "state=all" in seen[0]
 
 
+def test_gitea_get_pr_by_branch_finds_match_beyond_page_one():
+    """Busy repos (>50 PRs) hide the mission branch past page 1 — the
+    adapter must walk pages and still return the newest matching PR."""
+    target = "devcake/DEV-page2"
+    page1 = [
+        {"number": i, "html_url": f"https://gt/{i}", "state": "open",
+         "merged": False, "head": {"ref": f"noise-{i}"}}
+        for i in range(1, 51)
+    ]
+    page2 = [
+        {"number": 51, "html_url": "https://gt/51", "state": "closed",
+         "merged": True, "head": {"ref": target}},
+        {"number": 52, "html_url": "https://gt/52", "state": "open",
+         "merged": False, "head": {"ref": "other"}},
+    ]
+    pages = {1: page1, 2: page2}
+    forge = gt()
+
+    async def _req(method, path, **kw):
+        assert "page=" in path
+        page = int(path.split("page=")[-1].split("&")[0])
+        return pages.get(page, [])
+
+    forge._req = _req
+    pr = run_coro(forge.get_pr_by_branch(target))
+    assert pr is not None
+    assert pr.number == 51
+    assert pr.merged is True
+    assert pr.state == "closed"
+
+
+def test_gitea_pr_files_concatenates_across_pages():
+    """Large changesets span pages — pr_files must return every path."""
+    from devcake.ports.forge import PRFile
+
+    page1 = [
+        {"filename": f"f{i}.py", "status": "modified",
+         "additions": 1, "deletions": 0}
+        for i in range(50)
+    ]
+    page2 = [
+        {"filename": "tail.py", "status": "added",
+         "additions": 3, "deletions": 1},
+    ]
+    pages = {1: page1, 2: page2}
+    forge = gt()
+
+    async def _req(method, path, **kw):
+        assert "/pulls/9/files" in path
+        page = int(path.split("page=")[-1].split("&")[0])
+        return pages.get(page, [])
+
+    forge._req = _req
+    files = run_coro(forge.pr_files(9))
+    assert len(files) == 51
+    assert files[0] == PRFile(path="f0.py", status="modified",
+                              additions=1, deletions=0)
+    assert files[-1] == PRFile(path="tail.py", status="added",
+                               additions=3, deletions=1)
+
+
 def test_get_pr_by_branch_encodes_hash_in_query():
     """Forge-issue mission keys mint branches with `#` (owner/repo#N). An
     unescaped `#` is a URL fragment — the forge never sees the head /

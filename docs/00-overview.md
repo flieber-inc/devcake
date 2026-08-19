@@ -14,9 +14,11 @@ ticket resolutions — designed for a
 **single operator on a dedicated host**. It runs automated coding agents
 ("**Devs**") inside Docker containers that systematically resolve work items
 ("**Missions**") pulled from a project-management system ("**PMO System**"). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to the main app through Redis Streams and a Gitea internal server, and telemetry lands in OpenObserve.
-The CLI coding agents it runs (Claude Code, Grok Build, Codex) are the
-**harnesses**; DevCake is the envelope that staffs, sequences, isolates, and
-accounts for their sessions — it is not itself a CLI coding agent.
+The CLI coding agents it runs are the **harnesses** — six launch-supported
+templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`,
+`qwen-code`; glossary / `08-harness-templates.md`); DevCake is the envelope
+that staffs, sequences, isolates, and accounts for their sessions — it is
+not itself a CLI coding agent.
 
 **Deployment premise:** one machine you control; host `docker.sock` on Dagu;
 admin + secrets ≅ host trust. Not multi-tenant SaaS. Ticket writers and repo

@@ -1,6 +1,8 @@
 # ADR-0004 — Label Namespace and Versioning
 
-**Status:** accepted (v0).
+**Status:** accepted (v0). **Amended:** managed set is the eleven names in
+`02-domain-model.md` §5 / `ALL_LABELS`, including `DEVCAKE-DISCOVERY`
+(ADR-0033).
 
 ## Context
 
@@ -8,7 +10,17 @@ The mission state machine is driven by labels living in the PMO System, visible 
 
 ## Decision
 
-A flat uppercase namespace with exactly ten managed labels, defined once in `02-domain-model.md` §5 and mirrored in a single code constants module: `DEVCAKE` (opt-in adoption signal), three stage labels (`-PLAN`, `-EXECUTE`, `-REVIEW`), plus `-MERGE` (awaiting merge), `-CREATED` (provenance), `-FAILED` (attention), `-SKIP` (opt-out), `-TRACKING` (decomposed projects), and `-NEEDS-HUMAN` (deliberate hand-off — added post-v0 with `adr/0007`; the set was nine through v0). No version suffixes in names. The app ensures all ten exist in the configured team at startup. Renaming is a documented migration: create new → copy on touched missions → retire old.
+A flat uppercase namespace whose managed set is defined once in
+`02-domain-model.md` §5 and mirrored in `ALL_LABELS`: `DEVCAKE` (opt-in
+adoption signal), three stage labels (`-PLAN`, `-EXECUTE`, `-REVIEW`), plus
+`-MERGE` (awaiting merge), `-CREATED` (provenance), `-FAILED` (attention),
+`-SKIP` (opt-out), `-TRACKING` (decomposed projects), `-NEEDS-HUMAN`
+(deliberate hand-off — added post-v0 with `adr/0007`; the set was nine
+through v0 and ten after NEEDS-HUMAN), and `-DISCOVERY` (sweep-gate for
+harvested discoveries — ADR-0033; not a `derive()` / schedule row). No
+version suffixes in names. The app ensures every `ALL_LABELS` member exists
+in the configured team at startup. Renaming is a documented migration:
+create new → copy on touched missions → retire old.
 
 ## Alternatives considered
 

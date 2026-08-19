@@ -7,7 +7,7 @@ explicit ``LINEAR_API_KEY`` + ``DEVCAKE_TEAM_KEY`` from env/``.env`` (no product
 defaults). Stdlib only; never prints the API key. Fails loud on missing secrets
 or GraphQL errors.
 
-Run AFTER the app has bootstrapped the ten labels (or run the app once first).
+Run AFTER the app has bootstrapped the eleven labels (or run the app once first).
 """
 
 import json
@@ -64,7 +64,9 @@ state_of = {t: next(s["id"] for s in states if s["type"] == t)
 existing = {i["title"] for i in issues}
 
 missing = [n for n in ("DEVCAKE", "DEVCAKE-PLAN", "DEVCAKE-EXECUTE", "DEVCAKE-REVIEW",
-                       "DEVCAKE-MERGE", "DEVCAKE-SKIP", "DEVCAKE-FAILED") if n not in labels]
+                       "DEVCAKE-MERGE", "DEVCAKE-CREATED", "DEVCAKE-FAILED", "DEVCAKE-SKIP",
+                       "DEVCAKE-TRACKING", "DEVCAKE-NEEDS-HUMAN", "DEVCAKE-DISCOVERY")
+           if n not in labels]
 if missing:
     sys.exit(f"labels not bootstrapped yet (missing {missing}) — start the app once first")
 

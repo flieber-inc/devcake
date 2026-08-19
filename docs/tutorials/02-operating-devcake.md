@@ -22,6 +22,7 @@ This tutorial is the vocabulary plus the interventions you'll actually use.
 | `DEVCAKE-TRACKING` | A decomposed project; auto-completes when its children finish | — |
 | `DEVCAKE-FAILED` | Gave up after 3 failed attempts (comment explains; trace linked) | Fix the cause, remove the label → fresh retries |
 | `DEVCAKE-NEEDS-HUMAN` | A Dev hit something only you can do (credentials, an external account, a judgment call) — the hand-off comment carries the evidence | Do the thing, remove the label → DevCake resumes |
+| `DEVCAKE-DISCOVERY` | Harvested discoveries still waiting to be routed (sweep gate) — visible on the board until routing clears; does not block progression | Wait for the discovery steward, or leave it — not a stage label |
 | `DEVCAKE-SKIP` | You told DevCake: hands off | Remove to resume |
 
 Statuses mean exactly what they say: **Backlog** = untouched, **In Progress** =

@@ -21,7 +21,7 @@ BAKE_TARGETS=()
 COMPOSE_ARGS=()
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \?//'
+  sed -n '2,13p' "$0" | sed 's/^# \?//'
   exit "${1:-0}"
 }
 

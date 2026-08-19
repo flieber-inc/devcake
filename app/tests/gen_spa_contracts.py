@@ -22,6 +22,7 @@ import json
 from devcake.config import (HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE,
                             PMOInstance, RepoInstance, SkillSource)
 from devcake.domain.model import Mission, derive
+from devcake.domain.run import TERMINAL_STATES
 
 from datetime import datetime, timezone
 
@@ -73,10 +74,13 @@ def _board_vectors() -> tuple[list[str], list[list]]:
 
 def build() -> dict:
     reasons, vectors = _board_vectors()
+    terminal = sorted(TERMINAL_STATES)
     return {
         "_generated_by": "app/tests/gen_spa_contracts.py — do not hand-edit",
         "instance_name_re": _INSTANCE_NAME_RE,
         "harness_var_pattern": HARNESS_VAR_PATTERN,
+        "run_terminal_states": terminal,
+        "run_stopped_states": sorted(set(terminal) | {"finalizing"}),
         "pmo_card_defaults": {
             k: PMOInstance(name="x", team_key="").model_dump()[k]
             for k in _PMO_CARD_FIELDS},

@@ -13,6 +13,7 @@ import usePoll from "../lib/usePoll.js";
 import { runsListPath } from "../lib/missionIdentity.js";
 import { relTime, fullTime, duration } from "../lib/format.js";
 import { contextActions, needsHumanReason } from "../lib/board.js";
+import { STOPPED_STATES } from "../lib/runStates.js";
 
 const STOP_COPY = {
   title: "Stop this run?",
@@ -267,8 +268,7 @@ export default function MissionDrawer({ mission, multiPmo, syncing, rows, adopti
                     {orderedRuns.map((r) => {
                       // finalizing hides Stop too: the Dev has already
                       // exited — the backend 409s a stop there by design
-                      const stopped = ["finished", "failed", "timed_out",
-                        "orphaned", "finalizing"].includes(r.state);
+                      const stopped = STOPPED_STATES.includes(r.state);
                       return (
                         <tr
                           key={r.run_id}

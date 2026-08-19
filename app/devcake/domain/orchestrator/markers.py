@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 
+from ...config import INSTANCE_NAME_BODY
 from ..model import LABEL_CREATED, MissionType
 from . import steps
 
@@ -82,7 +83,8 @@ DELIVERABLE_MARKER = "<!-- DEVCAKE-DELIVERABLE -->"
 # marker, not a label: repo names are an open-ended operator-renamable set,
 # while the managed-label set is deliberately fixed (and Linear project
 # labels leak workspace-wide). Mirrors the decomposition-marker precedent.
-REPO_MARKER = re.compile(r"`devcake-repo:([a-z][a-z0-9]{0,11})`", re.IGNORECASE)
+REPO_MARKER = re.compile(
+    rf"`devcake-repo:({INSTANCE_NAME_BODY})`", re.IGNORECASE)
 # the permissive twin (audit A26): anything devcake-repo:-SHAPED that the
 # strict pattern rejects is a typo'd routing intent — resolution GATES it
 # instead of silently falling through to the instance default

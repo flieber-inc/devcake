@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from . import failure_taxonomy
+from .run import TERMINAL_STATES
 
 WINDOW = 3                  # most recent TERMINAL runs of a dev type
 MIN_DISTINCT_MISSIONS = 2   # correlation needs evidence from ≥2 missions
@@ -42,7 +43,6 @@ def fault_classes(brake_on_bad_output: bool) -> frozenset[str]:
 # Successes are INCLUDED on purpose: they are what evicts fault evidence from the
 # window, which is the entire clearing mechanism ("two greens clear it"). The
 # exclusive reading would leave a degraded dev type degraded forever.
-TERMINAL_STATES = ("finished", "failed", "timed_out", "orphaned")
 
 
 def _aware(ts):

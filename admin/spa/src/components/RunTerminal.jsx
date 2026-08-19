@@ -2,8 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { Copy, Check } from "lucide-react";
 import { Overlay } from "./Modal.jsx";
 import { getText } from "../api.js";
+import { TERMINAL_STATES } from "../lib/runStates.js";
 
-export const TERMINAL_STATES = ["finished", "failed", "timed_out", "orphaned"];
+export { TERMINAL_STATES };
 
 // Popup terminal: replays the stored run log, then follows live over SSE.
 // A simulacrum — the harness runs headless (no PTY), so this shows the

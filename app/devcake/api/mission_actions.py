@@ -38,14 +38,9 @@ from fastapi import HTTPException
 from ..domain import failure_taxonomy
 from ..domain.model import LABEL_MERGE, MissionRef
 from ..domain.orchestrator import freshness
+from ..domain.run import TERMINAL_STATES
 from ..ports.pmo import PMOTransient
 from ..security import redact
-
-
-# Terminal states duplicated locally to avoid importing from `main.py` (which
-# would cycle) — kept in lockstep with the `RunState` literal in domain/run.py.
-TERMINAL_STATES: frozenset[str] = frozenset(
-    {"finished", "failed", "timed_out", "orphaned"})
 
 
 # ── SOLID/OCP: label actions as data, not a switch statement ────────────────

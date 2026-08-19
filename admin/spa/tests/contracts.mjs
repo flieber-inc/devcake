@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 
 import { columnOf, needsHumanReason } from "../src/lib/board.js";
 import { newPmoCard, newRepoCard, newSkillSourceCard } from "../src/lib/cards.js";
+import { STOPPED_STATES, TERMINAL_STATES } from "../src/lib/runStates.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const contracts = JSON.parse(
@@ -46,6 +47,16 @@ check("harness-var regex matches config.HARNESS_VAR_PATTERN", () => {
   const re = new RegExp(`^${contracts.harness_var_pattern}$`);
   assert.ok(re.test("ANTHROPIC_API_KEY"), "accepts a harness var");
   assert.ok(!re.test("not-a-var"), "rejects lowercase / hyphen");
+});
+
+check("runStates.js TERMINAL_STATES matches spa-contracts", () => {
+  assert.deepEqual([...TERMINAL_STATES].sort(),
+    [...contracts.run_terminal_states].sort());
+});
+
+check("runStates.js STOPPED_STATES matches spa-contracts", () => {
+  assert.deepEqual([...STOPPED_STATES].sort(),
+    [...contracts.run_stopped_states].sort());
 });
 
 check("PMO card scaffold equals the server-model defaults", () => {

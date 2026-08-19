@@ -25,7 +25,7 @@ from ..ports.state import StatePort
 from ..telemetry import OTEL_COLLECTOR_URL
 from . import failure_taxonomy
 from .ids import make_run_id
-from .run import Run, auth_digest, is_pre_wipe, utcnow
+from .run import Run, TERMINAL_STATES, auth_digest, is_pre_wipe, utcnow
 from .run_bootstrap import RunBootstrap
 from .workspaces import NullWorkspaceStore
 
@@ -368,7 +368,7 @@ class RunManager:
             # Terminal with empty finalized_steps ⇒ first delivery after a
             # premature orphan/kill (boot reconcile or kill-race) — reopen
             # finalize so INV-5 / entrypoint _on_term are not dropped (CAKE-73).
-            if run.state in ("finished", "failed", "timed_out", "orphaned"):
+            if run.state in TERMINAL_STATES:
                 if run.finalized_steps:
                     return
                 log.info(
@@ -401,8 +401,7 @@ class RunManager:
             # stalled-finalize killer to reach later. The container already
             # exited (artifacts are the dying words) — no mount race.
             fresh = self.store.get(run_id)
-            if fresh is None or fresh.state in ("finished", "failed",
-                                                "timed_out", "orphaned"):
+            if fresh is None or fresh.state in TERMINAL_STATES:
                 self.workspaces.cleanup(run_id)
         else:
             log.warning("unknown message kind %s for %s", kind, run_id)

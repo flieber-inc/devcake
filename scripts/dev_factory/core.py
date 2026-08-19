@@ -32,9 +32,8 @@ KNOWN_TEMPLATES = frozenset({
 
 # Single source: app/devcake/house_pins.py (PYTHONPATH includes app/).
 from devcake.house_pins import LAUNCH_SUPPORTED  # re-exported for factory tests
+from devcake.versions import CLI_VERSION_SEMVER_RE as _SEMVER
 
-# Same rule as DevType.cli_version — concrete semver only.
-_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
 _TEMPLATE = re.compile(r"[a-z0-9-]+")
 _IMAGE_PREFIX = "devcake/dev-"
 _IMAGE_REF = re.compile(r"devcake/dev-[a-z0-9-]+:[A-Za-z0-9._-]+")

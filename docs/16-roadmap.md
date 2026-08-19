@@ -21,7 +21,7 @@
 > milestone `[x]` checkboxes mark exit criteria verified at that milestone's close.
 >
 > **Where we are (2026-08-19):** layers 1–2 closed through tag **v0.2**;
-> release tags through **v0.2.5 "Hummingbird"** on `main`. The product loop
+> release tags through **v0.2.5** on `main`. The product loop
 > (poll → dispatch → harness → finalize → forge/PMO) is operational with six
 > harness templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`,
 > `qwen-code`), multi-PMO / multi-repo / internal Gitea, skills (ADR-0016)

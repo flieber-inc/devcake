@@ -642,6 +642,35 @@ until that run exists, field evidence below stays operator-self-reported.
   ships host-config support. Multi-admin config `If-Match`/versioning is
   ledgered as accepted single-operator scope (admin/spa/DESIGN.md).
 
+- **2026-08 hardening round** (CAKE-55 brief + follow-ons, 2026-08-18/19):
+  the largest single round in project history — a full-codebase review that
+  closed as **71 merged PRs** across correctness, silent-failure hardening,
+  chokepoint pins, SPA honesty, docs alignment, FOSS release hygiene, and
+  two invariant amendments. Serious-bug classes closed (classes, not every
+  PR): the broken prune route; the Linear cron crash; claims/breaker
+  honesty; resume continuation; the MCP-setup gate; discovery delivery;
+  skill-secret bundles; timeout ownership; forge HTTP hardening.
+  **Invariant amendments** (CAKE-55 rulings sealed via **PR #240**):
+  INV-5 named exceptions for truly FAILED kill/orphan paths and for
+  STEWARD/CURATOR feed duties (**CAKE-112**); INV-4 mono-repo residual
+  grading with the dismissable `pmo-forge-mono-repo:*` warning
+  (**CAKE-113**) — text lives in `docs/00` / `docs/14`. **Chokepoint
+  consolidations:** ADR-0036 upstream-ancestor activity offer
+  (`docs/adr/0036-upstream-activity-ancestor-offer.md`); breaker
+  credential-field latch (clear must validate the credential field that
+  latched); contracts-file pin extensions (ADR-0034 SPA↔backend pin
+  family). **Release / CI:** root **GPL-3.0** `LICENSE`; repository made
+  **public**; admin browser suites (`check:ui`) now run on every PR; CI
+  `check:ui` step cut **494s → 79s** (drop `--with-deps` + Playwright
+  shell cache). **built** (hermetic / CI). Still owed honestly: **live-stack
+  redeploy** onto the post-round tip (R9 ritual + image rebake — the live
+  stack has not been claimed redeployed onto these merges); **hotfix-skill
+  removal from the live skill store** (review-ledger domain-knowledge skill
+  is not a bundled seed; retire via live-store delete + Dev Type
+  deselection — ADR-0036 retires the workaround). Layer-3 residuals under
+  Still open (Memory + Cron pilot ship gate, fresh-`/data` drill, M9–M12
+  demos, etc.) remain open as already listed.
+
 ### Field evidence (operator-self-reported)
 
 Production use reported by the founder-operator, 2026-08. Evidence class:

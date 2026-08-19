@@ -296,14 +296,21 @@ class ForgeRuntime:
             if ephemeral and forge is not None:
                 from ..adapters.http import aclose_adapters
                 aclose_adapters([forge])
-        # reference-only repos (founder decision 2026-07-15): readable-but-not-writable
-        # is their EXPECTED healthy state, not a latchable failure. A read
-        # token that cannot even READ (can_read False) still latches normally.
+        # Readable-without-push is healthy when the probe only needs read:
+        # reference_only cards (no write token) and token_ro-keyed re-probes
+        # after a notebook/mirror latch (CAKE-118). Real forge adapters set
+        # ok=can_push, so a restored RO PAT would otherwise never clear.
+        # A read token that cannot even READ (can_read False) still latches.
         if (inst is not None and not data["ok"] and not data.get("transient")
-                and data.get("can_read") and inst.reference_only):
-            data = {**data, "ok": True,
-                    "detail": "reference-only: read access verified (no write "
-                              "token stored — never a work target)"}
+                and data.get("can_read")
+                and (inst.reference_only or field == "token_ro")):
+            if inst.reference_only:
+                detail = ("reference-only: read access verified (no write "
+                          "token stored — never a work target)")
+            else:
+                detail = ("token_ro: read access verified (push not required "
+                          "to clear a read-credential latch)")
+            data = {**data, "ok": True, "detail": detail}
         if field is not None:
             data = {**data, "credential_field": field}
         self.apply_health(name, data)

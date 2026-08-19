@@ -406,3 +406,54 @@ def test_refresh_health_reprobes_latched_token_ro_not_write(
     assert data["ok"] is False
     assert "nb" in rt.breakers
     assert rt.breaker_fields["nb"] == "token_ro"
+
+
+def test_token_ro_latch_clears_on_readable_without_push(
+        tmp_path, monkeypatch):
+    """Mission self-heal on dual-token (non-reference_only) cards: a restored
+    read-only PAT returns ForgeHealth(ok=False, can_read=True, can_push=False).
+    refresh_health must treat that as healthy for a token_ro-keyed latch and
+    clear the breaker (REVIEW reject on CAKE-118 round 1)."""
+    _store_repo_secrets(tmp_path, monkeypatch, "nb",
+                        token="write-ok-0123456789abcd",
+                        token_ro="read-ok-0123456789abcd")
+    assert not RepoInstance(
+        name="nb", url="https://github.com/o/nb").reference_only
+
+    def make(inst, *, credential_field=None):
+        return _ProbeForge(**READABLE_NOT_WRITABLE)
+
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="nb", url="https://github.com/o/nb",
+                             forge="github")], make)
+    rt.latch("nb", "notebook clone auth", credential_field="token_ro")
+    data = run_coro(rt.refresh_health("nb"))
+    assert data["ok"] is True
+    assert data.get("can_read") is True
+    assert data.get("can_push") is False
+    assert data.get("credential_field") == "token_ro"
+    assert "nb" not in rt.breakers
+    assert "nb" not in rt.breaker_fields
+
+
+def test_token_ro_latch_stays_when_read_probe_unreadable(
+        tmp_path, monkeypatch):
+    """Negative control: token_ro re-probe that cannot read stays latched."""
+    _store_repo_secrets(tmp_path, monkeypatch, "nb",
+                        token="write-ok-0123456789abcd",
+                        token_ro="read-dead-0123456789ab")
+
+    def make(inst, *, credential_field=None):
+        return _ProbeForge(
+            ok=False, repository="o/nb", can_push=False, can_read=False,
+            transient=False,
+            detail="repository access failed (HTTP 401)")
+
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="nb", url="https://github.com/o/nb",
+                             forge="github")], make)
+    rt.latch("nb", "notebook clone auth", credential_field="token_ro")
+    data = run_coro(rt.refresh_health("nb"))
+    assert data["ok"] is False
+    assert "nb" in rt.breakers
+    assert rt.breaker_fields["nb"] == "token_ro"

@@ -25,6 +25,9 @@ dist/
 .vscode/
 .DS_Store
 
+# Claude Code local overrides (per-machine; never commit)
+.claude/settings.local.json
+
 # dagu-generated DAG scan index (rewritten on every boot)
 dagu/dags/.dag.index
 

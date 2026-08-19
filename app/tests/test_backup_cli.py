@@ -242,6 +242,25 @@ def test_backup_czf_failure_does_not_clobber_an_existing_archive(tmp_path):
     )
 
 
+def _fake_tar_fail_dir_extract(fake_bin: Path) -> None:
+    """Fail only `tar … -C …` (volume extract). Must NOT fail `tar xzf -O`
+    (kind-marker read) or `tar tzf` — those run before move-aside, so a
+    blanket xzf failure never reaches restore_aside (false green).
+
+    Use `command -p tar` without `exec`: under dash, `exec command` looks for
+    an external binary named command and exits 127 before any extract runs.
+    """
+    wrapper = fake_bin / "tar"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in\n'
+        '  *" -C "*) echo "xzf boom" >&2; exit 1 ;;\n'
+        "esac\n"
+        'command -p tar "$@"\n'
+    )
+    wrapper.chmod(0o700)
+
+
 def test_restore_extract_failure_puts_original_tree_back(tmp_path):
     """tzf can succeed and xzf still fail. The aside must come back to
     the original paths — a follow-up compose up must not boot a partial."""
@@ -252,13 +271,7 @@ def test_restore_extract_failure_puts_original_tree_back(tmp_path):
     assert _run_backup_payload(src, out, "data").returncode == 0
     fake_bin = tmp_path / "tarbin"
     fake_bin.mkdir()
-    wrapper = fake_bin / "tar"
-    wrapper.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = xzf ]; then echo "xzf boom" >&2; exit 1; fi\n'
-        'exec command -p tar "$@"\n'
-    )
-    wrapper.chmod(0o700)
+    _fake_tar_fail_dir_extract(fake_bin)
     r = _run_restore_payload(
         dst, out, "data",
         extra_env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
@@ -266,6 +279,30 @@ def test_restore_extract_failure_puts_original_tree_back(tmp_path):
     assert _tree(dst) == {"precious.txt": "only copy"}, (
         "extract failure must restore the previous tree to its original paths"
     )
+
+
+def test_restore_extract_failure_keeps_older_pre_restore_leftovers(tmp_path):
+    """A second failed restore must not wipe prior .pre-restore-* leftovers
+    the move-aside step (and its comment) deliberately leave in place."""
+    src, out, dst = tmp_path / "src", tmp_path / "out", tmp_path / "dst"
+    src.mkdir(), out.mkdir(), dst.mkdir()
+    (src / "new.txt").write_text("incoming")
+    (dst / "precious.txt").write_text("only copy")
+    old = dst / ".pre-restore-OLD"
+    (old / "nested").mkdir(parents=True)
+    (old / "nested" / "kept.txt").write_text("from an earlier failed attempt")
+    assert _run_backup_payload(src, out, "data").returncode == 0
+    fake_bin = tmp_path / "tarbin"
+    fake_bin.mkdir()
+    _fake_tar_fail_dir_extract(fake_bin)
+    r = _run_restore_payload(
+        dst, out, "data",
+        extra_env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
+    assert r.returncode != 0
+    assert (dst / "precious.txt").read_text() == "only copy"
+    assert (old / "nested" / "kept.txt").read_text() == (
+        "from an earlier failed attempt"
+    ), "older .pre-restore-* leftovers must survive extract-failure put-back"
 
 
 # --- host-side contract: the scripts drive docker with the pinned image ---

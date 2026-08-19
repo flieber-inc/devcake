@@ -43,8 +43,10 @@ fi
 ASIDE="$DST/.pre-restore-$(date -u +%Y%m%d-%H%M%S)-$$"
 mkdir "$ASIDE"
 restore_aside() {
-  # best-effort: put the previous tree back on its original paths
-  find "$DST" -mindepth 1 -maxdepth 1 ! -name "$(basename "$ASIDE")" -exec rm -rf {} +
+  # best-effort: put the previous tree back on its original paths; keep
+  # older .pre-restore-* leftovers (same exclusion as the move-aside step)
+  find "$DST" -mindepth 1 -maxdepth 1 \
+    ! -name "$(basename "$ASIDE")" ! -name '.pre-restore-*' -exec rm -rf {} +
   find "$ASIDE" -mindepth 1 -maxdepth 1 -exec mv {} "$DST/" \;
   rmdir "$ASIDE" 2>/dev/null || true
 }

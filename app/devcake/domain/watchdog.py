@@ -42,6 +42,16 @@ async def watchdog_loop(mgr: RunManager) -> None:
                 log.exception("workspace sweep failed")
         try:
             stalled_finalizing = []
+            # Fail-closed: if unresolved_run_ids is unreachable, skip
+            # timeout/liveness kills this cycle so we never race a first
+            # artifacts delivery onto a terminal state (CAKE-73). None ⇒ unknown.
+            try:
+                unresolved: set[str] | None = await mgr.messaging.unresolved_run_ids()
+            except Exception:  # noqa: BLE001 — messaging probe fail-closed: prefer skip-kill over terminalling a first delivery we cannot rule out
+                log.exception(
+                    "watchdog: unresolved_run_ids failed — skipping "
+                    "timeout/liveness kills this cycle (fail-closed)")
+                unresolved = None
             for run in mgr.store.active():
                 # finalizing = app-side PMO/forge work after the Dev has exited.
                 # Never wall-clock-kill it while its artifacts entry can still
@@ -75,6 +85,18 @@ async def watchdog_loop(mgr: RunManager) -> None:
                     age_fresh = (utcnow() - fresh.created_at).total_seconds()
                     if age_fresh <= fresh.timeout_seconds:
                         continue
+                    if unresolved is None:
+                        continue  # cannot prove ingress empty — skip this cycle
+                    # CAKE-73: artifacts already on the ingress stream — do not
+                    # terminal; promote so the first delivery is not dropped.
+                    if fresh.run_id in unresolved:
+                        fresh.state = "finalizing"
+                        mgr.store.save(fresh)
+                        log.info(
+                            "watchdog: promoting %s to finalizing (timeout "
+                            "but artifacts still on ingress)",
+                            fresh.run_id)
+                        continue
                     await mgr.kill(fresh, "timed_out",
                                    f"exceeded {fresh.timeout_seconds}s")
                     continue
@@ -105,15 +127,26 @@ async def watchdog_loop(mgr: RunManager) -> None:
                                       > STARTUP_GRACE)
                         if not (still_stale or still_dead):
                             continue
+                        if unresolved is None:
+                            continue  # cannot prove ingress empty — skip
+                        if fresh.run_id in unresolved:
+                            fresh.state = "finalizing"
+                            mgr.store.save(fresh)
+                            log.info(
+                                "watchdog: promoting %s to finalizing (dagu "
+                                "dead but artifacts still on ingress)",
+                                fresh.run_id)
+                            continue
                         await mgr.kill(fresh, "failed",
                                        "dagu run dead (%s)" %
                                        ("no heartbeat" if still_stale else "never started"))
-            if stalled_finalizing and \
-                    time.monotonic() - last_stall_check >= STALL_CHECK_INTERVAL:
+            if (stalled_finalizing
+                    and unresolved is not None
+                    and time.monotonic() - last_stall_check
+                    >= STALL_CHECK_INTERVAL):
                 last_stall_check = time.monotonic()
-                # fail-closed on the check itself: if redis is unreachable we
-                # cannot prove the entry is gone, so leave the runs alone
-                unresolved = await mgr.messaging.unresolved_run_ids()
+                # reuse the cycle's unresolved snapshot (already fail-closed);
+                # unresolved is None ⇒ cannot prove the entry is gone → leave
                 for run in stalled_finalizing:
                     if run.run_id in unresolved:
                         continue

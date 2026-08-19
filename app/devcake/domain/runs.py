@@ -369,11 +369,18 @@ class RunManager:
             if self.oauth_mgr:
                 await self.oauth_mgr.on_result(run_id, payload)
         elif kind == "run.artifacts":
-            # Terminal states: redelivery is a pure no-op. Only finished used
-            # to short-circuit; failed/timed_out/orphaned re-entering finalize
-            # double-ran side effects after mid-finalize crashes (ISSUES #1).
+            # Terminal + prior finalize work ⇒ true redelivery no-op (ISSUES #1).
+            # Terminal with empty finalized_steps ⇒ first delivery after a
+            # premature orphan/kill (boot reconcile or kill-race) — reopen
+            # finalize so INV-5 / entrypoint _on_term are not dropped (CAKE-73).
             if run.state in ("finished", "failed", "timed_out", "orphaned"):
-                return
+                if run.finalized_steps:
+                    return
+                log.info(
+                    "first artifacts delivery on premature terminal %s (%s) — "
+                    "reopening finalize",
+                    run_id, run.state,
+                )
             if self._pre_wipe(run):
                 log.info("drop finalize for pre-wipe run %s", run_id)
                 return

@@ -82,7 +82,12 @@ class FakeExecutor:
 
 
 def test_artifacts_redelivery_noop_on_all_terminal_states(tmp_path):
-    """ISSUES #1: finished/failed/timed_out/orphaned must not re-enter finalize."""
+    """ISSUES #1: true redelivery after finalize already ran must not re-enter.
+
+    Terminal alone is not enough — premature orphan/kill leaves empty
+    finalized_steps and must still accept the first delivery (CAKE-73).
+    Non-empty finalized_steps is the redelivery signal.
+    """
     store = RunStore(tmp_path / "runs")
     messaging = FakeMessaging()
     executor = FakeExecutor()
@@ -100,9 +105,37 @@ def test_artifacts_redelivery_noop_on_all_terminal_states(tmp_path):
 
     for state in ("finished", "failed", "timed_out", "orphaned"):
         run = _make_run(store, state=state, run_id=f"R-{state}")
+        run.finalized_steps = ["transcript"]  # prior finalize work
+        store.save(run)
         run_coro(mgr.handle(run.run_id, "run.artifacts",
                             {"result": {"outcome": "executed"}}))
     assert finalize_calls == []
+
+
+def test_artifacts_first_delivery_on_premature_terminal_enters_finalize(tmp_path):
+    """CAKE-73: orphan/kill-race terminal with no prior finalize must still
+    accept the first run.artifacts delivery (INV-5 / entrypoint _on_term)."""
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+    mgr = RunManager(store, messaging, FakeExecutor())
+    calls = []
+
+    class MM:
+        async def finalize(self, run, payload):
+            calls.append((run.run_id, run.state))
+
+        async def finalize_steward(self, run, payload):
+            pass
+
+    mgr.set_finalizer(MM())
+    for state in ("orphaned", "timed_out", "failed"):
+        run = _make_run(store, state=state, run_id=f"FIRST-{state}")
+        assert run.finalized_steps == []
+        run_coro(mgr.handle(run.run_id, "run.artifacts",
+                            {"result": {"outcome": "executed"}}))
+        assert calls[-1] == (run.run_id, "finalizing")
+        assert store.get(run.run_id).state == "finalizing"
+    assert len(calls) == 3
 
 
 def test_artifacts_enters_finalize_from_running(tmp_path):
@@ -447,6 +480,57 @@ def test_recon_orphans_dead_runs_but_leaves_finalizing_for_reclaim(tmp_path):
     # ordering contract: every orphan kill happens BEFORE reclaim
     assert events[-1] == ("reclaim",)
     assert ("kill", "R-1", "orphaned") in events
+
+
+def test_recon_queued_artifacts_promote_dead_run_for_reclaim(tmp_path):
+    """CAKE-73 / docs/04 §6: Dagu dead + run.artifacts still on Redis must
+    resume finalization — not orphan then drop the first delivery on the
+    terminal-state guard. Consult unresolved messaging; promote to
+    finalizing for step-4 reclaim."""
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+    executor = FakeExecutor()  # status() returns None → dagu run dead
+    mgr = RunManager(store, messaging, executor)
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+
+    queued = _make_run(store, state="running", run_id="Q-1")
+    messaging.unresolved = {queued.run_id}
+
+    events = []
+    orig_kill = mgr.kill
+
+    async def spy_kill(run, new_state, reason):
+        events.append(("kill", run.run_id, new_state))
+        await orig_kill(run, new_state, reason)
+
+    mgr.kill = spy_kill  # type: ignore[method-assign]
+
+    finalize_calls = []
+
+    class MM:
+        async def finalize(self, run, payload):
+            finalize_calls.append(run.run_id)
+
+        async def finalize_steward(self, run, payload):
+            pass
+
+    mgr.set_finalizer(MM())
+
+    async def reclaim(handler, verify_auth):
+        events.append(("reclaim",))
+        # simulate step-4 delivering the queued first artifacts
+        await handler(queued.run_id, "run.artifacts",
+                      {"result": {"outcome": "executed"}})
+
+    messaging.reclaim_pending = reclaim
+    run_coro(reconcile_runs(mgr))
+
+    assert ("kill", "Q-1", "orphaned") not in events
+    assert store.get(queued.run_id).state == "finalizing"
+    assert finalize_calls == ["Q-1"]
+    assert events[-1] == ("reclaim",)
 
 
 def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
@@ -794,6 +878,26 @@ def _one_watchdog_cycle(mgr, monkeypatch):
     monkeypatch.setattr(wd.asyncio, "sleep", fake_sleep)
     with pytest.raises(asyncio.CancelledError):
         run_coro(wd.watchdog_loop(mgr))
+
+
+def test_watchdog_promotes_running_to_finalizing_when_artifacts_pending(
+        tmp_path, monkeypatch):
+    """CAKE-73 kill-race: wall-clock timeout must not terminal a run whose
+    run.artifacts entry is already on the ingress stream — promote to
+    finalizing so the first delivery is not dropped by the terminal guard."""
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+    mgr = RunManager(store, messaging, FakeExecutor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run = _make_run(
+        store, state="running",
+        created_at=utcnow() - timedelta(hours=5),
+        timeout_seconds=60,
+    )
+    messaging.unresolved = {run.run_id}
+    _one_watchdog_cycle(mgr, monkeypatch)
+    assert store.get(run.run_id).state == "finalizing"
+    assert messaging.deleted_users == []
 
 
 def test_watchdog_never_timeouts_resumable_finalizing(tmp_path, monkeypatch):

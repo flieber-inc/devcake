@@ -357,6 +357,57 @@ def test_remove_dev_type_clears_active_prompt_and_sidecar_dirs(monkeypatch, tmp_
     assert not secrets.exists()
 
 
+def test_remove_dev_type_409_when_steward_enabled_binds_it(monkeypatch, tmp_path):
+    """DELETE must 409 while the Relations Steward is enabled and points at
+    this Dev Type — matching settings_bundle's enabled-gated validator."""
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import config as config_mod
+    from devcake.api import devtypes_service
+    from devcake.config import AppConfig, DevType, Steward
+
+    monkeypatch.setattr(devtypes_service, "delete_dev_type", lambda n: None)
+    dts = {
+        "steward": DevType(name="steward", harness_template="claude-code"),
+        "judgment": DevType(name="judgment", harness_template="claude-code"),
+    }
+    cfg = AppConfig(steward=Steward(enabled=True, dev_type="steward"))
+    cfg.assignments = {mt: config_mod.Assignment(dev_type="judgment")
+                       for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")}
+
+    with pytest.raises(HTTPException) as e:
+        run_coro(devtypes_service.remove_dev_type(
+            "steward", config=cfg, dev_types=dts))
+    assert e.value.status_code == 409
+    assert "steward" in str(e.value.detail).lower()
+
+
+def test_remove_dev_type_allowed_when_steward_disabled(monkeypatch, tmp_path):
+    """Disabling the steward must clear the 409 — the message says
+    'repoint or disable'; disable alone must work when unbound."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import config as config_mod
+    from devcake.api import devtypes_service
+    from devcake.config import AppConfig, DevType, Steward
+
+    monkeypatch.setattr(devtypes_service, "delete_dev_type", lambda n: None)
+    monkeypatch.setattr(devtypes_service, "save_config", lambda c: None)
+    monkeypatch.setattr(devtypes_service, "publish_keep_set", lambda dts: None)
+    dts = {
+        "steward": DevType(name="steward", harness_template="claude-code"),
+        "judgment": DevType(name="judgment", harness_template="claude-code"),
+    }
+    cfg = AppConfig(steward=Steward(enabled=False, dev_type="steward"))
+    cfg.assignments = {mt: config_mod.Assignment(dev_type="judgment")
+                       for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")}
+
+    out = run_coro(devtypes_service.remove_dev_type(
+        "steward", config=cfg, dev_types=dts))
+    assert out == {"deleted": "steward"}
+    assert "steward" not in dts
+
+
 def test_instance_override_refs_block_delete_and_follow_rename(monkeypatch, tmp_path):
     """ADR-0019 reference hygiene: a Dev Type named only by a PMO instance's
     assignment override must refuse DELETE (409 naming the instance) and be

@@ -127,21 +127,41 @@ class RepoCache:
 
         True only when a prior successful sync left branch content — the
         in-process ledger recorded a success, or the on-disk bare mirror
-        still has heads (survives process restart). A bare `git init`
-        dir alone (fetch never succeeded) is False so callers omit rather
-        than proceeding on empty heads. Do NOT use ``mirror_path.is_dir``
-        as a stand-in: that is true after a failed first sync too.
+        still has heads (loose ``refs/heads/*`` or a ``packed-refs``
+        heads line — survives process restart and ADR-0024 offline
+        ``git gc``). A bare `git init` dir alone (fetch never succeeded)
+        is False so callers omit rather than proceeding on empty heads.
+        Do NOT use ``mirror_path.is_dir`` as a stand-in: that is true
+        after a failed first sync too.
         """
         st = self.ledger.get(name)
         if st is not None and st.synced_at is not None:
             return True
         if name in self._synced_mono:
             return True
-        heads = self.mirror_path(name) / "refs" / "heads"
+        mirror = self.mirror_path(name)
+        heads = mirror / "refs" / "heads"
         try:
-            return heads.is_dir() and any(heads.iterdir())
+            if heads.is_dir() and any(heads.iterdir()):
+                return True
         except OSError:
             return False
+        # After offline `git gc` (ADR-0024), heads may live only in packed-refs.
+        packed = mirror / "packed-refs"
+        try:
+            if not packed.is_file():
+                return False
+            for line in packed.read_text(errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("^"):
+                    continue
+                # "<sha> <ref>" — any refs/heads/* counts as branch content
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].startswith("refs/heads/"):
+                    return True
+        except OSError:
+            return False
+        return False
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict],
@@ -208,6 +228,18 @@ class RepoCache:
 
     # ── sync ─────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _origin_url(url: str, clone_user: str) -> str:
+        """Embed ``clone_user@`` after the scheme for http(s) remotes that
+        lack an authority user. Shared by ``sync_one`` and ``remote_head``
+        so scheme coverage cannot drift (ADR-0034)."""
+        if not clone_user or "://" not in url:
+            return url
+        authority = url.split("://", 1)[1].split("/", 1)[0]
+        if "@" in authority:
+            return url
+        return url.replace("://", f"://{clone_user}@", 1)
+
     async def sync_one(self, name: str) -> MirrorStatus:
         """One init-or-fetch. Caller holds the name's lock."""
         inst = self.forges.instance(name)
@@ -223,8 +255,7 @@ class RepoCache:
                 return st
         clone_user = (forge.descriptor.clone_user if forge is not None
                       else self.clone_user_of(inst.forge))
-        expected_url = inst.url.replace("https://", f"https://{clone_user}@") \
-            if clone_user else inst.url
+        expected_url = self._origin_url(inst.url, clone_user)
         p = self.mirror_path(name)
         env = self._git_env(inst)
 
@@ -309,9 +340,7 @@ class RepoCache:
         url = inst.url.strip()
         clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
                       if forge is not None else self.clone_user_of(inst.forge))
-        if clone_user and "://" in url \
-                and "@" not in url.split("://", 1)[1].split("/", 1)[0]:
-            url = url.replace("://", f"://{clone_user}@", 1)
+        url = self._origin_url(url, clone_user)
         ref = (f"refs/heads/{inst.default_branch}"
                if inst.default_branch else "HEAD")
         r = await self.git(["ls-remote", url, ref], env=self._git_env(inst))

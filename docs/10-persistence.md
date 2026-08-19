@@ -43,8 +43,8 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
     runlogs/{run_id}.log        # condensed Dev stdout (run.log relay; SSE for admin terminal)
     events.jsonl                # append-only audit log: every PMO write + settings changes (profile ops, exports)
     mission_owner.json          # multi-PMO claim map (which instance owns which pmo_id)
-    profiles.json               # last-applied-profile breadcrumb (advisory; survives clear-runs —
-                                #   clear_local_state wipes runs/runlogs/events.jsonl only)
+    profiles.json               # last-applied-profile breadcrumb (advisory; cleared by clear-runs —
+                                #   clear_local_state also wipes runs/runlogs/events.jsonl; ADR-0013)
     baker_log.offset            # byte cursor for draining leftover harness_baker.jsonl (12 §1)
   # Host baker / pin factory (top-level on this volume — not under config/ or state/;
   # never part of a settings bundle — settings_bundle.py). Normative ops: 13 §6.

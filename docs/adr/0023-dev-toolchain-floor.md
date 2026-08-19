@@ -180,7 +180,7 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
 
 ## Related
 
-- Implement: `images/Dockerfile` (base + all three harness stages).
+- Implement: `images/Dockerfile` (base + every harness stage in the `images` bake group).
 - Evidence: the base-stage smoke RUN; CI "Bake Dev harnesses"; the
   nested-matrix probes (addendum above); `test_repo_structural.py`
   nested-engine pins.

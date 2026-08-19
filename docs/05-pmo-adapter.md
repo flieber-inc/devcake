@@ -82,9 +82,8 @@ class PMOPort(Protocol):
     # ── meta ──
     async def health_probe(self, team_ref: str) -> PMOHealth: ...
     def capabilities(self) -> PMOCapabilities: ...
-        # adapter self-description. No v0 reader — kept on the contract for
-        # future multi-PMO scheduling / admin-UI behavior selection
-        # (founder decision, v0 crystallization)
+        # adapter self-description consumed by feed, blocker locator, health,
+        # and admin mission-action paths (attachments, caps, global_ids, …)
 ```
 
 ```python

@@ -344,9 +344,18 @@ export default function ReposPage({ onHealthChange }) {
     });
   };
 
-  const testForge = async (name) =>
-    setTestResult({ ...testResult,
-                    [`forge:${name}`]: await send("POST", `/connections/forge/${name}/test`) });
+  const testForge = async (name) => {
+    const key = `forge:${name}`;
+    try {
+      const result = await send("POST", `/connections/forge/${name}/test`);
+      setTestResult((prev) => ({ ...prev, [key]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [key]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
 
   return (
     <div className="space-y-5">

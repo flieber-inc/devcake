@@ -59,6 +59,18 @@ check("unprotected default branch is a dismissable advisory, not a dispatch gate
   assert.match(hit.body, /branch protection/i);
 });
 
+// CAKE-89: unused-repos alert names memory + skill-source separation
+check("unused-repos alert includes memory and excludes skill-source as selection", () => {
+  const alerts = deriveAlerts({
+    unused_repos: { count: 2, names: ["orphan1", "orphan2"], configured: 5 },
+  });
+  const hit = alerts.find((a) => a.id === "unused-repos");
+  assert.ok(hit, "unused-repos alert missing");
+  assert.match(hit.body, /memory/i);
+  assert.match(hit.body, /skill sources/i);
+  assert.doesNotMatch(hit.body, /work or reference repos on no PMO/);
+});
+
 if (failed) {
   console.error(`alerts.mjs: ${failed} check(s) failed`);
   process.exit(1);

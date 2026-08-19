@@ -461,7 +461,7 @@ export default function OverviewPage({
               </div>
               {/* visible legend — the color code shouldn't live only in tooltips */}
               <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
-                green available · blue running · red broken
+                green available · accent running · red broken
               </p>
             </div>
           )}

@@ -34,12 +34,13 @@ log = logging.getLogger("devcake.mirror")
 SYNC_CONCURRENCY = 4     # git subprocesses, not HTTP probes — lower than the
 #                          forge sweep's PROBE_CONCURRENCY on purpose
 
-# Auth wording that latches the per-repo forge breaker. Mirrors the Dev-side
-# clone_error_class (workspace/clone.py) MINUS "repository not found": on the
-# sync path a 404 is a deleted/renamed repo — an operator config problem —
-# and the breaker's remediation copy says "update the token", which would
-# mislead. Everything unrecognized is transient (fail toward retry; the
-# breaker is the sharp edge — docs/15 §4 asymmetry).
+# Auth wording that latches the per-repo forge breaker. Pinned mirror of the
+# Dev-side clone_error_class markers (workspace/clone.py) MINUS
+# "repository not found": on the sync path a 404 is a deleted/renamed repo —
+# an operator config problem — and the breaker's remediation copy says
+# "update the token", which would mislead. Everything unrecognized is
+# transient (fail toward retry; the breaker is the sharp edge — docs/15 §4
+# asymmetry). Guard: app/tests/test_mirror_auth_markers_pin.py (ADR-0034).
 _AUTH_MARKERS = ("authentication failed", "could not read username",
                  "could not read password", "invalid credentials",
                  "returned error: 403", "returned error: 401",

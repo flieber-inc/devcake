@@ -445,8 +445,9 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
             {"src": src, "tgt": tgt, "step": step, "index": index,
              "entry": entries[index - 1], "because": because})
 
-    # 2 — deliver, one comment per recipient; dedup + recipient cap read
-    # from the recipient's LIVE feed just before posting (D6 idempotency)
+    # 2 — deliver, one comment per recipient; live-feed dedup just before
+    # posting (D6 idempotency). No numeric recipient cap — ADR-0033
+    # addendum 14 deleted discovery_in_per_recipient.
     receipts: dict[str, set[tuple[int, str]]] = {}
     for tgt_id, batch in accepted.items():
         tgt = batch[0]["tgt"]

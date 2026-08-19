@@ -83,7 +83,8 @@ class _RunStore(Protocol):
 
 
 class _RunManager(Protocol):
-    async def kill(self, run: Any, new_state: str, reason: str) -> None: ...
+    async def kill(self, run: Any, new_state: str, reason: str, *,
+                   error_class: str | None = None) -> None: ...
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -415,13 +416,6 @@ async def create_mission(
 
     uploaded: list[tuple[str, str]] = []
     attachment_failures: list[dict] = []
-    if files and not getattr(mgr.pmo.capabilities(), "attachments_supported", True):
-        for name, _data in files:
-            attachment_failures.append({
-                "name": name,
-                "error": "this PMO does not support issue file attachments",
-            })
-        files = []
     for name, data in files:
         try:
             asset_url = await mgr.pmo.upload_attachment(pmo_id, name, data)
@@ -589,8 +583,11 @@ __all__ = [
     "ACTION_SPECS",
     "ActionSpec",
     "TERMINAL_STATES",
+    "create_mission",
+    "force_freshness",
     "force_poll_now",
     "label_action",
     "post_steering",
+    "stop_all_runs",
     "stop_run",
 ]

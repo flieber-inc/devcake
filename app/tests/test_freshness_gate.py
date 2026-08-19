@@ -76,6 +76,9 @@ def test_sentinel_only_new_entries_are_immaterial(tmp_path):
 
 
 def test_human_comment_after_watermark_trips(tmp_path):
+    from devcake.domain.orchestrator.feed import unquoted
+    from devcake.domain.orchestrator.markers import STEP_MARKER
+
     m, mgr, fake = _gate_mgr(tmp_path, [
         _entry("e1", "brief" + SENTINEL, author="devcake"),
         _entry("e2", "wait — the config default changed, please re-check")])
@@ -88,6 +91,8 @@ def test_human_comment_after_watermark_trips(tmp_path):
                   if "`devcake:freshness-rereview:1`" in c]
     assert len(directives) == 1
     assert "No reply needed" in directives[0]        # ack-spiral guard
+    # decoration must not embed a live STEP_MARKER token (phantom attachment)
+    assert STEP_MARKER.search(unquoted(directives[0])) is None
     assert "review:freshness_tripped" in run.finalized_steps
     assert (run.verdict or "").startswith("handed off")  # OTel wording trap
 
@@ -112,6 +117,10 @@ def test_exhausted_budget_closes_with_disclosure(tmp_path):
     warn = [c for c in fake.comments if "unevaluated activity" in c]
     assert len(warn) == 1 and "Cumulative recorded mission cost" in warn[0]
     assert "budget (5)" in warn[0]                    # names the config knob
+    # this path DOES close — closing / standing-approve wording is honest here
+    assert "Closing" in warn[0]
+    assert "standing approve verdict proceeds" in warn[0]
+    assert "closed with unevaluated feed activity" in mgr.anomalies["p1"]
     assert not any("freshness-rereview:6" in c for c in fake.comments)
     assert "review:freshness_exhausted" in run.finalized_steps
 
@@ -312,7 +321,17 @@ def test_recheck_exhausted_discloses_without_reopen(tmp_path):
     _finished_review_in_store(mgr.runs.store, "e1")
     assert _recheck(mgr, m) == "exhausted"
     assert "DEVCAKE-MERGE" in m.labels and "DEVCAKE-REVIEW" not in m.labels
-    assert any("unevaluated activity" in c for c in fake.comments)
+    warn = [c for c in fake.comments if "budget" in c.lower()]
+    assert len(warn) == 1
+    # Force/recheck exhausts labels untouched — must NOT claim closing
+    assert "Closing" not in warn[0]
+    assert "standing approve verdict proceeds" not in warn[0]
+    assert "closed with unevaluated" not in warn[0]
+    assert "DEVCAKE-MERGE" in warn[0]                 # remains parked
+    assert "budget (5)" in warn[0]                    # names the spent knob
+    anomaly = mgr.anomalies.get(m.pmo_id, "")
+    assert "closed with unevaluated" not in anomaly
+    assert "DEVCAKE-MERGE" in anomaly or "parked" in anomaly.lower()
     assert not any("freshness-rereview:6" in c for c in fake.comments)
 
 

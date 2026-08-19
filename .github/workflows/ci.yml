@@ -4,8 +4,9 @@
 # group `ci` (app, app-test, admin, hello; load:true, sbom:false) → Redis →
 # ruff → pip-audit → pytest on fresh app-test → compose bring-up with
 # CI_COMPOSE_WITH_GITEA=1 → hello dispatch smoke → forge/PMO contract
-# batteries against bundled Gitea. Permissions: contents:read only (no
-# packages:write). No SBOM/provenance on this path — those are publish-only
+# batteries against bundled Gitea → admin SPA check:ui against compose
+# admin :8080. Permissions: contents:read only (no packages:write). No
+# SBOM/provenance on this path — those are publish-only
 # (docker-publish.yml). Does not run scripts/acceptance.py (token-gated).
 name: CI
 
@@ -169,6 +170,24 @@ jobs:
           # the bundled Gitea, zero external tokens. Exit code is the verdict.
           docker compose exec -T app python - < scripts/contract_tests_forge.py
           docker compose exec -T app python - < scripts/contract_tests_pmo.py
+
+      # After hello + contracts: pmo_intake.mjs mutates live config (then
+      # restores). Keep check:ui off the critical path of those batteries.
+      - name: Admin SPA browser UI suites (check:ui)
+        run: |
+          set -euo pipefail
+          npm ci --prefix admin/spa --no-audit --no-fund
+          # harness.mjs chromePath() looks under ~/.cache/ms-playwright for
+          # chromium_headless_shell-*/chrome-linux/headless_shell. Unset any
+          # PLAYWRIGHT_BROWSERS_PATH so install lands where the harness looks.
+          # --only-shell matches the harness (no full Chromium); --with-deps
+          # installs shared libs on ubuntu-latest runners.
+          unset PLAYWRIGHT_BROWSERS_PATH
+          npx --yes --prefix admin/spa playwright-core install --with-deps --only-shell chromium
+          export UI_BASE=http://127.0.0.1:8080
+          export ADMIN_USER="${ADMIN_USER:-admin}"
+          export ADMIN_PASSWORD="${ADMIN_PASSWORD:-Ci-admin-Pass1!}"
+          npm run check:ui --prefix admin/spa
 
       - name: Teardown compose stack
         if: always()

@@ -316,9 +316,14 @@ A UI change is done when you have personally seen:
    to as-found) to prove the save-revert regression; run it against
    stacks whose config you own. New interactions get
    real predicates added here (`checked(name, fn)` — never `check(name,
-   true)` after a bare wait), not just screenshots. Local-only for now —
-   CI has no live stack to run it against; the pure-node helper suites
-   (markdown/format) ride every run and need nothing live.
+   true)` after a bare wait), not just screenshots. CI runs the full
+   suite (`npm run check:ui`) against the compose-backed admin on
+   `:8080` after hello dispatch + forge/PMO contract batteries (founder
+   REVIEW_LEDGER item 9 — CI-minutes cost accepted). Local operators
+   still use the vite default (`:5199`) or
+   `UI_BASE=http://127.0.0.1:8080` against a stack whose config they
+   own. The pure-node helper suites (markdown/format) also ride the
+   early hermetic `test:helpers` CI step and need nothing live.
 4. For prod: `docker buildx bake admin && docker compose up -d admin` + load.
 
 Name anything left unproven (OAuth wizard, real save-PUT, etc.) instead of

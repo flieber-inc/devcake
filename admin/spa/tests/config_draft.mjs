@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { diffLeaves, applyEditsOnto, getIn } from "../src/lib/objectPath.js";
 import { metaFor, describeDiff } from "../src/lib/configLabels.js";
-import { newPmoCard, newRepoCard } from "../src/lib/cards.js";
+import { newPmoCard, newRepoCard, newSkillSourceCard } from "../src/lib/cards.js";
 import { draftErrors } from "../src/lib/draftErrors.js";
 
 let failed = 0;
@@ -77,7 +77,7 @@ check("rename inside a same-length list still wins over fresh", () => {
   assert.equal(getIn(next, "cfg.pmos.0.name"), "renamed");
 });
 
-check("scaffolds carry every server-model field (pmo: 11, repo: 9)", () => {
+check("scaffolds carry every server-model field (pmo, repo, skill-source)", () => {
   assert.deepEqual(Object.keys(newPmoCard("x", "linear")).sort(),
     ["api_base", "assignments", "discovery_routing", "intake_paused",
      "managed", "memory_repos", "name", "reference_repos", "repos",
@@ -86,6 +86,8 @@ check("scaffolds carry every server-model field (pmo: 11, repo: 9)", () => {
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
      "default_branch", "forge", "merge_retry_window_minutes",
      "merge_settle_minutes", "name", "url"]);
+  assert.deepEqual(Object.keys(newSkillSourceCard("x")).sort(),
+    ["default_branch", "forge", "name", "subdir", "url"]);
 });
 
 check("skill sources: name shape, dupes, repo-name collision", () => {

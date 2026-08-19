@@ -8,7 +8,7 @@ False/None/ok:False — /health must never 500.
 from __future__ import annotations
 
 import asyncio
-import os
+import logging
 import time
 
 import httpx
@@ -23,8 +23,7 @@ from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..prompts import templates as prompt_templates
 from ..telemetry import OO_URL
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+log = logging.getLogger("devcake.health")
 
 
 def _harness_pins(dev_types, receipt_store, bake_status) -> dict:
@@ -34,8 +33,10 @@ def _harness_pins(dev_types, receipt_store, bake_status) -> dict:
 
 
 async def _check_redis() -> bool:
+    from ..adapters.redis import redis_connect_env
     try:
-        r = aioredis.from_url(REDIS_URL, password=REDIS_PASSWORD or None, socket_timeout=3)
+        url, password = redis_connect_env()
+        r = aioredis.from_url(url, password=password or None, socket_timeout=3)
         try:
             return bool(await r.ping())
         finally:
@@ -215,8 +216,10 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
                                 caps, "attachments_supported", True))
                     except Exception:  # noqa: BLE001 — caps are advisory on /health
                         pass
-            except Exception:  # noqa: BLE001 — probe contract: any failure (incl. the 5s timeout) → ok:False; /health must never 500
+            except Exception as e:  # noqa: BLE001 — probe contract: any failure (incl. the 5s timeout) → ok:False + detail; /health must never 500
                 ok = False
+                detail = f"probe failed: {str(e)[:150]}"
+                log.warning("pmo probe %s failed: %s", inst.name, e)
             row = {"ts": now, "ok": ok, "detail": detail,
                    "relations_supported": rel, "attachments_supported": att}
             _pmo_probe_cache[key] = row

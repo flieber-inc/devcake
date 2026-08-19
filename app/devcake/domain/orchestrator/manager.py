@@ -28,19 +28,16 @@ from ...config import AppConfig, DevType
 from ...ports.pmo import PMOPort
 from ..blocker_locator import LEGACY_PMO_REFS
 from ..runs import RunManager
-from typing import TYPE_CHECKING as _TC
 
 from . import (activity_payload as activity_payload_mod, deliver, dispatch,
                feed, finalize, steward, review, schedule, sweeps)
-
-if _TC:
-    from ..forge_runtime import ForgeRuntime
 from .markers import LEGAL_OUTCOMES  # noqa: F401  — public re-export
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from ...ports.messaging import MessagingPort
+    from ..forge_runtime import ForgeRuntime
     from ..model import Activity, Mission, MissionType
     from ..run import Run
 

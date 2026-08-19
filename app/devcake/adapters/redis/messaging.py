@@ -11,6 +11,7 @@ import contextlib
 import json
 import hashlib
 import logging
+import os
 import secrets
 import time
 from datetime import datetime, timezone
@@ -67,6 +68,21 @@ def chunk_complete_key(run_id: str, chunk_id: str) -> str:
     return f"devcake:chunk-complete:{run_id}:{chunk_id}"
 
 
+DEFAULT_REDIS_URL = "redis://redis:6379/0"
+
+
+def redis_connect_env() -> tuple[str, str]:
+    """Resolve REDIS_URL / REDIS_PASSWORD at call time (not import time).
+
+    Shared by the composition root and /health redis probe so the two sites
+    cannot drift on defaults (ADR-0034 pinned mirror).
+    """
+    return (
+        os.environ.get("REDIS_URL", DEFAULT_REDIS_URL),
+        os.environ.get("REDIS_PASSWORD", ""),
+    )
+
+
 class Messaging:
     def __init__(self, url: str, password: str):
         self.redis = aioredis.from_url(url, password=password or None, decode_responses=True)
@@ -111,7 +127,7 @@ class Messaging:
             raise MessagingError(
                 f"create_run_user({run_id}): network/ACL failure: {e}") from e
         # the only place the plaintext exists app-side — register it here so
-        # redact() masks it in everything PMO-bound (docs/14 §5)
+        # redact() masks it in everything PMO-bound (docs/14 §7)
         register_runtime_secret(run_id, password)
         return password
 
@@ -123,6 +139,10 @@ class Messaging:
             raise MessagingError(
                 f"delete_run_user({run_id}): network/ACL failure: {e}") from e
         unregister_runtime_secret(run_id)
+
+    def clear_chunk_assemblies(self) -> None:
+        """Drop in-process chunk-reassembly state (clear-runs / wipe path)."""
+        self._chunks.clear()
 
     async def revoke_leftover_run_users(self) -> int:
         """Clear-runs bulk revoke of every leftover ``dev-*`` ACL user.

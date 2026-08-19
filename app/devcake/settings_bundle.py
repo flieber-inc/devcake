@@ -419,7 +419,7 @@ def _validate_secrets(sec, cfg: AppConfig | None, warnings: list[str]) -> dict:
         scope, _, instance = str(key).partition("-")
         if scope not in _CONN_FIELDS or not _INSTANCE_RE.fullmatch(instance):
             raise BundleError(422, f"secrets.connections[{key!r}]: key must be "
-                                   "{pmo|repo}-{instance}")
+                                   "{pmo|repo|skill}-{instance}")
         if not isinstance(fields, dict):
             raise BundleError(422, f"secrets.connections[{key!r}] must be a mapping")
         for field, value in fields.items():

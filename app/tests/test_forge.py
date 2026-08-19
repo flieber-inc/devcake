@@ -458,7 +458,9 @@ def test_gitea_pr_files_concatenates_across_pages():
         return pages.get(page, [])
 
     forge._req = _req
-    files = run_coro(forge.pr_files(9))
+    result = run_coro(forge.pr_files(9))
+    files = result.files
+    assert result.truncated is False
     assert len(files) == 51
     assert files[0] == PRFile(path="f0.py", status="modified",
                               additions=1, deletions=0)
@@ -642,7 +644,7 @@ def test_descriptor_complete_and_renderable(cls):
         assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"
     # token_patterns/secret_shape_prefixes MAY be deliberately empty (Gitea:
     # 40-hex tokens collide with git SHAs — value registration is the
-    # redaction line, docs/14 §5); when present they must compile/behave
+    # redaction line, docs/14 §7); when present they must compile/behave
     # templates must render without KeyError against the documented placeholders
     d.pr_instructions.format(key="DEV-1", title="t", default="main",
                              branch="devcake/DEV-1")
@@ -671,3 +673,64 @@ def test_gitlab_file_content_percent_encodes_ref():
         ad.file_content("a b.txt", "feature/x y#z"))
     assert "a%20b.txt" in seen["path"]
     assert "ref=feature%2Fx%20y%23z" in seen["path"]
+
+
+def test_gitlab_pr_files_sets_truncated_when_overflow():
+    """GitLab /changes overflow=true withholds paths — pr_files must surface
+    truncated=True so delivery never silently over-claims completeness."""
+    from devcake.ports.forge import PRFilesResult
+
+    forge = gl()
+    calls: list[str] = []
+
+    async def _req(method, path, **kw):
+        calls.append(path)
+        return {
+            "overflow": True,
+            "changes": [
+                {"new_path": "kept.py", "new_file": True},
+                {"new_path": "also.py", "deleted_file": False,
+                 "new_file": False, "renamed_file": False},
+            ],
+        }
+
+    forge._req = _req
+    result = run_coro(forge.pr_files(42))
+    assert isinstance(result, PRFilesResult)
+    assert result.truncated is True
+    assert [f.path for f in result.files] == ["kept.py", "also.py"]
+    # overflow remains after the access_raw_diffs retry
+    assert any("access_raw_diffs=true" in p for p in calls)
+
+
+def test_gitlab_pr_files_clears_truncated_via_access_raw_diffs():
+    """When /changes reports overflow, retry once with access_raw_diffs=true;
+    a clear response means truncated=False and the fuller path set."""
+    from devcake.ports.forge import PRFilesResult
+
+    forge = gl()
+    calls: list[str] = []
+
+    async def _req(method, path, **kw):
+        calls.append(path)
+        if "access_raw_diffs=true" in path:
+            return {
+                "overflow": False,
+                "changes": [
+                    {"new_path": "a.py", "new_file": True},
+                    {"new_path": "b.py", "new_file": True},
+                    {"new_path": "c.py", "new_file": True},
+                ],
+            }
+        return {
+            "overflow": True,
+            "changes": [{"new_path": "a.py", "new_file": True}],
+        }
+
+    forge._req = _req
+    result = run_coro(forge.pr_files(7))
+    assert isinstance(result, PRFilesResult)
+    assert result.truncated is False
+    assert [f.path for f in result.files] == ["a.py", "b.py", "c.py"]
+    assert calls[0].endswith("/merge_requests/7/changes")
+    assert "access_raw_diffs=true" in calls[1]

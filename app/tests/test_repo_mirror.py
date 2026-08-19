@@ -88,7 +88,7 @@ def make_cache(tmp_path, repos, *, internal=(), lfs=False, max_age=0,
             name = Path(args[1]).name.removesuffix(".git")
             inst = forges.instance(name)
             user = FakeForge.descriptor.clone_user
-            url = inst.url.replace("https://", f"https://{user}@")
+            url = RepoCache._origin_url(inst.url, user)
             return GitResult(0, url + "\n", "")
         return GitResult(0, "", "")
 
@@ -122,6 +122,43 @@ def test_first_sync_inits_fetches_heads_tags_and_sets_head(tmp_path):
     head = next(c for c in calls if "symbolic-ref" in c)
     assert head[-1] == "refs/heads/main"
     assert not any("lfs" in c for c in calls)          # lfs off by default
+
+
+def test_sync_one_injects_clone_user_on_http_url(tmp_path):
+    """sync_one must embed clone_user for http:// the same way as https://
+    (config._url_shape accepts http; remote_head already did)."""
+    http = Repo(name="alpha", url="http://gitea:3000/o/alpha.git",
+                fake_token_ro="ro-a", fake_token="rw-a")
+    cache, calls, _ = make_cache(tmp_path, [http])
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok
+    flat = ["\x1f".join(c) for c in calls]
+    assert any("remote\x1fadd\x1forigin\x1fhttp://oauth2@gitea:3000/o/alpha.git"
+               in c for c in flat)
+
+
+def test_sync_one_and_remote_head_share_origin_url_for_http_and_https(tmp_path):
+    """One construction path — sync_one origin and remote_head ls-remote URL
+    must agree for both schemes (ADR-0034 chokepoint)."""
+    cases = [
+        ("https://gitlab.com/o/alpha.git",
+         "https://oauth2@gitlab.com/o/alpha.git"),
+        ("http://gitea:3000/o/alpha.git",
+         "http://oauth2@gitea:3000/o/alpha.git"),
+    ]
+    for card_url, expected in cases:
+        repo = Repo(name="alpha", url=card_url,
+                    fake_token_ro="ro-a", fake_token="rw-a")
+        cache, calls, _ = make_cache(tmp_path / card_url.replace("://", "_")
+                                     .replace("/", "_"), [repo])
+        assert run_coro(cache.sync_one("alpha")).ok
+        add = next(c for c in calls if "remote" in c and "add" in c)
+        assert add[-1] == expected
+        # remote_head uses the same helper; capture ls-remote URL
+        calls.clear()
+        run_coro(cache.remote_head("alpha"))
+        ls = next(c for c in calls if "ls-remote" in c)
+        assert ls[1] == expected
 
 
 def test_existing_mirror_skips_init_and_fetches(tmp_path):
@@ -355,6 +392,27 @@ def test_has_last_good_requires_branch_content_not_bare_dir(tmp_path):
     assert not st.ok and st.synced_at is not None
     assert cache2.has_last_good("alpha")
     assert NullRepoCache().has_last_good("anything") is False
+
+
+def test_has_last_good_true_when_heads_only_in_packed_refs(tmp_path):
+    """After ADR-0024 offline `git gc`, heads live in packed-refs and loose
+    refs/heads is empty. A process restart clears the in-process ledger /
+    _synced_mono, so on-disk packed heads must still count as last-good."""
+    cache, _, _ = make_cache(tmp_path, [R1])
+    p = cache.mirror_path("alpha")
+    p.mkdir(parents=True)
+    (p / "refs" / "heads").mkdir(parents=True)
+    (p / "HEAD").write_text("ref: refs/heads/main\n")
+    (p / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled\n"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n"
+    )
+    assert not any((p / "refs" / "heads").iterdir())
+    assert cache.ledger == {} and cache._synced_mono == {}
+    assert cache.has_last_good("alpha") is True
+    # empty packed-refs / no heads lines must stay False (bare-init case)
+    (p / "packed-refs").write_text("# pack-refs with: peeled fully-peeled\n")
+    assert cache.has_last_good("alpha") is False
 
 
 # ── hygiene ──────────────────────────────────────────────────────────────────

@@ -1,9 +1,7 @@
-"""Mission dispatch, attempt counting, credentials, activity payload (docs/04 §3.1)."""
+"""Mission dispatch, attempt counting, credentials (docs/04 §3.1)."""
 
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import os
 from datetime import datetime
@@ -27,8 +25,7 @@ MEMORY_MOUNT_SENTENCE = (
     "contradict notes. Check both. Trust neither blindly."
 )
 from .. import failure_taxonomy
-from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
-                     STAGE_LABELS, derive)
+from ..model import Activity, LABEL_FAILED, Mission, MissionType, derive
 from ..workspaces import WorkspaceUnavailable
 from . import markers
 from . import schedule

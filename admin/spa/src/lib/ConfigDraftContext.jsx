@@ -23,6 +23,9 @@ export function ConfigDraftProvider({ children, health }) {
   // an internal Set would be lost and the card born name-locked.
   const pmoNewNamesState = useState(() => new Set());
   const repoNewNamesState = useState(() => new Set());
+  // skill sources live under Config → Skills (section unmounts on switch);
+  // same D5 #12 survival rule as PMO/repo name tracking
+  const skillSourceNewNamesState = useState(() => new Set());
 
   const reload = async () => {
     // stale-response guard: reload() fires from six places; two overlapping
@@ -47,7 +50,8 @@ export function ConfigDraftProvider({ children, health }) {
   const liveHealth = (health && health.harness_pins) ? health : healthInfo;
   return (
     <Ctx.Provider value={{ dr, reload, harnesses, healthInfo: liveHealth, loadErr,
-                           pmoNewNamesState, repoNewNamesState }}>
+                           pmoNewNamesState, repoNewNamesState,
+                           skillSourceNewNamesState }}>
       {children}
     </Ctx.Provider>
   );

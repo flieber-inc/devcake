@@ -126,14 +126,17 @@ DASHBOARD = {
     "tabs": [{
         "tabId": "default", "name": "v0",
         "panels": [
+            # Cost / outcome panels constrain to run.finalize (docs/12 §3–§5;
+            # tokens/cost and mission outcomes live there — not on dev.run).
             panel(1, "Cost per hour (USD, by dev type)",
                   "SELECT histogram(_timestamp, '1 hour') AS ts, devcake_dev_type, "
                   "SUM(devcake_cost_usd) AS cost FROM default "
-                  "WHERE devcake_cost_usd > 0 GROUP BY ts, devcake_dev_type ORDER BY ts",
+                  "WHERE operation_name = 'run.finalize' AND devcake_cost_usd > 0 "
+                  "GROUP BY ts, devcake_dev_type ORDER BY ts",
                   "line", 0, 0, 24, 9),
             panel(2, "Dev runs by outcome (daily)",
                   "SELECT histogram(_timestamp, '1 day') AS ts, devcake_outcome, "
-                  "COUNT(*) AS runs FROM default WHERE operation_name = 'dev.run' "
+                  "COUNT(*) AS runs FROM default WHERE operation_name = 'run.finalize' "
                   "GROUP BY ts, devcake_outcome ORDER BY ts",
                   "bar", 0, 9, 12, 9),
             panel(3, "Failure signals (kills, give-ups)",
@@ -147,7 +150,8 @@ DASHBOARD = {
             panel(4, "Estimated cost per hour (USD, by dev type — rate card)",
                   "SELECT histogram(_timestamp, '1 hour') AS ts, devcake_dev_type, "
                   "SUM(devcake_cost_usd_estimated) AS cost_estimated FROM default "
-                  "WHERE devcake_cost_usd_estimated > 0 "
+                  "WHERE operation_name = 'run.finalize' AND "
+                  "devcake_cost_usd_estimated > 0 "
                   "GROUP BY ts, devcake_dev_type ORDER BY ts",
                   "line", 0, 18, 24, 9),
         ],
@@ -190,8 +194,9 @@ if _failed(dest):
 # Full documented alert set (docs/15 §6, ISSUES #23). Every query targets a
 # span the app actually emits (verified against the tracer inventory):
 # mission.give_up, watchdog.kill, audit.event (devcake_audit_action mirrors
-# the audit log), breaker.trip, poll.cycle outcome, forge.probe_transient,
-# ingress.poison, and the devcake_cost_usd attribute on run.finalize.
+# the audit log), breaker.trip, poll.instance PMO_TRANSIENT (per-instance
+# child — not poll.cycle), forge.probe_transient, ingress.poison, and
+# devcake_cost_usd on run.finalize only.
 DAILY_COST_USD = float(env("OO_DAILY_COST_ALERT_USD", "50"))
 for name, sql, period, threshold in [
     ("devcake-give-up", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
@@ -204,12 +209,13 @@ for name, sql, period, threshold in [
     ("devcake-dev-auth-breaker", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
      "operation_name = 'breaker.trip'", 15, 1),
     ("devcake-pmo-forge-transient", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "(operation_name = 'poll.cycle' AND devcake_outcome = 'PMO_TRANSIENT') "
+     "(operation_name = 'poll.instance' AND devcake_outcome = 'PMO_TRANSIENT') "
      "OR operation_name = 'forge.probe_transient'", 15, 3),
     ("devcake-poison", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
      "operation_name = 'ingress.poison'", 10, 1),
     ("devcake-daily-cost", "SELECT SUM(CAST(devcake_cost_usd AS FLOAT)) as cnt "
-     "FROM \"default\" WHERE devcake_cost_usd IS NOT NULL", 60 * 24,
+     "FROM \"default\" WHERE operation_name = 'run.finalize' AND "
+     "devcake_cost_usd IS NOT NULL", 60 * 24,
      DAILY_COST_USD),
 ]:
     out = req("POST", "/default/alerts",

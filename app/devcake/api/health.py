@@ -153,7 +153,7 @@ async def _oo_ingest_check() -> dict:
 
 def unused_repo_names(config, dev_types=None) -> list[str]:
     """Configured repo adapters selected by NO PMO instance (neither work,
-    reference, nor memory) and by no Dev Type memory/skill-source binding."""
+    reference, nor memory) and by no Dev Type memory_repos binding."""
     selected: set[str] = set()
     for pmo in config.pmos:
         selected.update(pmo.repos)

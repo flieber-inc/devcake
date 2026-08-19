@@ -85,6 +85,20 @@ def sh(cmd):
         return f"<unavailable: {e}>"
 
 
+def verify_written_tar(archive: pathlib.Path) -> pathlib.Path:
+    """Full tzf walk of a just-written archive (same contract as backup_payload).
+
+    Returns the absolute path on success. Exits non-zero if the archive cannot
+    be listed — a pack that cannot be listed today must fail today.
+    """
+    r = subprocess.run(
+        ["tar", "tzf", str(archive)], capture_output=True, text=True)
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or f"rc {r.returncode}").strip()
+        sys.exit(f"data tar verify failed: {archive} — {detail}")
+    return archive.resolve()
+
+
 def export_stream(name, stream_type, start_us, end_us, out_path):
     """Page SELECT * into JSONL. Returns row count; loud on the page cap."""
     rows = 0
@@ -165,8 +179,11 @@ def main():
     if rc != 0:
         sys.exit(f"/data export failed (volume {volume}) — rc {rc}")
 
+    verified = verify_written_tar(out / tar_base)
+
     (out / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nreceipts pack: {out}")
+    print(f"  verified data tar: {verified}")
     if manifest["skipped_log_streams"]:
         print(f"  log streams NOT exported (named in MANIFEST): "
               f"{len(manifest['skipped_log_streams'])} — use --include-logs")

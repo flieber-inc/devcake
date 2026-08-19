@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { get, send } from "../api.js";
 import { Section } from "./Card.jsx";
 import { Field, Help, SecretField, Input } from "./Field.jsx";
@@ -16,6 +16,7 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 import { newPmoCard } from "../lib/cards.js";
+import { fleetSeedIndexes } from "../lib/fleetExpand.js";
 
 export default function PmoSection({ newNamesState, health = {}, healthError = false,
                                      onHealthChange }) {
@@ -33,11 +34,18 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   const [intakeErr, setIntakeErr] = useState({});
   // 2026-08 reviewer round: collapsed summary rows + a name filter past 5
   // instances — the ReposPage pattern (index-keyed expansion so a rename
-  // mid-edit never collapses the card being typed in; ≤3 start expanded)
+  // mid-edit never collapses the card being typed in; ≤3 start expanded).
+  // Seed once after the draft loads — useState often sees length 0 first.
   const [pmoFilter, setPmoFilter] = useState("");
-  const [expandedPmos, setExpandedPmos] = useState(() => new Set(
-    (dr.draft?.cfg.pmos || []).length <= 3
-      ? (dr.draft?.cfg.pmos || []).map((_, i) => i) : []));
+  const [expandedPmos, setExpandedPmos] = useState(() => new Set());
+  const pmoExpandSeeded = useRef(false);
+  const pmoCount = (dr.draft?.cfg.pmos || []).length;
+  useEffect(() => {
+    const indexes = fleetSeedIndexes(pmoCount, pmoExpandSeeded.current);
+    if (indexes === null) return;
+    pmoExpandSeeded.current = true;
+    setExpandedPmos(new Set(indexes));
+  }, [pmoCount]);
   const togglePmoCard = (i) => setExpandedPmos((prev) => {
     const next = new Set(prev);
     if (next.has(i)) next.delete(i); else next.add(i);
@@ -99,12 +107,30 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       action: () => { setField(path, value); setConfirm(null); },
     });
 
-  const test = async (kind) =>
-    setTestResult({ ...testResult, [kind]: await send("POST", `/connections/${kind}/test`) });
+  const test = async (kind) => {
+    try {
+      const result = await send("POST", `/connections/${kind}/test`);
+      setTestResult((prev) => ({ ...prev, [kind]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [kind]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
   // per-instance tests (schema v3 / M10): keyed pmo:{name} / forge:{name}
-  const testPmo = async (name) =>
-    setTestResult({ ...testResult,
-                    [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
+  const testPmo = async (name) => {
+    const key = `pmo:${name}`;
+    try {
+      const result = await send("POST", `/connections/pmo/${name}/test`);
+      setTestResult((prev) => ({ ...prev, [key]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [key]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
 
   // Narrow endpoint — never rewrites the pmos list (lost-update / secret-delete race).
   // State comes from App /health; only saved instances can toggle live.

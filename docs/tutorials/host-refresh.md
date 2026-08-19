@@ -47,7 +47,7 @@ live snapshots are crash-consistent only (`13` §8).
 |---|---|---|
 | `devcake_devcake_data` (`/data`) | **Wipe** | The only home of persisted app state — run store, config, `steward.yaml`, secrets. Wiping it is what makes the upgrade migration-free. |
 | `devcake_gitea_data` | **Keep** | Boards (Gitea Issues), internal repos, `activity-*` knowledge trail. No app state lives here; on a forge-issue host this volume *is* the board. |
-| OpenObserve volume | Optional | Exhaust, not knowledge (`docs/16` two-ledger doctrine). After Phase 0 it is fully disposable; keeping it costs only disk. |
+| OpenObserve volume | Optional | Exhaust, not knowledge ([ADR-0033](../adr/0033-discovery-routing-the-counterflow-lane.md) Decision 8: PMO = knowledge ledger, OpenObserve = operations exhaust; wiping OO must not change mission behavior). After Phase 0 it is fully disposable; keeping it costs only disk. |
 | `devcake_mirrors`, workspaces dir | Ignore | Disposable caches; the stack rebuilds them. |
 
 ```bash

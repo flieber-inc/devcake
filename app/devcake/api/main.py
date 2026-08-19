@@ -22,9 +22,7 @@ import logging
 import os
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
-from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from ..ports.executor import DuplicateRun
@@ -48,10 +46,6 @@ from .services import Services, _log_task_death, build_services
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("devcake")
-
-# ProxyTracer (api/poll.py precedent): resolves the real provider per span
-# start, so module scope needs no telemetry install
-tracer = trace.get_tracer("devcake")
 
 services: Services | None = None
 
@@ -329,12 +323,10 @@ async def export_runs_csv(mission_key: str | None = None,
 
 @app.get("/api/v1/runs/{run_id}")
 async def get_run(run_id: str):
-    from .runs_service import run_detail
+    from .runs_service import get_run_response
     s = svc()
-    if (run := s.store.get(run_id)) is None:
-        raise HTTPException(404)
-    return run_detail(run, s.config.cost_inputs,
-                      missions_cache=s.poll_rt.missions_cache)
+    return get_run_response(run_id, s.store, s.config.cost_inputs,
+                            missions_cache=s.poll_rt.missions_cache)
 
 
 TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
@@ -436,30 +428,19 @@ async def stop_run_route(run_id: str):
 @app.get("/api/v1/runs/{run_id}/log")
 async def get_run_log(run_id: str, tail: int | None = None):
     """Condensed harness output relayed live by the Dev (docs/11 §2a)."""
+    from .runs_service import get_run_log_response
     s = svc()
-    if s.store.get(run_id) is None:
-        raise HTTPException(404)
-    _seq, text = s.runlog.read(run_id, tail)
-    return PlainTextResponse(text)
+    return get_run_log_response(run_id, s.store, s.runlog, tail)
 
 
 @app.get("/api/v1/runs/{run_id}/log/stream")
 async def stream_run_log(run_id: str):
     """SSE follow: replays the stored log, then live lines until the run ends.
     X-Accel-Buffering disables nginx proxy buffering for this response."""
+    from .runs_service import stream_run_log_response
     s = svc()
-    if s.store.get(run_id) is None:
-        raise HTTPException(404)
-
-    def is_terminal() -> bool:
-        r = s.store.get(run_id)
-        return r is None or r.state in TERMINAL_STATES
-
-    return StreamingResponse(
-        s.runlog.stream(run_id, is_terminal),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return stream_run_log_response(
+        run_id, s.store, s.runlog, terminal_states=TERMINAL_STATES)
 
 
 @app.post("/api/v1/system/stop-runs")
@@ -478,42 +459,18 @@ async def clear_runs():
     Config, secrets, and everything in the PMO/forge are untouched (INV-1).
     In-flight Devs are stopped first. See docs/11 §3 and docs/10 §5.
     """
-    from .clear import clear_all
+    from .clear import run_clear_runs
     s = svc()
-    with tracer.start_as_current_span("system.clear_runs") as span:
-        # Serialize the wipe against EVERY dispatch path (audit D5 #2/#8 +
-        # re-audit #0/#6). Two locks, acquired in a fixed order:
-        #   • poll_rt.lock stops the periodic poll cycle (and force-poll) —
-        #     the poll loop takes it at cycle start, so no cycle runs.
-        #   • bootstrap.dispatch_lock is the true chokepoint: EVERY dispatch
-        #     flavor (poll, oauth, steward "run now", hello) creates its ACL
-        #     user + container inside RunBootstrap.launch under this lock.
-        #     poll_rt.lock alone missed the three non-poll paths, so the
-        #     ACL/SIGTERM race D3 targeted was still reachable — this closes it.
-        # Order poll_rt.lock → dispatch_lock matches the poll loop's own order
-        # (run_cycle holds poll_rt.lock, then launch takes dispatch_lock), so
-        # there is no lock-ordering inversion / deadlock.
-        async with s.poll_rt.lock, s.manager.bootstrap.dispatch_lock:
-            result = await clear_all(s.store, s.executor, s.messaging, s.runlog,
-                                     internal_forge=s.internal_forge,
-                                     run_manager=s.manager,
-                                     claims=s.claims, config=s.config)
-        s.poll_rt.missions_cache.clear()
-        for mgr in s.managers.values():
-            mgr._grace.clear()
-            mgr._grace_next.clear()
-        # ADR-0018: the backend-degraded map IS run history, so "start fresh"
-        # legitimately forgets it — and clearing it now avoids throttling with
-        # zero evidence until the next poll cycle recomputes.
-        s.shared_backend_degraded.clear()
-        # auth breakers stay — they reflect live credential health, not run history
-        span.set_attribute("devcake.clear.runs_deleted",
-                           int((result.get("local") or {}).get("runs_deleted") or 0))
-        span.set_attribute("devcake.clear.dagu_deleted",
-                           int((result.get("dagu") or {}).get("deleted") or 0))
-        span.set_attribute("devcake.clear.ok", bool(result.get("ok")))
-        return result
-
+    return await run_clear_runs(
+        store=s.store, executor=s.executor, messaging=s.messaging,
+        runlog=s.runlog, internal_forge=s.internal_forge,
+        run_manager=s.manager, claims=s.claims, config=s.config,
+        poll_lock=s.poll_rt.lock,
+        dispatch_lock=s.manager.bootstrap.dispatch_lock,
+        missions_cache=s.poll_rt.missions_cache,
+        managers=s.managers,
+        shared_backend_degraded=s.shared_backend_degraded,
+    )
 
 # ── Config CRUD (docs/11 §1; writes validate once here, hot-apply next cycle) ──
 

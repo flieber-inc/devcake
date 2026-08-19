@@ -111,7 +111,7 @@ LLM, and not by pretending tickets are sterile.
 | Per-repo `auto_merge` off (**app** does not merge that repo) | **Operator** (default off per card) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
 | Read-only forge PAT for non-EXECUTE stages | **Operator** (recommended) | Dismissable `forge-write-token` warning if missing |
 | Reviewer token (app-only; different account from write) | **Operator** (recommended for protected-branch formal approval) | Used by the app after REVIEW approve — never injected into a Dev; **no** dismissable health warning if missing (unlike RO) |
-| LEGAL_OUTCOMES + INV-4 (Dev never writes PMO; forged outcomes cannot approve own work via app deputy path) | **Product (hard)** | Enforced |
+| LEGAL_OUTCOMES + INV-4 (Dev never writes PMO via the app deputy path; forged outcomes cannot approve own work) | **Product (hard)** | Enforced for app-mediated PMO writes and outcome application; **residual** when a forge-issues board is the same repo a Dev holds a forge token for — dismissable `pmo-forge-mono-repo:*` warning (§8), not a dispatch gate |
 
 #### Per-repo `auto_merge` gates the app, not the Dev (normative)
 
@@ -210,7 +210,9 @@ agent work out.” Users are adults; the job of the docs and product is to
 ### What the app actually enforces (not “the model behaved”)
 
 - Single-team scoping — nothing outside the configured team key is polled.
-- Devs never call the PMO (INV-4); app finalization is the only PMO writer.
+- Devs never call the PMO as a client (INV-4); app finalization is the only
+  PMO writer. A forge-issues board that shares a work-repo forge token is a
+  warned residual (`pmo-forge-mono-repo:*`), not a second PMO client.
 - **`LEGAL_OUTCOMES`** (`03-mission-lifecycle.md` §6): e.g. EXECUTE claiming
   `reviewed` is refused; parked with `DEVCAKE-SKIP`, never acted on — so an
   agent cannot make the app merge by forging outcomes.
@@ -396,13 +398,16 @@ for **app-mediated** posts to PMO systems and forges, not a substitute for zone 
 |---|---|---|
 | `forge-write-token:{repo}` | **Warning** in `security_warnings` (dismissable) | No RO PAT — all stages get write token for that repo |
 | `repo-read-only:{repo}` | **Warning** in `security_warnings` (dismissable) | Repo is in a PMO work set but stores only a RO token (no write) — EXECUTE will fail at push; move it to reference repos or add a write token |
+| `pmo-forge-mono-repo:{pmo}` | **Warning** in `security_warnings` (dismissable) | Forge-issues `team_key` normalizes to the same repository path (and host) as a configured work-repo URL — Dev forge token can reach that Issues board; prefer a dedicated Issues repo or Linear PMO |
 | `gui-secrets-basic-auth` | **Info** in `security_warnings` | Reminder of control-plane posture |
 | Unprotected default branch | **Advisory** via `/health` `forge_protection` (SPA alert) — **not** in the `security_warnings` list | Operator must fix forge-side |
 | `secret_env` value missing **and** referenced by an mcp_setup_command | **Gate** (dispatch refused) | `blocked_reasons`/health names the var; self-heals the poll cycle after the value is pasted. Declared-but-unreferenced = warning only (log + ✗ on the Config card) |
 | `auto_merge` enable | Confirm dialog | Operator accepts **app**-driven merge after REVIEW (not a Dev sandbox) |
 | `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |
 | Out-of-pipeline merge | **Hard detection** | Comment + audit + health — does not prevent the merge |
-| INV-4 (Dev → PMO) | **Hard** | Architecture |
+| INV-4 (Dev → PMO) | **Hard** (app-mediated path) | Devs still have no PMO client and no PMO credential injected — the app is the sole PMO writer. **Residual** when a forge-issues board is the same repository a Dev holds a forge token for: forge-API reachability to that board is warned via `pmo-forge-mono-repo:*`, not refused at config save or dispatch |
+
+Prefer a **dedicated Issues repo** (or the provisioned `devcake-pmo/missions` board) **or** a **Linear** PMO so board credentials stay disjoint from work-repo forge tokens.
 
 Dismissing a warning is an **explicit acceptance** of that residual risk. Prefer
 keeping a mental (or health) inventory of active posture issues even after UI

@@ -43,8 +43,8 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
     runlogs/{run_id}.log        # condensed Dev stdout (run.log relay; SSE for admin terminal)
     events.jsonl                # append-only audit log: every PMO write + settings changes (profile ops, exports)
     mission_owner.json          # multi-PMO claim map (which instance owns which pmo_id)
-    profiles.json               # last-applied-profile breadcrumb (advisory; survives clear-runs —
-                                #   clear_local_state wipes runs/runlogs/events.jsonl only)
+    profiles.json               # last-applied-profile breadcrumb (advisory; cleared by clear-runs —
+                                #   clear_local_state also wipes runs/runlogs/events.jsonl; ADR-0013)
     baker_log.offset            # byte cursor for draining leftover harness_baker.jsonl (12 §1)
   # Host baker / pin factory (top-level on this volume — not under config/ or state/;
   # never part of a settings bundle — settings_bundle.py). Normative ops: 13 §6.
@@ -232,7 +232,7 @@ this section is the ledger, and each carries its tripwire:
 | Invariant | Where it lives | What breaks multi-process | Tripwire |
 | --- | --- | --- | --- |
 | Run records: one mutating object per run, "mutate-then-save promptly". `all()` returns SHARED cached objects; `get()` re-parses. | `adapters/files/run_store.py` parse cache | Two writers holding different objects last-writer-wins each other's fields | `Run.rev` lost-update fence in `save()` — collisions log loudly (`lost-update fence tripped`); writes still land. `activity.get` re-reads before saving a watermark so an offloaded finalize cannot be clobbered |
-| Give-up cursor: byte-offset incremental reader over `events.jsonl`, lock-free because the writer is synchronous in the same loop | `orchestrator/markers.py` `_GIVEUP_STATE` | A second writer interleaves records mid-read; attempt counting miscounts | none mechanical — the fence above catches the downstream symptom; a second process is out of contract |
+| Give-up cursor: byte-offset incremental reader over `events.jsonl`, marks keyed by `(instance, pmo_id)` (matches `feed._audit`), lock-free because the writer is synchronous in the same loop | `orchestrator/markers.py` `_GIVEUP_STATE` | A second writer interleaves records mid-read; attempt counting miscounts | none mechanical — the fence above catches the downstream symptom; a second process is out of contract |
 | `unlimited`-mode warning dedup: process-local set, at most one repeat per restart | `orchestrator/dispatch.py` `_UNLIMITED_WARNED` | Duplicate loop warnings per cycle (loud direction — annoying, safe) | none needed |
 | Discovery pending queue: advisory set of source pmo_ids awaiting routing (ADR-0033) | `orchestrator/manager.py` `_discoveries_pending` | Two processes double-dispatch discovery stewards for one family | none mechanical — the board is the truth (label + `posted − receipts` arithmetic; the sweep re-seeds after restart), and delivery dedup re-checks the recipient feed before every post |
 

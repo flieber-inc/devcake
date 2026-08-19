@@ -223,7 +223,7 @@ Two layers:
 | 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
 | 13 | `approve()`: False without reviewer; same write/reviewer token no-ops on `self_approval_blocked` forges and still posts on GitLab; `post_pr_comment` redacts known secret shapes on the wire (`test_forge_http.py`) |
 
-**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape, full URL assembly, PR-comment redaction, self-approval same-token honesty for GitHub/GitLab, and Gitea's `APPROVED` review event, so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` default/`DEVCAKE_CONTRACT_FORGE=gitea` lane (vendor drift); GitHub/GitLab live lanes stay operator-token-gated (`DEVCAKE_CONTRACT_FORGE` + `DEVCAKE_CONTRACT_REPO_URL` + adapter token envs) and are not the CI default.
+**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape, full URL assembly, PR-comment redaction, self-approval same-token honesty for GitHub/GitLab, and Gitea's `APPROVED` review event, so empty `_headers()` or a broken `_req` URL fails the suite. The live forge battery (`scripts/contract_tests_forge.py`) is **gitea-only** (default / `DEVCAKE_CONTRACT_FORGE=gitea`; non-gitea values hard-exit). GitHub/GitLab live forge proof is the M12 acceptance ritual / `scripts/acceptance.py` (tester-side tokens), not this script.
 
 ## 9. Adding a forge (checklist)
 

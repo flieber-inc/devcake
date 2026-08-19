@@ -135,6 +135,7 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
+  const [err, setErr] = useState("");
   // `presence` (bulk-scale 2026-08-02): a page rendering MANY SecretFields
   // (350 repo cards × 3 tokens) supplies one batched /secrets-check result
   // instead of a per-field fetch storm. Optional — every other call site
@@ -162,6 +163,7 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
   const submit = async () => {
     if (!draft) return;
     setBusy(true);
+    setErr("");
     try {
       if (checkKind === "harness") {
         await send("PUT", `/harness-secrets/${encodeURIComponent(refKey)}`, { value: draft });
@@ -171,10 +173,13 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
       }
       setDraft("");
       refresh();
+    } catch (e) {
+      setErr(String(e.message || e));
     } finally { setBusy(false); }
   };
   const remove = async () => {
     setBusy(true);
+    setErr("");
     try {
       if (checkKind === "harness") {
         await send("DELETE", `/harness-secrets/${encodeURIComponent(refKey)}`);
@@ -182,8 +187,11 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
         const [scope, instance, field] = refKey.split(":");
         await send("DELETE", `/secrets/${scope}/${instance}/${field}`);
       }
+      setAskRemove(false);
       refresh();
-    } finally { setBusy(false); setAskRemove(false); }
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally { setBusy(false); }
   };
   const shapeWarn = paste && draft && !secretShapeRe().test(draft) && draft.length < 8
     ? "That does not look like a secret — double-check before saving."
@@ -205,17 +213,21 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
       <div className="flex gap-2">
         <Input type="password" value={draft} aria-label={label}
           placeholder={status?.present ? "•••••• (stored)" : "paste value"}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => { setDraft(e.target.value); if (err) setErr(""); }}
           onKeyDown={(e) => e.key === "Enter" && submit()} />
         <button type="button" disabled={!draft || busy}
           className="rounded bg-neutral-800 px-3 text-sm text-white disabled:opacity-40 dark:bg-neutral-200 dark:text-black"
           onClick={submit}>{status?.present ? "Replace" : "Set"}</button>
       </div>
       {shapeWarn && <span className="mt-1 block text-xs text-amber-600">⚠ {shapeWarn}</span>}
+      {err && !askRemove && (
+        <span className="mt-1 block text-xs text-red-600 dark:text-red-400">✗ {err}</span>
+      )}
       {status && status.present && (
         <span className="mt-1 flex items-center gap-2 text-xs">
           <span className="text-green-700 dark:text-green-400">✓ stored</span>
-          <button type="button" disabled={busy} onClick={() => setAskRemove(true)}
+          <button type="button" disabled={busy}
+            onClick={() => { setErr(""); setAskRemove(true); }}
             className="text-red-600 underline-offset-2 hover:underline disabled:opacity-40 dark:text-red-400">
             Remove
           </button>
@@ -224,8 +236,9 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
       <ConfirmDialog open={askRemove}
         title={`Remove the stored value for ${label}?`}
         body="Runs that need it will fail until a new one is set."
-        confirmLabel="Remove" busy={busy}
-        onConfirm={remove} onCancel={() => setAskRemove(false)} />
+        confirmLabel="Remove" busy={busy} error={err}
+        onConfirm={remove}
+        onCancel={() => { setAskRemove(false); setErr(""); }} />
       {status && !status.present && (
         optional
           ? <span className="mt-1 block text-xs text-neutral-500 dark:text-neutral-400">not set (optional)</span>

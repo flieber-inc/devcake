@@ -5,7 +5,9 @@ executable after it — no module-level ``MissionManager.<attr> = ...`` bindings
 (the old façade mechanism) and no module-level ``def`` below the class.
 
 C6 rule: ``api/main.py`` is composition root + route forwards — every
-``@app.<verb>`` route body is ≤ 4 statements (docstring excluded). Endpoint
+``@app.<verb>`` route body is ≤ 4 statements (docstring excluded), counted
+**recursively** through compound bodies (``with``/``async with``/``try``/
+``if``/nested ``def``) so a single wrapper cannot hide work. Endpoint
 behavior lives in ``api/`` service modules. The allowlist below is the
 residual thick body at close-out; it may SHRINK, never grow — a new
 endpoint that needs more than a forward gets a service module.
@@ -23,8 +25,8 @@ MANAGER = (Path(__file__).parents[1] / "devcake" / "domain" / "orchestrator"
 MAIN = Path(__file__).parents[1] / "devcake" / "api" / "main.py"
 
 # Residual bodies allowed in main.py (C6 close-out; shrink opportunistically).
-# Only ``run_steward`` still exceeds 4 statements; everything else forwards
-# to a service module or is already a short forward (≤4). May SHRINK, never grow.
+# Only ``run_steward`` still exceeds 4 under the nesting-aware counter.
+# May SHRINK, never grow — do not add names that already satisfy ≤4.
 ROUTE_BODY_ALLOWLIST = {
     "run_steward",
 }
@@ -47,13 +49,78 @@ def test_manager_has_no_post_class_bindings():
         "the façade: " + "; ".join(offenders))
 
 
-def _is_route(node) -> bool:
+def _strip_docstring(body: list) -> list:
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        return body[1:]
+    return body
+
+
+def _count_statements(stmts: list) -> int:
+    """Recursive statement count for ADR-0015 route bodies.
+
+    Each statement counts once. Compound bodies (``If``/``For``/``While``/
+    ``With``/``AsyncWith``/``Try``/``Match``) contribute their nested
+    statements too. Nested ``def``/``async def``/``class`` inside a route
+    contribute their bodies (docstring stripped) so a local helper cannot
+    hide work either.
+    """
+    total = 0
+    for stmt in stmts:
+        total += 1
+        if isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+            total += _count_statements(stmt.body)
+            total += _count_statements(stmt.orelse)
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            total += _count_statements(stmt.body)
+        elif isinstance(stmt, ast.Try):
+            total += _count_statements(stmt.body)
+            for handler in stmt.handlers:
+                total += _count_statements(handler.body)
+            total += _count_statements(stmt.orelse)
+            total += _count_statements(stmt.finalbody)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            total += _count_statements(_strip_docstring(stmt.body))
+        elif isinstance(stmt, ast.Match):
+            for case in stmt.cases:
+                total += _count_statements(case.body)
+    return total
+
+
+def _app_aliases(tree: ast.AST) -> set[str]:
+    """Names bound to the FastAPI app object (``app`` plus simple aliases).
+
+    Recognizes ``api = app`` / ``api: FastAPI = app`` so ``@api.post(...)``
+    still counts as a route. Does not chase import graphs.
+    """
+    aliases = {"app"}
+    for node in tree.body:
+        value = None
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            value = node.value
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            value = node.value
+            targets = [node.target]
+        if value is None:
+            continue
+        if isinstance(value, ast.Name) and value.id in aliases:
+            for tgt in targets:
+                if isinstance(tgt, ast.Name):
+                    aliases.add(tgt.id)
+    return aliases
+
+
+def _is_route(node, app_names: set[str] | None = None) -> bool:
+    names = app_names if app_names is not None else {"app"}
     for dec in node.decorator_list:
         call = dec if isinstance(dec, ast.Call) else None
         target = call.func if call else dec
         if (isinstance(target, ast.Attribute)
                 and isinstance(target.value, ast.Name)
-                and target.value.id == "app"):
+                and target.value.id in names):
             return True
     return False
 
@@ -107,21 +174,59 @@ def test_lifespan_never_awaits_mirror_warmup():
         "warm-up must ride a background task, never boot")
 
 
+def test_count_statements_sees_with_wrapped_bodies():
+    """Nesting hole proof: top-level length ≤4 must not hide a thick ``with``.
+
+    Independent literals — five nested assigns inside one ``with`` → count 6
+    (the ``with`` plus each body stmt), not 1.
+    """
+    tree = ast.parse(
+        "async def route():\n"
+        "    with span:\n"
+        "        a = 1\n"
+        "        b = 2\n"
+        "        c = 3\n"
+        "        d = 4\n"
+        "        e = 5\n"
+    )
+    fn = tree.body[0]
+    body = _strip_docstring(fn.body)
+    assert len(body) == 1, "fixture must be a single top-level with"
+    assert _count_statements(body) == 6
+    assert _count_statements(body) > 4
+
+
+def test_is_route_recognizes_app_name_aliases():
+    tree = ast.parse(
+        "app = FastAPI()\n"
+        "api = app\n"
+        "@api.post('/x')\n"
+        "async def aliased():\n"
+        "    return 1\n"
+        "@app.get('/y')\n"
+        "async def plain():\n"
+        "    return 1\n"
+    )
+    aliases = _app_aliases(tree)
+    assert aliases == {"app", "api"}
+    by_name = {n.name: n for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert _is_route(by_name["aliased"], aliases)
+    assert _is_route(by_name["plain"], aliases)
+
+
 def test_main_route_bodies_stay_thin():
     tree = ast.parse(MAIN.read_text())
+    aliases = _app_aliases(tree)
     offenders = []
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if not _is_route(node) or node.name in ROUTE_BODY_ALLOWLIST:
+        if not _is_route(node, aliases) or node.name in ROUTE_BODY_ALLOWLIST:
             continue
-        body = node.body
-        if (body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
-            body = body[1:]                       # docstring doesn't count
-        if len(body) > 4:
-            offenders.append(f"{node.name} ({len(body)} statements)")
+        n = _count_statements(_strip_docstring(node.body))
+        if n > 4:
+            offenders.append(f"{node.name} ({n} statements)")
     assert not offenders, (
         "main.py route bodies grew past 4 statements — move the behavior to "
         "an api/ service module (ADR-0015 Decision 3): " + "; ".join(offenders))

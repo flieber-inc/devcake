@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -17,6 +17,8 @@ import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 import { newRepoCard } from "../lib/cards.js";
+import { unusedRepoNames } from "../lib/unusedRepos.js";
+import { fleetSeedIndexes } from "../lib/fleetExpand.js";
 
 // Repositories page (v0.1.1 B4, founder request): the repository cards +
 // merge policy lifted out of Configuration, plus the internal-forge
@@ -255,8 +257,16 @@ export default function ReposPage({ onHealthChange }) {
   // expanded (its form needs filling).
   // (keyed by INDEX, not name — a rename mid-edit must not collapse the
   // card being typed in; indexes only shift on the rare remove)
-  const [expandedRepos, setExpandedRepos] = useState(() => new Set(
-    draftRepoNames.length <= 3 ? draftRepoNames.map((_, i) => i) : []));
+  // Seed ONCE after the draft loads: useState often runs with length 0
+  // (draft still empty), which would leave small fleets collapsed.
+  const [expandedRepos, setExpandedRepos] = useState(() => new Set());
+  const repoExpandSeeded = useRef(false);
+  useEffect(() => {
+    const indexes = fleetSeedIndexes(draftRepoNames.length, repoExpandSeeded.current);
+    if (indexes === null) return;
+    repoExpandSeeded.current = true;
+    setExpandedRepos(new Set(indexes));
+  }, [draftRepoNames.length]);
   const toggleRepoCard = (i) => setExpandedRepos((prev) => {
     const next = new Set(prev);
     if (next.has(i)) next.delete(i); else next.add(i);
@@ -302,26 +312,14 @@ export default function ReposPage({ onHealthChange }) {
       action: () => { setField(path, value); setConfirm(null); },
     });
 
-  // computed from the DRAFT, so unsaved PMO (de)selections count. Unused ⇔
-  // selected by no PMO, so no per-PMO deselection cascade is ever needed.
+  // computed from the DRAFT, so unsaved PMO (de)selections count. Predicate
+  // matches /health.unused_repos (work + reference + memory; no skills).
   const removeUnusedRepos = () => {
-    const selected = new Set();
-    (cfg.pmos || []).forEach((p) => {
-      (p.repos || []).forEach((n) => selected.add(n));
-      (p.reference_repos || []).forEach((n) => selected.add(n));
-      (p.memory_repos || []).forEach((n) => selected.add(n));
-    });
-    Object.values(dr.draft.devTypes || {}).forEach((dt) => {
-      (dt.memory_repos || []).forEach((n) => selected.add(n));
-      (dt.skills || []).forEach((s) => {
-        if (s.includes("/")) selected.add(s.split("/")[0]);
-      });
-    });
-    const names = cfg.repos.map((r) => r.name).filter((n) => !selected.has(n));
+    const names = unusedRepoNames(cfg, dr.draft.devTypes || {});
     if (names.length === 0) {
       setConfirm({
         title: "No unused repositories",
-        body: "Every configured repository is selected as a work, reference, memory, or skill-source repo.",
+        body: "Every configured repository is selected as a work, reference, or memory repo on a board or Dev Type. Skill sources are managed separately under Configuration → Skills.",
         confirmLabel: "OK",
         action: () => setConfirm(null),
       });
@@ -331,7 +329,8 @@ export default function ReposPage({ onHealthChange }) {
     const more = names.length > 8 ? ` and ${names.length - 8} more` : "";
     setConfirm({
       title: `Remove ${names.length} unused repositor${names.length > 1 ? "ies" : "y"}?`,
-      body: `${shown}${more} — selected as work, reference, memory, or skill-source on no board or Dev Type. `
+      body: `${shown}${more} — selected as work, reference, or memory on no board or Dev Type. `
+        + "Skill sources are a separate connection type and are not repo cards. "
         + "Removing them and saving permanently deletes their stored tokens "
         + "(write / read-only / reviewer); a run still in flight on one fails "
         + "cleanly. Nothing changes until you Save.",
@@ -345,9 +344,18 @@ export default function ReposPage({ onHealthChange }) {
     });
   };
 
-  const testForge = async (name) =>
-    setTestResult({ ...testResult,
-                    [`forge:${name}`]: await send("POST", `/connections/forge/${name}/test`) });
+  const testForge = async (name) => {
+    const key = `forge:${name}`;
+    try {
+      const result = await send("POST", `/connections/forge/${name}/test`);
+      setTestResult((prev) => ({ ...prev, [key]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [key]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -360,7 +368,7 @@ export default function ReposPage({ onHealthChange }) {
         actions={
           <MoreMenu label="More repository actions" items={[
             { label: "Remove unused repositories…", danger: true,
-              desc: "Drop every repo no PMO selects as work or reference — their stored tokens are deleted on Save.",
+              desc: "Drop every repo no board or Dev Type selects as work, reference, or memory — their stored tokens are deleted on Save.",
               onClick: removeUnusedRepos },
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
               desc: CLEAR_SECRETS_ENTRY.desc,

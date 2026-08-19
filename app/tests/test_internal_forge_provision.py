@@ -403,6 +403,53 @@ def test_adopt_repairs_stripped_whitelist(tmp_path, monkeypatch):
     assert patched and patched[0]["approvals_whitelist_username"] == ["devcake-reviewer"]
 
 
+def test_ensure_protection_post_403_fails_loud(tmp_path, monkeypatch):
+    """Branch-protection create must not swallow 403 — provisioning that
+    silently ships without protection leaves merges forever-broken."""
+
+    def handler(request):
+        path = request.url.path
+        if request.method == "GET" and path.endswith("branch_protections/main"):
+            return httpx.Response(404, json={})
+        if request.method == "POST" and path.endswith("/branch_protections"):
+            return httpx.Response(403, json={"message": "forbidden"})
+        if request.method == "POST" and path.endswith("/tokens"):
+            return httpx.Response(201, json={"sha1": "tok-1234"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError) as e:
+        run_coro(prov.ensure_mission_repo("linear", "T-prot"))
+    assert "403" in str(e.value)
+    assert "branch_protections" in str(e.value)
+
+
+def test_ensure_protection_patch_422_fails_loud(tmp_path, monkeypatch):
+    """Repair PATCH of a stripped whitelist must fail loud on 422."""
+
+    def handler(request):
+        path = request.url.path
+        if request.method == "GET" and "/repos/devcake-repos/taken" in path \
+                and "branch_protections" not in path:
+            return httpx.Response(200, json={"name": "taken"})
+        if path.endswith("branch_protections/main"):
+            if request.method == "PATCH":
+                return httpx.Response(422, json={"message": "invalid"})
+            return httpx.Response(200, json={
+                "branch_name": "main", "required_approvals": 1,
+                "enable_approvals_whitelist": True,
+                "approvals_whitelist_username": []})
+        if request.method == "POST" and path.endswith("/tokens"):
+            return httpx.Response(201, json={"sha1": "tok-1234"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError) as e:
+        run_coro(prov.create_operator_repo("taken"))
+    assert "422" in str(e.value)
+    assert "branch_protections" in str(e.value)
+
+
 # ── activity repos (ADR-0014 D4) ─────────────────────────────────────────────
 
 import hashlib
@@ -587,6 +634,31 @@ def test_list_activity_repos_prefix_filter_paginated(tmp_path, monkeypatch):
     assert [r.name for r in repos] == ["activity-linear-t-1",
                                       "activity-linear-t-2"]
     assert repos[0].mission_key == "t-1"
+
+
+def test_list_repos_walks_past_first_page(tmp_path, monkeypatch):
+    """Mission-org list_repos must not stop at limit=50 — page 2+ repos
+    remain visible to the admin Repositories surface."""
+    page1 = [{"name": f"linear-t-{i}", "html_url": f"http://gitea/r{i}",
+              "size": 1, "open_pr_counter": 0, "updated_at": "2026-08-01"}
+             for i in range(1, 51)]
+    page2 = [{"name": "linear-t-51", "html_url": "http://gitea/r51",
+              "size": 2, "open_pr_counter": 1, "updated_at": "2026-08-02"}]
+    pages = {1: page1, 2: page2}
+    seen_pages = []
+
+    def handler(request):
+        assert request.url.path == "/api/v1/orgs/devcake-internal/repos"
+        page = int(request.url.params.get("page", "1"))
+        seen_pages.append(page)
+        return httpx.Response(200, json=pages.get(page, []))
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    repos = run_coro(prov.list_repos())
+    assert [r.name for r in repos] == [f"linear-t-{i}" for i in range(1, 52)]
+    assert repos[-1].mission_key == "T-51"
+    assert repos[-1].open_prs == 1
+    assert seen_pages == [1, 2]
 
 
 def test_delete_activity_repo_guarded(tmp_path, monkeypatch):

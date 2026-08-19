@@ -30,9 +30,9 @@ class PMOHealth(BaseModel):
 
 
 class PMOCapabilities(BaseModel):
-    """Adapter self-description. No v0 reader — the single Linear adapter's
-    quirks are handled where they occur — but future multi-PMO scheduling and
-    the admin UI select behavior on these flags (kept by founder decision)."""
+    """Adapter self-description consumed by the feed chokepoint, blocker
+    locator, health probe, and admin mission-action paths (attachments,
+    comment caps, global_ids, relations)."""
     projects_supported: bool
     project_labels_supported: bool
     attachment_max_bytes: int

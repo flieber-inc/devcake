@@ -168,8 +168,8 @@ checklist. Composition binds `manager.set_finalizer(mission_mgr)` at boot
 
 Finalization side-effect order is fixed:
 
-1. **Post transcript** — for issues, **always** upload `{seq}_{TYPE}.md` as a file attachment with a short referencing comment (`05-pmo-adapter.md` §4). Upload failure falls back to an inline (blockquoted) post so INV-5 still holds. *Idempotent:* skip when `"transcript"` is already in `run.finalized_steps` (not by scanning the feed for the attachment name).
-2. **Post token report** — the accompanying cost message (INV-5). *Idempotent:* `"token_report"` ∈ `run.finalized_steps` (and the run_id embedded in the message footer).
+1. **Post transcript** — for issues, **always** upload `{seq}_{TYPE}.md` as a file attachment with a short referencing comment (`05-pmo-adapter.md` §4). Upload failure falls back to an inline (blockquoted) post so INV-5 still holds on this path (named exceptions: truly FAILED / STEWARD / CURATOR — `00-overview.md`). *Idempotent:* skip when `"transcript"` is already in `run.finalized_steps` (not by scanning the feed for the attachment name).
+2. **Post token report** — the accompanying cost message (INV-5 on the issue mission-step path). *Idempotent:* `"token_report"` ∈ `run.finalized_steps` (and the run_id embedded in the message footer).
 3. **Compare-and-transition:**
 
 ```

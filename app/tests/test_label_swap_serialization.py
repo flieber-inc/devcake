@@ -58,6 +58,82 @@ def test_lock_registry_prunes_unheld():
     assert len(_toolkit._LABEL_LOCKS) <= _toolkit._LABEL_LOCKS_MAX + 1
 
 
+def test_eviction_does_not_orphan_a_waiter():
+    """Registry eviction must not drop a lock a waiter still references.
+
+    ``asyncio.Lock.locked()`` is False as soon as the holder releases, even
+    when another task is waiting on that same Lock. Deleting the registry
+    entry then lets a later lookup install a fresh Lock while the waiter
+    still serializes on the old one — two writers in one mission's critical
+    section (CAKE-48-class clobber). Idle entries with zero in-flight
+    entrants must still prune (see ``test_lock_registry_prunes_unheld``).
+    """
+    victim = "victim-orphan-waiter"
+    _toolkit._LABEL_LOCKS.clear()
+    _toolkit._LABEL_LOCK_OCCUPANCY.clear()
+
+    async def scenario():
+        for i in range(_toolkit._LABEL_LOCKS_MAX):
+            _toolkit._LABEL_LOCKS[f"filler-{i}"] = asyncio.Lock()
+
+        held = asyncio.Event()
+        release_holder = asyncio.Event()
+        eviction_done = asyncio.Event()
+        waiter_in_cs = asyncio.Event()
+        overlap = {"cur": 0, "max": 0}
+        locks = {}
+
+        async def holder():
+            async with label_write_lock(victim):
+                locks["original"] = _toolkit._label_lock(victim)
+                held.set()
+                await release_holder.wait()
+            # Just released: locked() is False while the waiter still
+            # references this Lock. Prune before yielding so the waiter
+            # cannot re-acquire first (the CAKE-74 window).
+            while len(_toolkit._LABEL_LOCKS) < _toolkit._LABEL_LOCKS_MAX:
+                _toolkit._label_lock(f"pressure-{len(_toolkit._LABEL_LOCKS)}")
+            _toolkit._label_lock("pressure-trigger")
+            locks["after"] = _toolkit._label_lock(victim)
+            eviction_done.set()
+
+        async def waiter():
+            await held.wait()
+            async with label_write_lock(victim):
+                overlap["cur"] += 1
+                overlap["max"] = max(overlap["max"], overlap["cur"])
+                waiter_in_cs.set()
+                await asyncio.sleep(0.05)
+                overlap["cur"] -= 1
+
+        async def third():
+            await eviction_done.wait()
+            await waiter_in_cs.wait()
+            async with label_write_lock(victim):
+                overlap["cur"] += 1
+                overlap["max"] = max(overlap["max"], overlap["cur"])
+                await asyncio.sleep(0)
+                overlap["cur"] -= 1
+
+        h = asyncio.create_task(holder())
+        await held.wait()
+        w = asyncio.create_task(waiter())
+        for _ in range(10):
+            await asyncio.sleep(0)
+        t = asyncio.create_task(third())
+        release_holder.set()
+        await asyncio.gather(h, w, t)
+
+        assert locks["after"] is locks["original"], (
+            "eviction replaced the mission lock while a waiter still "
+            "referenced it")
+        assert overlap["max"] == 1, (
+            f"concurrent critical sections on the same mission "
+            f"(max={overlap['max']})")
+
+    run_coro(scenario())
+
+
 # --- every adapter's swap holds the lock during its read -------------------
 # The first awaited call inside each critical section asserts the mission's
 # lock is held, then short-circuits — no further vendor fakes needed. Red

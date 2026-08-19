@@ -37,9 +37,28 @@ from devcake.domain.model import ALL_LABELS, MissionRef
 from devcake.ports.pmo import PMOTransient
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
+# Pinned check count (ids 1,2,3,4,5,5b,8,9,10,11,12,13,14,15). A vanished
+# check must fail the battery — never self-grade N/N from len(results)
+# alone (CAKE-83). SKIP rows still count toward EXPECTED_ROWS.
+EXPECTED_ROWS = 14
 results: list[tuple[str, str, str]] = []
 
 GITEA_URL = os.environ.get("DEVCAKE_CONTRACT_GITEA_URL", "http://gitea:3000")
+
+
+def grade_contract_battery(results, expected_rows):
+    """Return process exit code for a live contract battery.
+
+    Fails when ``len(results) != expected_rows`` (even if every present row is
+    PASS) or when any row is FAIL. SKIP rows count toward expected_rows and
+    do not fail the battery.
+    """
+    if len(results) != expected_rows:
+        return 1
+    for _num, _name, res in results:
+        if res == "FAIL" or res.startswith("FAIL"):
+            return 1
+    return 0
 
 
 def check(num: str, name: str, ok: bool, note: str = "", *,
@@ -510,16 +529,22 @@ async def _run_battery(pmo, system: str, team: str) -> int:
             check("15", "project full-mode mirrors the native feed",
                   ok15, note15)
 
-    width = max(len(n) for _, n, _ in results)
+    width = max((len(n) for _, n, _ in results), default=0)
     failures = skips = 0
     for num, name, res in results:
         print(f"  test {num:>2}  {name:<{width}}  {res}")
         failures += res.startswith(FAIL)
         skips += res.startswith(SKIP)
-    passed = len(results) - failures - skips
-    extra = f" ({skips} skipped)" if skips else ""
-    print(f"\n{passed}/{len(results)} passed{extra}")
-    return 1 if failures else 0
+    code = grade_contract_battery(results, EXPECTED_ROWS)
+    if len(results) != EXPECTED_ROWS:
+        ids = [num for num, _, _ in results]
+        print(f"\nexpected {EXPECTED_ROWS} checks, got {len(results)} "
+              f"(ids={ids})")
+    else:
+        passed = len(results) - failures - skips
+        extra = f" ({skips} skipped)" if skips else ""
+        print(f"\n{passed}/{EXPECTED_ROWS} passed{extra}")
+    return code
 
 
 asyncio.run(main())

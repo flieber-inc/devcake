@@ -11,7 +11,7 @@
 | [0001](0001-redis-streams-for-dev-callback.md) | Redis Streams for the Dev → App channel | Accepted. Notes its own vaporware honestly (`devcake-relay` never shipped). ACL durability added 2026-08 (docs/09 §1a) |
 | [0002](0002-file-based-persistence.md) | File-based local persistence | Accepted. **Amended 2026-08-04**: the backup sentence is superseded by docs/13 §8 (mirrors + workspaces exist now) |
 | [0003](0003-pmo-as-single-source-of-truth.md) | PMO as single source of truth | Accepted — INV-1's home |
-| [0004](0004-label-namespace-and-versioning.md) | Label namespace and versioning | Accepted |
+| [0004](0004-label-namespace-and-versioning.md) | Label namespace and versioning | Accepted. **Amended:** eleven managed labels incl. `DEVCAKE-DISCOVERY` (`02` §5 / ADR-0033) |
 | [0005](0005-no-lock-atomicity-via-pmo-state.md) | No-lock atomicity via PMO state | Accepted. The single-process premise is now test-enforced (`test_repo_structural.py`) |
 | [0006](0006-projects-always-decompose.md) | Projects always decompose | Accepted |
 | [0007](0007-mission-ordering-and-human-handoff.md) | Mission ordering + human hand-off | Accepted |

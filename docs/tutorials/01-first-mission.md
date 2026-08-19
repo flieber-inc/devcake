@@ -19,9 +19,14 @@ Every step mirrors the project's integration-test shape.
   `contents` and `pull_requests` read/write. Prefer also a **read-only PAT** for
   non-EXECUTE stages. Enable **branch protection** on the default branch before
   production-ish use (`13` §8a).
-- **Model credentials** — subscriptions preferred:
-  - Claude Code: `claude setup-token` → paste in Config.
-  - Grok Build: OAuth via DevCake in step 3.
+- **Both default-staffing credentials** — default Mission Types send
+  ONBOARD / PLAN / REVIEW to Dev Type **`judgment`** (`claude-code`) and
+  EXECUTE to **`implementer`** (`grok-build`). A literal reader needs **both**
+  before creating the mission; missing Claude fails judgment stages, missing
+  Grok fails EXECUTE. Registry table: [`08-harness-templates.md`](../08-harness-templates.md) §4.
+  - Claude Code: `claude setup-token` → paste `CLAUDE_CODE_OAUTH_TOKEN` in
+    Configuration → Dev Types (or `ANTHROPIC_API_KEY`).
+  - Grok Build: device-code OAuth via DevCake in step 3 (or `XAI_API_KEY`).
 
 ## Step 1 — Bootstrap and start
 
@@ -55,12 +60,24 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 ### Step 1b — Secrets and connections
 
 1. **PMO** (`#/pmo`, under Adapters) — Add PMO instance → team key → **Set** Linear API key → Test.
-2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token;
-   prefer **RO** for non-EXECUTE and a **reviewer** token (app-only, different
-   account) for formal forge approval → Test. Repositories and PMO both live
-   under the sidebar's **Adapters** group.
-3. **Configuration → Dev Types** — Assign harness secrets / OAuth.
-4. On **Repositories**, leave each card's **`auto_merge` OFF** for this tutorial.
+2. **Repositories** (`#/repos`) — Add repository → choose a short card **name**
+   (lowercase alnum, ≤12 chars — this is the `devcake-repo:<name>` marker) →
+   URL → **Set** write token; prefer **RO** for non-EXECUTE and a **reviewer**
+   token (app-only, different account) for formal forge approval → Test.
+   Repositories and PMO both live under the sidebar's **Adapters** group.
+3. **Bind that card on the PMO instance** — still on **PMO** (`#/pmo`), under
+   the instance's **Repositories** chips, select the sandbox card you just
+   added (first selected = default for unmarked tickets). **Save** the shared
+   draft. Without this bind, the instance's work-repo set stays empty and
+   missions take the **zero-repo** path: bundled internal Gitea with forced
+   auto-merge — not a GitHub PR ([operator-drill](operator-drill.md) §3;
+   ADR-0010 / `docs/06`).
+4. **Configuration → Dev Types** — set **both** harness credentials from
+   *What you need* (Claude for `judgment`, Grok OAuth or key for
+   `implementer`).
+5. On **Repositories**, leave the **external** card's **`auto_merge` OFF** for
+   this tutorial (after REVIEW approve you expect `DEVCAKE-MERGE` and merge
+   with `gh` yourself).
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
@@ -79,7 +96,10 @@ Six top-level sidebar items (Adapters expands to two pages — seven surfaces to
 ## Step 3 — Log Grok in (one time)
 
 On Configuration → Dev Types, **implementer** → **Connect via OAuth…** — dialog shows URL + code.
-(Or `./scripts/grok_login.sh`.) Session is DevCake's own.
+(Or `./scripts/grok_login.sh`.) Session is DevCake's own. Device-code OAuth
+rides the operator's **xAI account billing / subscription quota** (same trust
+as pasting an `XAI_API_KEY`). Grok's feed cost is an **app-side rate-card
+estimate** (`08` §5 / ADR-0021) — the harness does not report billed USD.
 
 ## Step 3b — Supply-chain checklist (before you create the mission)
 
@@ -103,7 +123,11 @@ Full list: `14-security.md` §9.
 In your sandbox Linear team, create an issue:
 
 - **Title:** small and real — e.g. *"Add input validation to the parser, with tests"*.
-- **Description:** brief a competent contractor.
+- **Description:** brief a competent contractor, and include a backticked
+  work-repo marker matching the card name from step 1b, e.g.
+  `` `devcake-repo:sandbox` `` (lowercase alnum, ≤12). Resolution order is
+  marker → instance default (first chip) → zero-repo; this tutorial needs the
+  external card, so put the marker (or rely on the chip default from step 1b).
 - **Label:** **`DEVCAKE`** (opt-in adoption).
 - **Status:** Backlog. **Priority:** your call.
 

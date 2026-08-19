@@ -2,7 +2,7 @@
 
 **Your board is the interface. Tickets in, pull requests out.**
 
-<img width="350" height="350" alt="devcake" src="https://github.com/user-attachments/assets/52a7ffec-26b3-47bc-9973-9c9e7ce25ed5" />
+<img width="350" height="350" alt="devcake" src="docs/img/readme-hero.png" />
 
 DevCake staffs the task board you already use with AI developers. You write a
 ticket in plain language; disposable containers triage, plan, implement, and

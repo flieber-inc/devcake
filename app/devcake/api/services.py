@@ -241,7 +241,7 @@ def build_services() -> Services:
         repo_cache=repo_cache, internal_forge=internal_forge,
         skill_service=SkillService(internal_forge, repo_cache=repo_cache,
                                    config=config),
-        claims=make_claims_writer(config, internal_forge))
+        claims=make_claims_writer(config))
     s.cron = CronService(config, s.managers, claims=s.claims,
                          dev_types=s.dev_types, store=CronStore())
 

@@ -186,7 +186,7 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
   `{"params": "{\"RUN_ID\": \"LINEAR-ENG-142-3-EXECUTE-9GX2TQ\", \"IMAGE\": \"devcake/dev-claude-code:latest\", \"TRACEPARENT\": \"<w3c>\", …}", "dagRunId": "LINEAR-ENG-142-3-EXECUTE-9GX2TQ"}` —
   `params` is a JSON-**encoded string** of named params; the client-chosen `dagRunId` (`^[-a-zA-Z0-9_]+$`, ≤ 64 chars — our human-readable run id fits) makes duplicate triggers return **HTTP 409** `already_exists` (`04-orchestrator.md` §6.3). Auth: **HTTP Basic** with `DAGU_USER` / `DAGU_PASSWORD` (same as `DAGU_AUTH_MODE=basic` above) — not a Bearer API key.
 - **Stop (watchdog kill, verified):** `POST /api/v1/dag-runs/dev-run/{dagRunId}/stop`, empty body, returns 200 immediately (async).
-- **Params are visible unmasked in the Dagu UI and run API** (verified) — therefore params carry only non-secret values (`RUN_ID`, `IMAGE`, `TRACEPARENT`) **plus one deliberate exception**: the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD`), acceptable because the Dagu UI/API is itself authenticated and the credential is revoked at finalization (`09-messaging.md` §1a). All real secrets reach the Dev via the Redis `runspec.get` channel (`14-security.md` §4). Keep params small (they travel as one CLI arg; practical ceiling ~128 KiB).
+- **Params are visible unmasked in the Dagu UI and run API** (verified) — therefore params carry only non-secret values (`RUN_ID`, `IMAGE`, `TRACEPARENT`, plus `MEMORY_BYTES` / `NANO_CPUS` / `PIDS` container limits since 2026-08-13) **plus one deliberate exception**: the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD`), acceptable because the Dagu UI/API is itself authenticated and the credential is revoked at finalization (`09-messaging.md` §1a). All real secrets reach the Dev via the Redis `runspec.get` channel (`14-security.md` §4). Keep params small (they travel as one CLI arg; practical ceiling ~128 KiB).
 - **The single `dev-run` DAG** (`dagu/dags/dev-run.yaml`) — all business logic stays in the app; the DAG is a dumb container launcher. Since 2026-08-13 both steps use the **docker-executor form** (`action: docker.run` — image/container_name/pull/auto_remove/volumes under `with:`, env as SDK `container.Env`, network + cgroup limits under `host:`), live-verified end-to-end on 2.13.0 (hello battery, mounts re-measured, limits on `docker inspect`). The excerpt below is the OLD `container:`-shorthand shape kept for history — the committed dev-run.yaml is the truth:
 
 ```yaml
@@ -200,9 +200,10 @@ preconditions:                  # fence manual runs: default/empty RUN_ID must n
   - condition: "${params.RUN_ID}"
     expected: "re:^[A-Za-z0-9_-]{6,64}$"
 
-params:                         # RUN_ID, IMAGE, TRACEPARENT, REDIS_USER, REDIS_PASSWORD
-  - {name: RUN_ID, default: ""}     #   (per-run ACL user dev-{run_id}, 09 §1a — the one
-  # …                               #    param-borne secret; revoked at finalization)
+params:                         # RUN_ID, IMAGE, TRACEPARENT, MEMORY_BYTES, NANO_CPUS, PIDS,
+  - {name: RUN_ID, default: ""}     #   REDIS_USER, REDIS_PASSWORD (per-run ACL user
+  # …                               #   dev-{run_id}, 09 §1a — the one param-borne secret;
+                                    #   revoked at finalization)
 
 steps:
   - id: provision                    # ADR-0025 step 1: trusted code, no agent

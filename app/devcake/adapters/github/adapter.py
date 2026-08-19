@@ -4,7 +4,6 @@ health probe. The GitLab twin is adapters/gitlab (docs/06 §7)."""
 
 import asyncio
 import logging
-import os
 from typing import Any, Optional
 
 import httpx

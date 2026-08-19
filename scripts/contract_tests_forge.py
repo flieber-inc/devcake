@@ -214,7 +214,7 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
         ok8, note8 = False, str(e)[:150]
     check("8", "squash merge lands", ok8, note8)
 
-    # 9 — already-merged merge() is SUCCESS (ISSUES #6 redelivery honesty)
+    # 9 — already-merged merge() is SUCCESS (redelivery honesty)
     ok9, note9 = True, ""
     try:
         await forge.merge(n)
@@ -255,8 +255,7 @@ def main():
     lane = os.environ.get("DEVCAKE_CONTRACT_FORGE", "gitea")
     if lane != "gitea":
         sys.exit(f"lane {lane!r}: external-forge lanes run via the M12 "
-                 "acceptance ritual (needs tester-side tokens + "
-                 "DEVCAKE_CONTRACT_REPO_URL) — ISSUES #30")
+                 "acceptance ritual (needs tester-side tokens)")
     fixture = GiteaFixture()
     inst = fixture.up()
     print(f"lane: gitea ({inst.url})")

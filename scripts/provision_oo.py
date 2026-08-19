@@ -50,7 +50,7 @@ def req(method, path, body=None, auth=None):
 
 def ensure_ingest_user():
     """Idempotently create the OO service account the stack authenticates
-    with (collector, fluentbit, app push_oo_log) — ISSUES #13.
+    with (collector, fluentbit, app push_oo_log).
 
     Primary path: app boot runs the same logic
     (``devcake.telemetry.oo_provision.ensure_oo_ingest_user``) so a filled
@@ -69,7 +69,7 @@ def ensure_ingest_user():
     password = env("OO_INGEST_PASSWORD", "")
     if not email.strip() or not password.strip():
         sys.exit("OO_INGEST_EMAIL / OO_INGEST_PASSWORD must be set in .env "
-                 "(the OO service account — ISSUES #13)")
+                 "(the OO service account)")
     ingest_auth = base64.b64encode(f"{email}:{password}".encode()).decode()
 
     def creds_work() -> bool:
@@ -191,7 +191,7 @@ dest = req("POST", "/alerts/destinations",
 print("destination:", dest)
 if _failed(dest):
     failures.append(f"destination: {dest}")
-# Full documented alert set (docs/15 §6, ISSUES #23). Every query targets a
+# Full documented alert set (docs/15 §6). Every query targets a
 # span the app actually emits (verified against the tracer inventory):
 # mission.give_up, watchdog.kill, audit.event (devcake_audit_action mirrors
 # the audit log), breaker.trip, poll.instance PMO_TRANSIENT (per-instance

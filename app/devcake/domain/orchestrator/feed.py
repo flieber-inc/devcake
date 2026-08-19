@@ -250,9 +250,9 @@ def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
                             "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
     mgr._grace_next.add(pmo_id)
     # mirror every audit action as a span so OO alerts can fire on them
-    # (ISSUES #23: `devcake_needs_human` was a file-only record no alert
-    # could ever see). One span name, action as attribute — the alert set
-    # queries devcake_audit_action.
+    # (`devcake_needs_human` was a file-only record no alert could ever see).
+    # One span name, action as attribute — the alert set queries
+    # devcake_audit_action.
     with tracer.start_as_current_span("audit.event") as span:
         span.set_attribute("devcake.audit.action", action)
         span.set_attribute("devcake.pmo.id", pmo_id)
@@ -262,7 +262,7 @@ def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
 def _trip_breaker(mgr, name: str, reason: str) -> None:
     """Single choke point for tripping a breaker: sets the in-memory dict
     AND emits a span — breakers had no telemetry at all, so the documented
-    DEV_AUTH alert could never fire (ISSUES #23)."""
+    DEV_AUTH alert could never fire."""
     mgr.breakers[name] = reason
     with tracer.start_as_current_span("breaker.trip") as span:
         span.set_attribute("devcake.breaker", name)

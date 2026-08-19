@@ -608,7 +608,7 @@ class GiteaIssuesAdapter:
         swap_labels PUT-replaces the issue's FULL label set, so any rewrite
         computed from a truncated registry read silently erases labels past
         the page boundary from the vendor system (2026-08-12 audit F8 — the
-        ISSUES #7 destruction class; this is the REST twin of Linear's
+        truncated-rewrite destruction class; this is the REST twin of Linear's
         `_refuse_truncated_rewrite`). Raise at the ceiling, never truncate:
         every consumer of this read feeds a full-set rewrite, a create
         decision, or an ensure that would mint an uppercase duplicate."""

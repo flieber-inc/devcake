@@ -630,7 +630,7 @@ def harness_main() -> None:
 
     provider = TracerProvider(resource=Resource.create({"service.name": "devcake-dev"}))
     # unauthenticated: the endpoint is the stack's otel-collector, which alone
-    # holds the OpenObserve credentials — Devs carry none (ISSUES #13)
+    # holds the OpenObserve credentials — Devs carry none
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(
         endpoint=env["OTEL_EXPORTER_OTLP_ENDPOINT"])))
     trace.set_tracer_provider(provider)

@@ -1,4 +1,4 @@
-# DevCake otel-collector (docs/12 §1, ISSUES #13): Dev containers on
+# DevCake otel-collector (docs/12 §1): Dev containers on
 # devcake_runtime export OTLP here UNAUTHENTICATED; this collector alone holds
 # the OpenObserve service-account credentials and forwards traces upstream.
 # Devs therefore carry no OO credentials at all — the collector is the

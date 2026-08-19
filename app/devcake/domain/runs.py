@@ -364,7 +364,7 @@ class RunManager:
             if self.oauth_mgr:
                 await self.oauth_mgr.on_result(run_id, payload)
         elif kind == "run.artifacts":
-            # Terminal + prior finalize work ⇒ true redelivery no-op (ISSUES #1).
+            # Terminal + prior finalize work ⇒ true redelivery no-op.
             # Terminal with empty finalized_steps ⇒ first delivery after a
             # premature orphan/kill (boot reconcile or kill-race) — reopen
             # finalize so INV-5 / entrypoint _on_term are not dropped (CAKE-73).
@@ -476,9 +476,9 @@ class RunManager:
         # method: the teardown below yields repeatedly, and finalize can claim
         # or finish the run in those windows (2026-08 evaluation TOCTOU).
         prior_state = run.state
-        # Fail-safe teardown (ISSUES #3): stop/_ship_failure may raise on
-        # transport errors; ACL delete + terminal state MUST still run so the
-        # run leaves store.active() and the watchdog does not re-kill forever.
+        # Fail-safe teardown: stop/_ship_failure may raise on transport errors;
+        # ACL delete + terminal state MUST still run so the run leaves
+        # store.active() and the watchdog does not re-kill forever.
         try:
             try:
                 await self.executor.stop(run.run_id)

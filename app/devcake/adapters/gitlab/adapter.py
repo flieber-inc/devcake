@@ -162,7 +162,7 @@ class GitLabForge:
     async def merge(self, pr_number: int) -> None:
         """Squash-merge. 409 (SHA/branch race) is a transient race, not a real
         failure — retried in place per the port contract (docs/06 §5).
-        Already-merged is success (ISSUES #6)."""
+        Already-merged is success."""
         for attempt in range(3):
             try:
                 await self._req("PUT", f"/merge_requests/{pr_number}/merge",

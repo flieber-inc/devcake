@@ -1,7 +1,7 @@
 """OpenTelemetry setup (docs/12 §1). The APP exports OTLP straight to
 OpenObserve with the OO_INGEST_* service account; DEV containers export
 unauthenticated to the inserted otel-collector (OTEL_COLLECTOR_URL), which
-alone holds the OO credentials — Devs carry none at all (ISSUES #13).
+alone holds the OO credentials — Devs carry none at all.
 
 The exporter is built in code rather than via OTEL_* env vars so the Basic-auth
 header never needs the env-var percent-encoding dance.

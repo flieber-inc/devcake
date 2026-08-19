@@ -152,8 +152,8 @@ class GitHubForge:
         """Squash-merge. 409 ("head branch was modified") is a transient race,
         not a real failure — retried in place per the port contract (docs/06 §5)
         so racy-but-healthy merges never park on DEVCAKE-MERGE. Already-merged
-        is success (ISSUES #6): redelivery after a successful merge must not
-        report auto-merge failure."""
+        is success: redelivery after a successful merge must not report
+        auto-merge failure."""
         for attempt in range(3):
             try:
                 await self._req("PUT", f"/pulls/{pr_number}/merge",
@@ -162,7 +162,7 @@ class GitHubForge:
             except ForgeError as e:
                 # 409: transient race — retry without probing. Other statuses
                 # (405/422 already-merged) probe PR state; redelivery must not
-                # report failure on a merged PR (ISSUES #6).
+                # report failure on a merged PR.
                 if e.status == 409 and attempt < 2:
                     await asyncio.sleep(3)
                     continue

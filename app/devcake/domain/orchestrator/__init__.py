@@ -1,7 +1,7 @@
 """Orchestrator package (docs/04): MissionManager façade + focused modules.
 
-Split from the former god-module for maintainability (ISSUES #36). Public
-imports remain `from devcake.domain.orchestrator import MissionManager, ...`.
+Split from the former god-module for maintainability. Public imports remain
+`from devcake.domain.orchestrator import MissionManager, ...`.
 """
 
 from ..steward_service import StewardBusy, StewardService, StewardUnconfigured

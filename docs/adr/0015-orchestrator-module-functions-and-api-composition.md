@@ -6,8 +6,8 @@
   pre-v0.2 structural plan. C1 (this ADR + the binding-block removal + the
   structure guard test) is the normative anchor; C2/C3 finish the orchestrator,
   C4–C6 split the API composition root, C7 splits the admin ConfigPage.
-- **Context:** ISSUES #36 split the ~1.8k-line orchestrator god module into
-  `domain/orchestrator/` but left a *transitional façade*: ~50 free functions
+- **Context:** The orchestrator package split moved the ~1.8k-line orchestrator
+  god module into `domain/orchestrator/` but left a *transitional façade*: ~50 free functions
   taking `self`, bound onto `MissionManager` by module-level assignment after
   the class body. Nothing was greppable as a method, `staticmethod()`/
   `classmethod()` wrappers hid calling conventions, and the test suite grew

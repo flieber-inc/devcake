@@ -129,7 +129,7 @@ export default function deriveAlerts(health) {
     });
   }
 
-  // server-computed credential-posture warnings (ISSUES #13/#15): loud but
+  // server-computed credential-posture warnings: loud but
   // dismissable — the operator may accept the risk; a changed body (e.g. a
   // different missing credential) changes the key and resurfaces the alert
   for (const w of health.security_warnings || []) {

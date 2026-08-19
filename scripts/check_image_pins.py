@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Digest-pin gate (docs/16 M8, ISSUES #29): every external base image —
+"""Digest-pin gate (docs/16 M8): every external base image —
 Dockerfile `# syntax=` frontends / ARG defaults / FROM lines / COPY --from
 refs and compose `image:` values — must be pinned `tag@sha256:<64 hex>`.
 Local bake images (devcake/*) and stage references are exempt; every
@@ -369,7 +369,7 @@ def main() -> int:
     for f in py_files:
         check_python_script(f, offenders)
     if offenders:
-        print("UNPINNED image references (ISSUES #29 — pin tag@sha256:…):")
+        print("UNPINNED image references (pin tag@sha256:…):")
         for o in offenders:
             print(f"  {o}")
         return 1

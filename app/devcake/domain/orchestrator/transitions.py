@@ -189,7 +189,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
         # cleanly, so it never counts toward max_attempts; the stage label
         # stays so work resumes at the same step once the human removes
         # DEVCAKE-NEEDS-HUMAN. Checkpointed so redelivery never re-posts
-        # the baton (ISSUES #5).
+        # the baton.
         async def _human():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
                                        remove=set(), add={LABEL_NEEDS_HUMAN})

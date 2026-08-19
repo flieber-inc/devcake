@@ -153,13 +153,13 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 
 - **2026-07-13 — v0 crystallization:** repo-wide cleanup before v0.1 work. Bug fixes (redaction-gap alarm on unreadable secrets files; datetime-safe attempt counting; `security.MASK` single-sourced; background-task death logging on config reload) · telemetry brought up to the "everything traced" invariant (spans now *cover* the PMO writes they name; new `ingress.handle`, `sweep.merge_retry`, `steward.periodic`, `ingress.forged_drop`, `ingress.poison` spans — `12` §2 is the normative inventory) · **all legacy/compat surfaces removed** (founder decision): the old-image protocol dual-modes (`DEVCAKE_FORGE` discriminator, `forge_dialect()` fallback, pre-marker decomposition regex) AND the v1→v2 data migrations (config auto-migration, run-record secret scrub, Redis legacy scrubs). Consequences: app + dev images MUST rebuild in lockstep (`13` §8); a v1 `config.yaml` is refused at boot with hand-migration instructions; pre-v2 run records quarantine at boot (`10` §5) · `blocked_reasons` exposed in `/health`; meaningless `config_valid` dropped · dead `admin/site/` shell deleted · docs re-baselined against the code.
 
-- **2026-07-14 — ISSUES_LIST hardening + build overhaul:** the 38-item ISSUES_LIST review closed out (finalize-stall watchdog backstop, label-swap write-path pagination, all OO alerts backed by real spans, dismissable `/health` `security_warnings`, `domain/reconcile.py` extraction) · orchestrator god module split into the `domain/orchestrator/` package (ISSUES #36) · Docker Bake build system merged (bake-only images via `docker buildx bake all`, multi-stage Dockerfiles, GHA bake CI — collaborator contribution).
+- **2026-07-14 — hardening review + build overhaul:** the 38-item hardening review closed out (finalize-stall watchdog backstop, label-swap write-path pagination, all OO alerts backed by real spans, dismissable `/health` `security_warnings`, `domain/reconcile.py` extraction) · orchestrator god module split into the `domain/orchestrator/` package · Docker Bake build system merged (bake-only images via `docker buildx bake all`, multi-stage Dockerfiles, GHA bake CI — collaborator contribution).
 
 - **2026-07-14 — RunBootstrap + secondary ports (`adr/0008` follow-up, PR #1):** `ExecutorPort` / `StatePort` / `MessagingPort` / `RunFinalizer` Protocols under `ports/` · deep `domain/run_bootstrap.py` owns the dispatch spine (ACL → auth digest → durable `StatePort.save` → `ExecutorPort.start`) for all four flavors (hello, mission, steward, OAuth) · `RunManager.set_finalizer` breaks the concrete `mission_mgr` late-wire cycle · tests at `tests/test_run_bootstrap.py` · docs/01 §3 + docs/04 §3.1 re-baselined.
 
 ## v0.1 — feature specifications (F1–F5) + milestones M8–M12
 
-*(Consolidated + triaged 2026-07-14, revised the same day after a devil's-advocate round, then recast as milestones. Standing premise: **there are no deployments** — safecontract was the founder's own test — so v0 parity is explicitly NOT preserved: schema v3 breaks wholesale, shims and fallback modes are deleted rather than deprecated. F1–F5 below are the feature specifications, in implementation order — agnosticism before multiplicity, multiplicity before the internal fallback forge's zero-repo payoff, GUI config last since every prior feature adds config surface it must cover. M8–M12 are the implementation plan in the M0–M7 format: each leaves a demoable, committed system with mechanically checkable exit criteria. The four hardening items triaged into v0.1 are folded into M8 (PR #1, ISSUES #13, #29) and M12 (ISSUES #30).)*
+*(Consolidated + triaged 2026-07-14, revised the same day after a devil's-advocate round, then recast as milestones. Standing premise: **there are no deployments** — safecontract was the founder's own test — so v0 parity is explicitly NOT preserved: schema v3 breaks wholesale, shims and fallback modes are deleted rather than deprecated. F1–F5 below are the feature specifications, in implementation order — agnosticism before multiplicity, multiplicity before the internal fallback forge's zero-repo payoff, GUI config last since every prior feature adds config surface it must cover. M8–M12 are the implementation plan in the M0–M7 format: each leaves a demoable, committed system with mechanically checkable exit criteria. The four hardening items triaged into v0.1 are folded into M8 (PR #1, OTel collector, digest pins) and M12 (acceptance forge coverage).)*
 
 ### v0.1 feature specifications
 
@@ -175,15 +175,15 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 
 ## M8 — Forge-agnosticism + hardening spine
 
-**Goal:** the codebase provably forge-agnostic; the in-flight refactor landed; standing security warnings closed. **Implements:** F1; lands PR #1 (`refactor/run-bootstrap-and-secondary-ports`, rebased + fixed 2026-07-14); ISSUES #13, #29.
+**Goal:** the codebase provably forge-agnostic; the in-flight refactor landed; standing security warnings closed. **Implements:** F1; lands PR #1 (`refactor/run-bootstrap-and-secondary-ports`, rebased + fixed 2026-07-14); OTel collector + digest pins.
 **Out of scope:** any new adapter; `ForgeCapabilities` (extracted in M11, once a third forge exists to reveal real divergence).
 
 Exit criteria — **all verified 2026-07-14 (M8 complete)**:
 - [x] The audited residuals corrected: `config.py` forge/token-env/URL-validation defaults resolve via the adapter registry/descriptor (`registry.DEFAULT_FORGE`, descriptor `token_env_default`); the warning copy is config-derived (`security.security_warnings`); git identity comes per-descriptor (`git_email` required on the port; GitLab dropped the verbatim-github noreply); descriptor `pr_noun` feeds the EXECUTE feed wording.
 - [x] CI tripwire green and meaningful (`tests/test_agnosticism.py`): AST import-graph scan (vendor adapters importable only by the registry — forge AND PMO ids, registry-derived), defaults provably resolve through descriptors, warning copy config-fed, secondary string-literal scan with an explicit allowlist. Verified to bite on planted violations.
 - [x] PR #1 merged (squash `b1007c3`, 2026-07-14): `ExecutorPort`/`StatePort`/`MessagingPort`/`RunFinalizer` are Protocols; full suite green (243 tests + `ci_suite.sh` + isolated boot smoke).
-- [x] Devs emit telemetry through an inserted OTel collector (a new long-lived compose service on `devcake_runtime`) holding the OO service-account credentials; Dev runspecs carry NO OO credential (`OTEL_EXPORTER_OTLP_BASIC` deleted, `domain/oo_auth.py` deleted); `oo-root-creds` gone from `/health` (ISSUES #13). Live-verified: hello run's `dev.run`/`harness.exec` spans in OO via the collector from a credential-free container. Honest limits recorded in `14` §2 Zone B (unauth OTLP forgeable on the runtime network; OSS OO role separation advisory — live-probed).
-- [x] Base image digests pinned across all Dockerfiles AND compose services; `scripts/check_image_pins.py` gate wired into `ci_suite.sh` + GHA CI; bake CI green (ISSUES #29). Grok curl|bash installer recorded as the one auditable exception.
+- [x] Devs emit telemetry through an inserted OTel collector (a new long-lived compose service on `devcake_runtime`) holding the OO service-account credentials; Dev runspecs carry NO OO credential (`OTEL_EXPORTER_OTLP_BASIC` deleted, `domain/oo_auth.py` deleted); `oo-root-creds` gone from `/health`. Live-verified: hello run's `dev.run`/`harness.exec` spans in OO via the collector from a credential-free container. Honest limits recorded in `14` §2 Zone B (unauth OTLP forgeable on the runtime network; OSS OO role separation advisory — live-probed).
+- [x] Base image digests pinned across all Dockerfiles AND compose services; `scripts/check_image_pins.py` gate wired into `ci_suite.sh` + GHA CI; bake CI green. Grok curl|bash installer recorded as the one auditable exception.
 
 **Demo:** `scripts/ci_suite.sh` green including the tripwire; `/health` clean of `oo-root-creds`; a golden-path run whose Dev traces arrive in OO without root credentials.
 
@@ -231,14 +231,14 @@ Exit criteria:
 
 ## M12 — Single-mode GUI config + v0.1 release gate
 
-**Goal:** operable by a stranger without touching `.env` beyond bootstrap; acceptance parity; docs re-baselined; v0.1 tagged. **Implements:** F5; ISSUES #30.
+**Goal:** operable by a stranger without touching `.env` beyond bootstrap; acceptance parity; docs re-baselined; v0.1 tagged. **Implements:** F5.
 **Out of scope:** OIDC/SSO (deferred; the `security_warnings` breadcrumb covers the posture).
 
 Exit criteria:
 - [x] All operator config flows through the admin UI (`SecretField` write-only inputs; forge settings live on Repositories, not Configuration); secrets stored 0600 under `/data/secrets/connections/` and `/data/secrets/harness/`, redaction-registered, never echoed back (live-verified and regression-tested: `GET /config` carries no secret-bearing fields, legacy `*_env` fields, or planted secret values; `secrets-check` returns presence + `updated_at` only — no value-derived fingerprint). ✓/✗ stored-secret status in the UI.
 - [x] Env-var indirection removed (schema v4: `*_env` fields deleted; properties read the store, no `os.environ` fallback); `.env` reduced to stack bootstrap secrets (Dagu, Redis, OpenObserve root+ingest, nginx admin auth, Gitea admin, DOCKER_GID); the dismissable `gui-secrets-basic-auth` breadcrumb ships. Live stack hand-migrated v3→v4 and running on stored secrets.
 - [x] Fresh-`/data` operator drill documented GUI-only (`docs/tutorials/operator-drill.md`): empty volume → configure everything through the admin UI → external-repo + zero-repo missions → assert `.env` untouched beyond bootstrap. *(The drill stays manual — it is the stranger-operability test.)*
-- [x] `scripts/acceptance.py --forge` covers GitHub, GitLab, and **Gitea** (the zero-repo internal-forge lane: asserts the deliverable zip in the PMO feed + the merged internal PR via `GITEA_ADMIN_*`, with no external **forge** credentials; it still uses Linear and real model credentials; ISSUES #30). Tester credentials come from the shell/`.env`, never DevCake's stored secrets. *(Full live model runs remain gated on the founder token blocker; the machinery is proven by the contract batteries + hermetic tests.)*
+- [x] `scripts/acceptance.py --forge` covers GitHub, GitLab, and **Gitea** (the zero-repo internal-forge lane: asserts the deliverable zip in the PMO feed + the merged internal PR via `GITEA_ADMIN_*`, with no external **forge** credentials; it still uses Linear and real model credentials). Tester credentials come from the shell/`.env`, never DevCake's stored secrets. *(Full live model runs remain gated on the founder token blocker; the machinery is proven by the contract batteries + hermetic tests.)*
 - [x] Docs re-baselined (10 §3 v4 shape, 14 §3 the GUI secret store + honest limits, ADR-0011); **v0.1 tagged.**
 
 **Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
@@ -635,7 +635,7 @@ until that run exists, field evidence below stays operator-self-reported.
   stack). Still deferred: a `/health` warning on repeated exit-10s with
   auth-suspicious stderr (soft signal, deliberate backend change). **One
   accepted risk unchanged (founder ruling):** agent-container CPU/mem/pids
-  limits stay deferred (ISSUES #20) — Dagu's container schema rejects them
+  limits stay deferred — Dagu's container schema rejects them
   and app concurrency caps remain the only throttle, revisited when Dagu
   ships host-config support. Multi-admin config `If-Match`/versioning is
   ledgered as accepted single-operator scope (admin/spa/DESIGN.md).
@@ -976,8 +976,8 @@ OAuth / `skills_dir` only.
   exists: GitHub adapter + `api_base` if they speak a GitHub-shaped API.
   Standalone PRs only in v1; stacks are a later design. See
   [Origin intake](#origin-intake-cursor-origin).
-- **Jira Cloud** (`jira`) — ISSUES #35 first. See
-  [feed fidelity](#issues-35--feed-fidelity-port-note). No adapter until a
+- **Jira Cloud** (`jira`) — feed fidelity first. See
+  [feed fidelity](#feed-fidelity-port-note). No adapter until a
   live md↔ADF (or sidecar) measurement exists. Cloud only; Data Center is a
   second product. Jira Project ≠ Linear Project (first adapter issue-only).
 
@@ -1043,7 +1043,7 @@ row below has a measured answer.
 | Tokens | prefixes for redaction / SPA paste guard |
 | Stacks / merge queue | v1 treats Origin as standalone PRs; stacking decomposition is a later design |
 
-#### ISSUES #35 — feed fidelity (port note)
+#### Feed fidelity (port note)
 
 Docs/05 §0 (d) and docs/00 already say markdown-fidelity markers are a **port**
 requirement, not adapter folklore. When a Jira (or other ADF/rich-text)
@@ -1093,14 +1093,14 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
   among deferred items, independent of any harness-platform work.
 - **Additional PMO adapters** beyond the launch-roster pair (GitHub Issues
   + GitLab Issues are the 2026-08-15 campaign, above). Height / Shortcut /
-  Plane remain Linear-class candidates. Jira Cloud waits on ISSUES #35.
+  Plane remain Linear-class candidates. Jira Cloud waits on feed fidelity.
   Monday.com is **scratched**. Copy the `gitea_issues` profile (pure
   `PMOPort`) for any future forge-issue sibling.
 - **N repos per mission** — cross-repo atomicity (one PR per repo, set-
   approval, merge ordering); still capped at 0-or-1 work repo per mission.
 - **Per-run scoped forge tokens** and the rest of `14` §7 — companion to
   internal per-mission tokens; revisit when threat model demands it.
-- **Network egress allowlists / Dev egress proxy** (ISSUES #16 + radar) —
+- **Network egress allowlists / Dev egress proxy** (radar) —
   optional Zone B defense-in-depth: default-deny outbound and/or
   **credential-injection MITM** so Devs hold proxy tokens rather than real
   model/forge keys. Candidate implementation class:
@@ -1133,7 +1133,7 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
   or long retention (`12` §4 still SQL-over-spans).
 - **SQLite `StatePort` swap** — if run history outgrows files.
 - **Public-release hygiene (remaining)** — LICENSE and a fuller tree-wide
-  SBOM process (ISSUES #38). Root `SECURITY.md`, `CONTRIBUTING.md`, and
+  SBOM process. Root `SECURITY.md`, `CONTRIBUTING.md`, and
   `CHANGELOG.md` (pointer to this living log) already landed; CI already
   runs pip-audit / npm audit and publish-time Bake SBOM.
 - **Internal-forge orphan sweep** — reconcile Gitea org repos/svc users vs

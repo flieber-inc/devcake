@@ -152,7 +152,7 @@ def main() -> None:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     provider = TracerProvider(resource=Resource.create({"service.name": "devcake-dev"}))
-    # unauthenticated: the endpoint is the stack's otel-collector (ISSUES #13)
+    # unauthenticated: the endpoint is the stack's otel-collector
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(
         endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
     )))

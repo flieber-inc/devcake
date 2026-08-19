@@ -249,7 +249,7 @@ def redact_value(value: Any, extra_values: list[str] | None = None) -> Any:
 
 
 def security_warnings(config) -> list[dict]:
-    """Loud-but-dismissable credential-posture warnings (ISSUES #13/#15).
+    """Loud-but-dismissable credential-posture warnings.
     Surfaced in /health; the SPA renders them as dismissable alerts (dismissals
     persist in config.dismissed_alerts, and resurface if the content changes).
     Lives here (not api/) so the copy is testable without the api singletons;
@@ -282,8 +282,7 @@ def security_warnings(config) -> list[dict]:
                         "write-capable forge token as EXECUTE. A prompt-injected "
                         "non-EXECUTE Dev could push — and, if the default branch "
                         "is unprotected, may merge (docs/14 §2 zone C). Add a "
-                        "read-only token for this repo on the Repositories page "
-                        "(ISSUES #15).",
+                        "read-only token for this repo on the Repositories page.",
             })
     # read-only-only repositories (founder request 2026-07-15): valid — but
     # only as REFERENCE material. Warn when such a repo sits in a PMO's WORK

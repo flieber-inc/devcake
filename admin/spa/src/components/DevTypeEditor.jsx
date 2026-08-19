@@ -309,7 +309,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             >
               <Textarea
                 rows={6}
-                value={d.dev_entrypoint ?? (d.mcp_setup_commands || []).join("\n")}
+                value={d.dev_entrypoint || ""}
                 onChange={(e) => set("dev_entrypoint", e.target.value)}
               />
             </Field>

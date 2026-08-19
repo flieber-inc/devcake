@@ -105,6 +105,6 @@ export function contextActions(row) {
     items.push({ id: "force_freshness", label: "Re-check freshness" });
   }
   if (set.has("DEVCAKE-SKIP"))         items.push({ id: "unpark", label: "Unpark" });
-  else                                  items.push({ id: "park",   label: "Park", danger: false });
+  else                                  items.push({ id: "park",   label: "Park" });
   return items;
 }

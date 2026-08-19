@@ -305,12 +305,15 @@ class GiteaProvisioner:
             await self._req("POST", f"/orgs/{PMO_ORG}/repos",
                             json={"name": BOARD_REPO, "private": True,
                                   "auto_init": True, "default_branch": "main"})
-            repo = await self._req("GET", f"/repos/{PMO_ORG}/{BOARD_REPO}")
+            # Fresh create → Gitea default issues unit; helper fills tracker
+            # defaults. Adopt path RMW's the GET'd tracker below.
+            cur = None
+        else:
+            cur = (repo or {}).get("internal_tracker") if isinstance(
+                repo, dict) else None
         # dependencies are off by default and gate blocked_by (docs/05 §9).
         # Gitea replaces the whole internal_tracker on PATCH (plain bools) —
         # RMW so enabling deps does not force-disable the time tracker.
-        cur = (repo or {}).get("internal_tracker") if isinstance(
-            repo, dict) else None
         await self._req("PATCH", f"/repos/{PMO_ORG}/{BOARD_REPO}",
                         json={"internal_tracker":
                               gitea_internal_tracker_enable_deps(cur)})

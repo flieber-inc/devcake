@@ -1,4 +1,8 @@
 import React, { useEffect, useState } from "react";
+import markBlack from "../assets/devcake-mark-black-transparent.svg";
+import markColor from "../assets/devcake-mark-color-transparent.svg";
+import wordmarkBlack from "../assets/devcake-wordmark-black-transparent.svg";
+import wordmarkColor from "../assets/devcake-wordmark-color-transparent.svg";
 import {
   LayoutDashboard, SquareTerminal, Settings2, Plug, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
@@ -217,19 +221,17 @@ export default function Sidebar({
       }`}
     >
       <a href="#/overview" className={`flex items-center gap-2.5 px-3 py-4 ${collapsed ? "justify-center" : "px-4"}`}>
-        {/* the app mark is the signature layer-cake, mid-bake */}
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent shadow-card">
-          <span className="flex w-3.5 flex-col-reverse gap-[2.5px]" aria-hidden>
-            <span className="h-[3px] rounded-full bg-white/60" />
-            <span className="h-[3px] rounded-full bg-white/60" />
-            <span className="h-[3px] rounded-full bg-white" />
-            <span className="h-[3px] rounded-full bg-white/25" />
-          </span>
-        </span>
+        {/* Brand SVGs (docs/img/brand is the canonical home; these are the
+            bundled copies — the admin build context stops at admin/).
+            Black-violet artwork carries the light theme; cream-violet the
+            dark one. */}
+        <img src={markBlack} alt="DevCake" className="h-8 w-auto shrink-0 dark:hidden" />
+        <img src={markColor} alt="DevCake" className="hidden h-8 w-auto shrink-0 dark:block" />
         {!collapsed && (
           <span className="leading-tight">
-            <span className="block font-display text-sm font-extrabold tracking-tight">DevCake</span>
-            <span className="block text-[10px] text-neutral-500 dark:text-neutral-400">agentic developer</span>
+            <img src={wordmarkBlack} alt="" className="block h-[15px] w-auto dark:hidden" />
+            <img src={wordmarkColor} alt="" className="hidden h-[15px] w-auto dark:block" />
+            <span className="mt-1 block text-[10px] text-neutral-500 dark:text-neutral-400">agentic developer</span>
           </span>
         )}
       </a>
@@ -321,7 +323,15 @@ export default function Sidebar({
         )}
         {!collapsed && (
           <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
-            DevCake v0 · spec &amp; source in-tree under docs/
+            DevCake ·{" "}
+            <a
+              href="https://github.com/flieber-inc/devcake"
+              target="_blank"
+              rel="noreferrer"
+              className="underline decoration-neutral-300 underline-offset-2 hover:text-neutral-700 dark:decoration-neutral-600 dark:hover:text-neutral-200"
+            >
+              spec &amp; source on GitHub
+            </a>
           </p>
         )}
         <button

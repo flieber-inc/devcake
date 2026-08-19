@@ -36,8 +36,13 @@ color family in a component.**
 
 ### Type
 
-- **Display face** (`font-display`, Bricolage Grotesque Variable): wordmark, page
+- **Display face** (`font-display`, Bricolage Grotesque Variable): page
   titles, big numerals — **nowhere else**. Body/UI text stays on the system stack.
+  (The wordmark is no longer set in type: the brand mark and wordmark are SVG
+  artwork — canonical files in `docs/img/brand/`, bundled copies in
+  `src/assets/` — rendered per theme: black-violet on light, cream-violet on
+  dark. The artwork's own palette is the one sanctioned exception to the
+  single-accent rule; UI accents stay `accent-*`.)
 - Mono (`font-mono`) for machine identifiers: run ids, mission keys, env var
   names, InstantZone eyebrow labels.
 - Numerals that line up in columns get `tabular-nums`.

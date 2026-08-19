@@ -2,7 +2,7 @@
 // offers "Remove unused repositories…" whose dialog is honest about token
 // deletion and lists what it would drop. Every dialog is CANCELLED — this
 // suite never mutates the draft, never saves.
-import { check, gotoFresh, summary, withPage } from "./harness.mjs";
+import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
   await gotoFresh(page, "#/repos");
@@ -42,20 +42,29 @@ await withPage(async (page) => {
   // expanded; collapsing shows a one-line summary; clicking it re-expands.
   // Pure view state — no draft edit, nothing to save.
   // >3 repos start collapsed, ≤3 expanded — normalize to ONE expanded card
-  // first so the round-trip below runs on any fleet size
-  if ((await page.locator('button[aria-label^="Collapse repository"]').count()) === 0) {
-    await page.locator('[data-testid="repo-summary-row"]').first().click();
+  // first so the round-trip below runs on any fleet size.
+  // CI compose boots with an empty repositories list (no seeded cards), so
+  // skip the collapse round-trip when there is nothing to collapse.
+  const collapseBtn = page.locator('button[aria-label^="Collapse repository"]');
+  const summaryRow = page.locator('[data-testid="repo-summary-row"]');
+  if ((await collapseBtn.count()) === 0 && (await summaryRow.count()) === 0) {
+    skip("collapsing a repo card leaves a summary row", "no repository cards on this stack");
+    skip("clicking the summary row re-expands a card", "no repository cards on this stack");
+  } else {
+    if ((await collapseBtn.count()) === 0) {
+      await summaryRow.first().click();
+      await page.waitForTimeout(100);
+    }
+    const before = await summaryRow.count();
+    await collapseBtn.first().click();
     await page.waitForTimeout(100);
+    check("collapsing a repo card leaves a summary row",
+      (await summaryRow.count()) === before + 1);
+    await summaryRow.first().click();
+    await page.waitForTimeout(100);
+    check("clicking the summary row re-expands a card",
+      (await collapseBtn.count()) >= 1);
   }
-  const before = await page.locator('[data-testid="repo-summary-row"]').count();
-  await page.locator('button[aria-label^="Collapse repository"]').first().click();
-  await page.waitForTimeout(100);
-  check("collapsing a repo card leaves a summary row",
-    (await page.locator('[data-testid="repo-summary-row"]').count()) === before + 1);
-  await page.locator('[data-testid="repo-summary-row"]').first().click();
-  await page.waitForTimeout(100);
-  check("clicking the summary row re-expands a card",
-    (await page.locator('button[aria-label^="Collapse repository"]').count()) >= 1);
 });
 
 summary("repos");

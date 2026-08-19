@@ -166,7 +166,7 @@ upsert_env_var DOCKER_GID "$GID" .env
 upsert_env_var DEVCAKE_WS_HOST "$WS_HOST" .env
 upsert_env_var DEVCAKE_TAG "$TAG" .env
 # 2026-08 evaluation: .env holds every bootstrap password (and the admin
-# password is host-root-equivalent via settings export — docs/14 §3), yet a
+# password is host-root-equivalent via settings export — docs/14 §0 / §4), yet a
 # file created before up.sh existed kept whatever mode it was born with —
 # 0644 observed in the wild. Upserts above preserve-by-reference, so enforce
 # the floor every run, not only at creation.

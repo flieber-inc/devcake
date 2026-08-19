@@ -39,8 +39,9 @@ cp .env.example .env
 Fill in **bootstrap only** (schema v4 — see `.env.example`):
 
 - Strong passwords: `ADMIN_*`, `REDIS_PASSWORD`, `DAGU_PASSWORD`, `OO_*`,
-  `GITEA_ADMIN_PASSWORD` (empty/`change-me*` refuse boot unless
-  `DEVCAKE_ALLOW_INSECURE=1`).
+  `GITEA_ADMIN_PASSWORD` (empty/`change-me*` refuse boot; `ADMIN_PASSWORD`
+  must be ≥ 12 characters; `DEVCAKE_ALLOW_INSECURE=1` waives both — local
+  sandbox only).
 - Leave `DOCKER_GID` blank — `./up.sh` discovers it from
   `/var/run/docker.sock` (or set manually with `stat -c %g /var/run/docker.sock`).
 

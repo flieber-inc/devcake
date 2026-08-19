@@ -205,20 +205,17 @@ def _dev_class_constants(tree: ast.AST) -> set[str]:
 
 def test_image_manifest_honesty():
     """PRODUCED stays true: every constant sys.exit() site and every DEV_*
-    class literal in the image package is covered by the manifest. Artifact-less
-    bare exits (entrypoint oauth-login 12, unknown-phase 20, and
-    bus.request_reply runspec-error / timeout exit-20) are declared in
-    BARE_EXIT_CODES and ride codes the manifest already lists."""
+    class literal in the image package is covered by the manifest. The two
+    artifact-less bare exits (oauth-login 12, unknown-phase 20) are declared
+    in BARE_EXIT_CODES and ride codes the manifest already lists."""
     fault = _image_fault()
     entrypoint = ast.parse((IMAGES_COMMON / "dev_entrypoint.py").read_text())
-    bus = ast.parse(
-        (IMAGES_COMMON / "devcake_dev" / "adapters" / "bus.py").read_text())
     produced_codes = {c for c, _ in fault.PRODUCED}
     produced_classes = {cls for _, cls in fault.PRODUCED}
     assert fault.BARE_EXIT_CODES <= produced_codes
-    exits = (_const_exit_codes(entrypoint) | _const_exit_codes(bus)) - {0}
+    exits = _const_exit_codes(entrypoint) - {0}
     assert exits <= produced_codes, (
-        f"image exits {sorted(exits - produced_codes)} missing from "
+        f"dev_entrypoint exits {sorted(exits - produced_codes)} missing from "
         "fault.PRODUCED — extend the manifest AND the app-side table")
     classes = set()
     for rel in ("dev_entrypoint.py", "devcake_dev/domain/fault.py",

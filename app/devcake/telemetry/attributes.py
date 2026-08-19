@@ -39,6 +39,7 @@ ATTRIBUTES: frozenset[str] = frozenset({
     "devcake.verdict",
     "devcake.cause",
     "devcake.reason",
+    "devcake.error.class",
     "devcake.kill.reason",
     "devcake.merge.verdict",
     # Poll cycle counts

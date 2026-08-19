@@ -16,11 +16,9 @@ import re as _re
 # test_failure_taxonomy's parity test — real objects across the version-skew
 # boundary, no text scraping — and an AST honesty check keeps this manifest
 # true against dev_entrypoint.py's actual exit sites. Future HarnessDialect
-# modules keep it. Artifact-less bare exits ride codes already listed:
-# dev_entrypoint oauth-login exit 12, unknown-phase exit 20, and
-# bus.request_reply's runspec-error / timeout exit-20 arms send no artifact,
-# so they carry no class of their own (BARE_EXIT_CODES). The honesty AST
-# scan covers both dev_entrypoint.py and adapters/bus.py.
+# modules keep it. Two artifact-less bare exits ride codes already listed:
+# dev_entrypoint's oauth-login exit 12 and unknown-phase exit 20 send no
+# artifact, so they carry no class of their own (BARE_EXIT_CODES).
 PRODUCED = frozenset({
     (10, "DEV_CRASH"),
     (11, "DEV_BAD_OUTPUT"),

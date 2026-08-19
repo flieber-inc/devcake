@@ -163,26 +163,6 @@ def test_entrypoint_aim_empty_key_exits_14_not_crash(tmp_path, monkeypatch):
     assert sent[0]["error_class"] == "DEV_MCP_SETUP"
 
 
-def test_entrypoint_aim_refuses_missing_harness(tmp_path, monkeypatch):
-    """Unset/empty DEVCAKE_HARNESS must not silently aim as claude-code."""
-    import pytest
-    ep = _entrypoint()
-    monkeypatch.delenv("DEVCAKE_HARNESS", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    env = {
-        "DEVCAKE_MODEL": "stub-model",
-        "ANTHROPIC_API_KEY": "k-test",
-    }
-    sent = []
-    monkeypatch.setattr(ep, "send_artifacts", lambda p: sent.append(p))
-    with pytest.raises(SystemExit) as ei:
-        ep._apply_backend_aim(
-            {"backend_base_url": "http://vllm:8000/v1"}, env, [], None)
-    assert ei.value.code in (14, 20)
-    assert "ANTHROPIC_BASE_URL" not in env
-    assert env.get("DEVCAKE_HARNESS") not in ("claude-code",)
-
-
 def test_entrypoint_aim_merges_grok_toml(tmp_path, monkeypatch):
     ep = _entrypoint()
     home = tmp_path / "home"

@@ -65,6 +65,8 @@ New behavior is **test-first** at public seams (`app/tests/`, port fakes). See
 - Do not commit `.env`, `/data/`, `/workspaces/`, backup tarballs, or real
   credentials. Test doubles should stay obvious fakes (`example.com`, padded
   `ghp_…` fixtures, etc.).
+- GitHub’s PR template (`.github/pull_request_template.md`) restates this
+  checklist.
 
 ## Secrets and local state
 

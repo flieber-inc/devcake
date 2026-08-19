@@ -184,18 +184,46 @@ def test_instance_name_body_drives_repo_marker_and_skills_source():
     from devcake.config import INSTANCE_NAME_BODY
     from devcake.domain.orchestrator.markers import REPO_MARKER
     from devcake.domain.skills import SKILL_NAME_RE
-    import re as _re
 
     assert INSTANCE_NAME_BODY in REPO_MARKER.pattern
     # skills._get_external source half must use INSTANCE_NAME_BODY (no re-spell).
     skills_src = (APP / "domain" / "skills.py").read_text()
     assert 'r"[a-z][a-z0-9]{0,11}"' not in skills_src
-    assert "INSTANCE_NAME_BODY" in skills_src
-    # repo_mirror must use SKILL_NAME_RE, not a local re-spell.
+    # Comment-only mention is not enough — require a real fullmatch call.
+    assert "fullmatch(INSTANCE_NAME_BODY" in skills_src
+    # Ban the unanchored SKILL_NAME_RE body (not a $-anchored ghost spelling).
+    # Re-embedding that body — with or without a call-site `$` — must trip.
     mirror_src = (APP / "domain" / "repo_mirror.py").read_text()
-    assert 'r"[a-z0-9][a-z0-9_-]{0,63}$"' not in mirror_src
-    assert "SKILL_NAME_RE" in mirror_src
-    _ = SKILL_NAME_RE, _re  # imported for clarity of public-seam intent
+    assert SKILL_NAME_RE == r"[a-z0-9][a-z0-9_-]{0,63}"
+    assert SKILL_NAME_RE not in mirror_src
+    assert _repo_mirror_skill_re_uses_skill_name_re(), (
+        "repo_mirror.read_skill_tree must compile SKILL_NAME_RE by name, "
+        "not a string literal")
+
+
+def _repo_mirror_skill_re_uses_skill_name_re() -> bool:
+    """True when read_skill_tree builds skill_re from Name SKILL_NAME_RE."""
+    path = APP / "domain" / "repo_mirror.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != "read_skill_tree":
+            continue
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Assign):
+                continue
+            if not any(isinstance(t, ast.Name) and t.id == "skill_re"
+                       for t in sub.targets):
+                continue
+            # skill_re = <re>.compile(rf"{SKILL_NAME_RE}$") — Name in JoinedStr
+            call = sub.value
+            if not (isinstance(call, ast.Call) and call.args):
+                return False
+            arg0 = call.args[0]
+            names = {n.id for n in ast.walk(arg0) if isinstance(n, ast.Name)}
+            return "SKILL_NAME_RE" in names
+    return False
 
 
 # ── Family 4: redaction registration keys ───────────────────────────────────
@@ -242,27 +270,53 @@ def test_redaction_key_fstrings_only_inside_builders():
 _WR_NEEDLE = "cannot be both a work repo and a reference repo"
 
 
+def _ast_string_payload(node: ast.AST) -> str:
+    """Flatten Constant / JoinedStr fragments (adjacent f-string pieces).
+
+    Source may split the message across f\"…\" lines so ``needle in text``
+    is False; the parser merges them into one JoinedStr whose Constant
+    pieces reconstitute the contiguous message.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value for v in node.values
+            if isinstance(v, ast.Constant) and isinstance(v.value, str)
+        )
+    return ""
+
+
 def test_work_reference_disjointness_single_chokepoint():
-    """Error text for work∩reference lives only in validate_memory_bindings."""
-    offenders: list[str] = []
+    """Error text for work∩reference lives only in validate_memory_bindings.
+
+    Scans JoinedStr/Constant payloads (not raw source) so a raise whose
+    message is split across adjacent f-string literals still counts.
+    """
+    found_in_authority = False
+    offenders: set[str] = set()
     for path in APP.rglob("*.py"):
         rel = path.relative_to(APP)
-        text = path.read_text()
-        if _WR_NEEDLE not in text:
-            continue
-        if rel.as_posix() != "config.py":
-            offenders.append(str(rel))
-            continue
-        tree = ast.parse(text, filename=str(path))
+        tree = ast.parse(path.read_text(), filename=str(path))
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            for sub in ast.walk(node):
-                if (isinstance(sub, ast.Constant)
-                        and isinstance(sub.value, str)
-                        and _WR_NEEDLE in sub.value):
-                    if node.name != "validate_memory_bindings":
-                        offenders.append(f"config.py:{node.name}")
+            # Prefer JoinedStr payloads so split f-string raises count once.
+            hits = [
+                sub for sub in ast.walk(node)
+                if isinstance(sub, (ast.JoinedStr, ast.Constant))
+                and _WR_NEEDLE in _ast_string_payload(sub)
+            ]
+            if not hits:
+                continue
+            if (rel.as_posix() == "config.py"
+                    and node.name == "validate_memory_bindings"):
+                found_in_authority = True
+            else:
+                offenders.add(f"{rel}:{node.name}")
+    assert found_in_authority, (
+        "validate_memory_bindings must carry the work∩reference error text "
+        "(JoinedStr fragments reconstituting the contiguous needle)")
     from devcake.config import AppConfig, PMOInstance, RepoInstance
 
     with pytest.raises(ValueError, match=re.escape(_WR_NEEDLE)):
@@ -273,5 +327,5 @@ def test_work_reference_disjointness_single_chokepoint():
         )
     assert not offenders, (
         "work∩reference error text outside validate_memory_bindings: "
-        + ", ".join(offenders)
+        + ", ".join(sorted(offenders))
     )

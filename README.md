@@ -40,6 +40,11 @@ auto-merge off (the default), DevCake parks approved work and waits for you.
 > ownership is *why* the output can be trusted. Full contract:
 > [`docs/14-security.md`](docs/14-security.md).
 
+**Proof over promises:** we pointed DevCake at its own codebase — one board
+prompt became 54 self-decomposed tickets, 257 agent runs, and 42 human-merged
+pull requests, receipts included. Read the field report:
+[`docs/evidence/2026-08-devcake-audits-devcake.md`](docs/evidence/2026-08-devcake-audits-devcake.md).
+
 Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning.md).
 
 ---

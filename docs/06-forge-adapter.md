@@ -42,7 +42,7 @@ class ForgePort(Protocol):
         # the copy-pasteable approve+merge command footer (D14, §4)
 ```
 
-All adapters raise the same `ForgeError` — callers never see forge-native or `httpx` exception types. `status` carries the HTTP code when one exists; **network / transport failures use `status=None`** (health probes treat that as transient). The wire call is ONE chokepoint: `adapters/http.forge_request` (ADR-0034; pinned by `test_forge_error_contract.py`). Adapter `_req` methods must call it rather than re-implementing the map.
+All adapters raise the same `ForgeError` — callers never see forge-native or `httpx` exception types. `status` carries the HTTP code when one exists; **network / transport failures use `status=None`** (health probes treat that as transient). Success on the wire is **HTTP 2xx only** — **3xx** raise `ForgeError` with that status (no silent redirect success); non-JSON **2xx** bodies also raise `ForgeError` (never raw `json.JSONDecodeError`). The wire call is ONE chokepoint: `adapters/http.forge_request` (ADR-0034; pinned by `test_forge_error_contract.py`). Adapter `_req` methods must call it rather than re-implementing the map.
 
 Normalized DTOs (pydantic models in `ports/forge.py`):
 
@@ -212,7 +212,7 @@ Two layers:
 | 1 | Port conformance: registered adapters implement every `ForgePort` method with signatures that match the protocol |
 | 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback) **and** Gitea's boolean-only True/False/absent → True/False/None; unknown states → `None` |
 | 3 | `merge()` retries a transient GitHub 409 twice then succeeds/raises; non-retryable 405s raise; Gitea's "try again later" 405 retries inside the adapter while approvals/already-merged 405s probe then raise/absorb (§7a) |
-| 4 | Error normalization: every forge `_req` routes through `adapters/http.forge_request` → `ForgeError` only (`status=None` for network; HTTP ≥400 preserves status). Direct chokepoint + all three adapter classes pinned in `test_forge_error_contract.py` |
+| 4 | Error normalization: every forge `_req` routes through `adapters/http.forge_request` → `ForgeError` only (`status=None` for network; success is **2xx**; **3xx**/non-2xx preserve status; non-JSON 2xx map through `ForgeError`). Direct chokepoint + all three adapter classes pinned in `test_forge_error_contract.py` |
 | 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub/GitLab/Gitea payloads to identical `PullRequest` values; Gitea filters head client-side (no `head=` query); no PR → `None` |
 | 6 | `BranchProtection` DTO: GitHub `protected` flag; GitLab 404 → `protected=False` |
 | 7 | `api_base`: GitHub default vs GHE override; GitLab origin derived from the repo URL, explicit override wins, project path stays URL-encoded |

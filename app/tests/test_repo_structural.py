@@ -234,3 +234,25 @@ def test_dag_timeout_clears_max_legal_app_timeout():
         f"(dev_timeout_minutes.le={field_le_minutes} + 30) * 60 "
         f"= {min_belt} so the app watchdog owns the kill"
     )
+
+
+def test_nested_probe_extracts_the_exact_dag_seccomp_profile():
+    """scripts/harness_probe/nested_probe.sh replays the dev-run nested-engine
+    contract on new host types (the macOS Docker Desktop rig row the 2026-08-13
+    matrix never covered). Operator hosts have no PyYAML, so the probe lifts
+    the profile by regex (nested_seccomp.py); this pins that extraction to the
+    blob the DAG actually sends on BOTH steps — a YAML reshape that broke the
+    regex would otherwise surface only at probe time on someone's laptop."""
+    import importlib.util
+
+    src = Path("/srv/repo-scripts/harness_probe/nested_seccomp.py")
+    assert src.exists(), MOUNT_HINT.format(src="scripts → /srv/repo-scripts")
+    spec = importlib.util.spec_from_file_location("nested_seccomp", src)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    blob = mod.extract(DAG)
+
+    steps = _steps()
+    for sid in ("provision", "run_dev"):
+        assert steps[sid]["with"]["host"]["SecurityOpt"] == [f"seccomp={blob}"], \
+            f"{sid} SecurityOpt must equal the probe's extracted profile"

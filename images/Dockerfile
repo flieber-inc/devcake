@@ -130,7 +130,10 @@ RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
 # uidmap (apt, below) supplies newuidmap/newgidmap — re-packaged Fedora-style
 # below: setuid bit STRIPPED, file caps applied (the measured fix).
 # Runtime needs the dev-run DAG's seccomp profile + /dev/fuse (kernels ≥5.13
-# use native rootless overlay and ignore fuse) — matrix measured 2026-08-13.
+# use native rootless overlay and ignore fuse) — matrix measured 2026-08-13
+# on ONE rig (WSL2 kernel 6.6, engine 29). Other rig types (macOS Docker
+# Desktop, distro hosts) earn their row via scripts/harness_probe/
+# nested_probe.sh — it replays the DAG's exact contract and writes a receipt.
 ARG PODMAN_STATIC_VERSION=v5.8.4
 # per-arch sha256 (the bake builds the HOST platform; both pinned)
 ARG PODMAN_STATIC_SHA256_AMD64=a58765fe8be6ab3fb79f892f1a027b4ce4a7e8eb589df1ef960c167cbde08d69

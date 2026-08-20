@@ -17,6 +17,22 @@ Dev containers): unprivileged user namespaces enabled on the host kernel
 recommended (native rootless overlay — older kernels fall back to
 fuse-overlayfs via the DAG's /dev/fuse device).
 
+**Nested-engine rig receipt** — the matrix behind those prerequisites was
+measured on one rig (WSL2 kernel 6.6, engine 29). On any other host type —
+macOS Docker Desktop (LinuxKit VM, VirtioFS binds), a new distro, a new
+engine major — run `scripts/harness_probe/nested_probe.sh` once after baking
+a harness image. It replays the dev-run DAG's exact runtime contract (the
+inline seccomp profile extracted from the DAG itself, /dev/fuse +
+/dev/net/tun, the image's dev user, the workspace bind, the reclaim chown)
+and writes a receipt under `.factory/nested_probe/`; a red run names the
+first failing step (uid_map → the file-caps newuidmap fix; graph → nested
+storage; nested run → seccomp/LSM/network). Known caveat to verify this way:
+hosts with AppArmor active (stock Ubuntu) are expected to need attention —
+the DAG overrides only seccomp, and the `docker-default` AppArmor profile
+denies mount regardless of seccomp. The inner test pull
+(`docker.io/library/alpine`, override via `NESTED_TEST_IMAGE`) needs egress
+from inside the Dev container.
+
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,

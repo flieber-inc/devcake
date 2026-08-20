@@ -682,6 +682,23 @@ until that run exists, field evidence below stays operator-self-reported.
   edges — inside a subprocess that blocks every third-party import, so the
   app image's own installed deps can never mask a leak again. **built**.
 
+- **Nested-engine rig receipts** (2026-08-20): the rootless-podman matrix
+  behind ADR-0023 was measured on exactly one rig (WSL2 6.6, engine 29),
+  the file-caps newuidmap fix is explicitly "mechanism unexplained," and
+  nothing in-tree ever proved the runtime path on macOS Docker Desktop.
+  `scripts/harness_probe/nested_probe.sh` now replays the dev-run DAG's
+  exact runtime contract against a locally baked harness image — the inline
+  seccomp profile extracted from the DAG itself (structural-test-pinned,
+  never a copy), /dev/fuse + /dev/net/tun, the image's dev user, the
+  workspace bind, and the B1 reclaim chown — and writes a rig receipt
+  covering uid_map, graph driver, a real nested run, and the subuid
+  foreign-uid write → reclaim round-trip. First receipted row beyond the
+  original measurement: WSL2 6.6 **aarch64** engine 29.6.1 — graph=overlay,
+  subuid write landed 104320, reclaim returned 1000 (also the first arm64
+  receipt — the Apple Silicon arch). Owed: the macOS Docker Desktop row
+  (run the probe on a Mac per docs/13). **built** (probe live-run green on
+  one rig).
+
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

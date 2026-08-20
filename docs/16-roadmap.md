@@ -671,6 +671,17 @@ until that run exists, field evidence below stays operator-self-reported.
   Still open (Memory + Cron pilot ship gate, fresh-`/data` drill, M9–M12
   demos, etc.) remain open as already listed.
 
+- **Baker host hotfix — stdlib-only import closure** (2026-08-20): the host
+  baker (`up.sh` → bare `python3 -m dev_factory`, no venv) imported pydantic
+  through `devcake.versions` → `devcake.harness`, so any host without
+  pydantic in system python (clean macOS, minimal Debian) crashed the baker
+  at start — dev machines with a global pydantic masked the hole, which is
+  why it surfaced only on fresh installs. `resolve_latest` now imports the
+  harness registry at call time (it is app-side only), and a regression
+  test imports the baker's full host closure — load-time and runtime
+  edges — inside a subprocess that blocks every third-party import, so the
+  app image's own installed deps can never mask a leak again. **built**.
+
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

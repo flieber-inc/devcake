@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -994,3 +996,45 @@ def test_append_baker_event_is_jsonl(tmp_path):
     assert json.loads(lines[0])["event"] == "tick"
     assert json.loads(lines[1])["event"] == "error"
     assert json.loads(lines[1])["detail"] == "nginx"
+
+
+# up.sh starts the baker with the host's bare `python3 -m dev_factory` — no
+# venv, no pip install. Everything it can import, at load or at runtime, must
+# be stdlib or first-party. This suite runs in the app image where pydantic
+# IS installed, so a plain import cannot catch a leak; the subprocess blocks
+# third-party imports to simulate a clean Mac/Debian host (the versions.py →
+# harness.py → pydantic edge shipped exactly this way).
+_HOST_GUARD = """
+import sys
+
+FIRST_PARTY = {"dev_factory", "devcake", "app_digest"}
+
+class BlockThirdParty:
+    def find_spec(self, name, path=None, target=None):
+        top = name.partition(".")[0]
+        if top in FIRST_PARTY or top in sys.stdlib_module_names:
+            return None
+        raise ImportError(f"third-party import on the baker's host path: {name}")
+
+sys.meta_path.insert(0, BlockThirdParty())
+
+import dev_factory            # package load: liveness + core + devcake.versions
+import dev_factory.watch      # the `python3 -m dev_factory` entrypoint
+import app_digest             # watch.py imports it at runtime
+import devcake.staffing       # core.py runtime import (receipt fail detail)
+import devcake.bake_status    # staffing's lazy liveness read
+print("HOST-CLOSURE-OK")
+"""
+
+
+def test_baker_host_import_closure_is_stdlib_only():
+    scripts_root = next((p for p in _FACTORY_CANDIDATES if p.is_dir()), None)
+    assert scripts_root is not None, "scripts/ missing — bind scripts → /srv/repo-scripts"
+    app_root = Path(__file__).resolve().parents[1]
+    env = {**os.environ,
+           "PYTHONPATH": f"{scripts_root}{os.pathsep}{app_root}"}
+    proc = subprocess.run(
+        [sys.executable, "-c", _HOST_GUARD],
+        capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 0, f"baker host closure broke:\n{proc.stderr}"
+    assert "HOST-CLOSURE-OK" in proc.stdout

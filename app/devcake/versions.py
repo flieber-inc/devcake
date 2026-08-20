@@ -2,6 +2,11 @@
 
 Also owns the CLI-version semver shape (ADR-0034 / CAKE-87) — keep_set,
 config DevType.cli_version, and the host factory import this constant.
+
+Module scope must stay stdlib-only: the host baker (up.sh → bare
+`python3 -m dev_factory`, no venv) imports this module for the semver
+constant. The harness registry needs pydantic, which a host python
+does not have — resolve_latest imports it at call time (app-side only).
 """
 
 from __future__ import annotations
@@ -9,7 +14,6 @@ from __future__ import annotations
 import re
 
 from .house_pins import LAUNCH_SUPPORTED
-from .harness import HARNESSES
 
 # ONE CLI pin shape: major.minor.patch with optional pre-release suffix.
 CLI_VERSION_SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?"
@@ -18,6 +22,7 @@ CLI_VERSION_SEMVER_RE = re.compile(CLI_VERSION_SEMVER)
 
 def resolve_latest(template: str, *, source) -> str:
     """Look up the remote semver. Unknown ids refuse."""
+    from .harness import HARNESSES
     if template not in HARNESSES:
         raise ValueError(f"unknown harness {template!r}")
     if template not in LAUNCH_SUPPORTED:

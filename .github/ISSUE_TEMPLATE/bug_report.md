@@ -1,9 +1,10 @@
 ---
 name: Bug report
 about: Something broken relative to documented behavior
-title: ""
-labels: []
-assignees: []
+title: ''
+labels: ''
+assignees: ''
+
 ---
 
 ## Summary

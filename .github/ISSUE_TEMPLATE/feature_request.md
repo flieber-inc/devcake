@@ -1,9 +1,10 @@
 ---
 name: Feature request
 about: Improvement or new capability
-title: ""
-labels: []
-assignees: []
+title: ''
+labels: ''
+assignees: ''
+
 ---
 
 ## Problem / use case

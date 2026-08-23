@@ -431,9 +431,14 @@ decision you are making by installing here.
 
 #### Hello dispatch smoke — final install gate on `--bake`
 
-`./up.sh --bake` (not plain `./up.sh`) finishes with
-`scripts/ci_dispatch_hello.sh` after compose-up, the warn-only app health
-gate, and the host baker. Only then does it echo stack starting.
+`./up.sh --bake` (not plain `./up.sh`) runs `scripts/ci_dispatch_hello.sh`
+after compose-up, the warn-only app health gate, and the fatal sock
+writability gate — and **before** the host baker. Hello must come first so
+`--foreground-baker` (which `exec`s and never returns) still gets the
+dispatch proof. On the detached path the baker then starts and `up.sh`
+echoes `── stack starting…`. On `--foreground-baker`, after hello the baker
+takes the terminal (`── stack up …; baker takes this terminal`) and never
+reaches the detached `stack starting` line.
 
 What it proves: **control-plane health ≠ image health ≠ dispatch health**.
 App `/health` and baked images can be fine while Dagu still cannot launch a

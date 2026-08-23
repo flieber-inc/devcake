@@ -168,18 +168,18 @@ def test_kill_does_not_resurrect_a_concurrently_wiped_record(tmp_path):
     whose store_gen predates the clear."""
     store = RunStore(tmp_path / "runs")
     mgr = RunManager(store, FakeMessaging(), FakeExecutor())
-    run = _make_run(store, state="running", run_id="W-1")
+    run = _make_run(store, state="running", run_id="WIPE-1")
     # simulate the concurrent wipe: the record is gone by the time kill's
     # teardown reaches its final save
     store.clear()
-    assert store.get("W-1") is None
+    assert store.get("WIPE-1") is None
     run_coro(mgr.kill(run, "timed_out", "watchdog timeout"))
-    assert store.get("W-1") is None                    # not resurrected
+    assert store.get("WIPE-1") is None                    # not resurrected
     # a normal kill (record present) still persists the terminal state
-    live = _make_run(store, state="running", run_id="W-2",
+    live = _make_run(store, state="running", run_id="WIPE-2",
                      store_gen=store.wipe_generation)
     run_coro(mgr.kill(live, "failed", "operator"))
-    assert store.get("W-2").state == "failed"
+    assert store.get("WIPE-2").state == "failed"
 
 
 def test_kill_interleaved_with_clear_during_executor_stop(tmp_path):
@@ -220,10 +220,10 @@ def test_finalize_does_not_resurrect_or_post_after_clear(tmp_path):
     store = RunStore(tmp_path / "runs")
     mgr = RunManager(store, FakeMessaging(), FakeExecutor())
     posts: list[str] = []
-    run = _make_run(store, state="running", run_id="F-1",
+    run = _make_run(store, state="running", run_id="FIN-01",
                     mission_pmo_id="pmo-1", store_gen=0)
     store.clear()
-    assert store.get("F-1") is None
+    assert store.get("FIN-01") is None
 
     class M:
         pass
@@ -244,7 +244,7 @@ def test_finalize_does_not_resurrect_or_post_after_clear(tmp_path):
         "transcript_md": "hello",
         "token_report": {"total_tokens": 1},
     }))
-    assert store.get("F-1") is None
+    assert store.get("FIN-01") is None
     assert posts == []
 
 
@@ -457,8 +457,8 @@ def test_recon_orphans_dead_runs_but_leaves_finalizing_for_reclaim(tmp_path):
     mgr = RunManager(store, messaging, executor)
     mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
 
-    finalizing = _make_run(store, state="finalizing", run_id="F-1")
-    dead = _make_run(store, state="running", run_id="R-1")
+    finalizing = _make_run(store, state="finalizing", run_id="FIN-01")
+    dead = _make_run(store, state="running", run_id="RUN-01")
 
     events = []
     orig_kill = mgr.kill
@@ -479,7 +479,7 @@ def test_recon_orphans_dead_runs_but_leaves_finalizing_for_reclaim(tmp_path):
     assert store.get(finalizing.run_id).state == "finalizing"  # left for reclaim
     # ordering contract: every orphan kill happens BEFORE reclaim
     assert events[-1] == ("reclaim",)
-    assert ("kill", "R-1", "orphaned") in events
+    assert ("kill", "RUN-01", "orphaned") in events
 
 
 def test_recon_queued_artifacts_promote_dead_run_for_reclaim(tmp_path):
@@ -495,7 +495,7 @@ def test_recon_queued_artifacts_promote_dead_run_for_reclaim(tmp_path):
     mgr = RunManager(store, messaging, executor)
     mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
 
-    queued = _make_run(store, state="running", run_id="Q-1")
+    queued = _make_run(store, state="running", run_id="QUE-01")
     messaging.unresolved = {queued.run_id}
 
     events = []
@@ -527,9 +527,9 @@ def test_recon_queued_artifacts_promote_dead_run_for_reclaim(tmp_path):
     messaging.reclaim_pending = reclaim
     run_coro(reconcile_runs(mgr))
 
-    assert ("kill", "Q-1", "orphaned") not in events
+    assert ("kill", "QUE-01", "orphaned") not in events
     assert store.get(queued.run_id).state == "finalizing"
-    assert finalize_calls == ["Q-1"]
+    assert finalize_calls == ["QUE-01"]
     assert events[-1] == ("reclaim",)
 
 
@@ -852,7 +852,7 @@ def test_recon_reclaims_even_when_a_kill_blows_up(tmp_path):
     mgr = RunManager(store, messaging, executor)
     mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
     _make_run(store, state="running", run_id="BOOM-1")
-    other = _make_run(store, state="running", run_id="OK-1")
+    other = _make_run(store, state="running", run_id="OKAY-1")
 
     reclaimed = []
 

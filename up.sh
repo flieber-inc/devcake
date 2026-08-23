@@ -148,7 +148,7 @@ fi
 
 # OpenObserve bootstrap passwords: fail before any bake/compose when a
 # non-empty value cannot satisfy the pinned OO image. Selective parse only —
-# never source .env. Empty values skip (app boot still refuses them).
+# do not shell-source the env file. Empty values skip (app boot still refuses them).
 # Lockstep with docker-compose.yml openobserve pin v0.91.5
 # (src/config/src/utils/password.rs). Update this rule when bumping the image.
 if [[ -f .env ]]; then

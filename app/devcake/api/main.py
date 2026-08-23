@@ -603,8 +603,9 @@ async def put_devtype_prompt(dev_type: str, name: str, body: dict):
 
 @app.delete("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def delete_devtype_prompt(dev_type: str, name: str):
-    return await devtypes_service.delete_devtype_prompt(dev_type, name,
-                                                        config=svc().config)
+    s = svc()
+    return await devtypes_service.delete_devtype_prompt(
+        dev_type, name, config=s.config, dev_types=s.dev_types)
 
 
 @app.get("/api/v1/harnesses")

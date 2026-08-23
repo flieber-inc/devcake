@@ -80,7 +80,9 @@ async def put_devtype_prompt(dev_type: str, name: str, body: dict, *,
     return {"dev_type": dev_type, "name": name, "saved": True}
 
 
-async def delete_devtype_prompt(dev_type: str, name: str, *, config):
+async def delete_devtype_prompt(dev_type: str, name: str, *, config, dev_types):
+    if dev_type not in dev_types:
+        raise HTTPException(404, f"no Dev Type named {dev_type!r}")
     active = config.active_devtype_prompts.get(dev_type, "Development")
     if active == name or (name == "Development" and active in ("Development",)):
         raise HTTPException(409, f"template {name!r} is ACTIVE for "
@@ -89,6 +91,8 @@ async def delete_devtype_prompt(dev_type: str, name: str, *, config):
         prompt_templates.delete_devtype_prompt(dev_type, name)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     return {"deleted": True}
 
 

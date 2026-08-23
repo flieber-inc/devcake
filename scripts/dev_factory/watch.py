@@ -460,8 +460,10 @@ def once(*, work: Path, tag: str, house: dict[str, str],
             local_images=images,
         )
         release_inbox(claimed)
+        # Only the claimed generation (`.taking`) may be removed. A file at
+        # KEEP_SET after claim is a newer app publication for the next tick —
+        # never delete the live publication path.
         compose_rm(taking_name)
-        compose_rm(KEEP_SET)
         emit_event(work, span_record(
             name="baker.reconcile",
             trace_id=trace_id, span_id=root_id, parent="",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up the DevCake stack with host-discovered DOCKER_GID.
+# Bring up the DevCake stack with discovered DOCKER_GID.
 #
 #   ./up.sh                 # upsert GID/WS_HOST/TAG → compose up -d → baker
 #   ./up.sh --bake          # bake control plane + hello, then up + baker + hello smoke
@@ -8,10 +8,12 @@
 #   ./up.sh -- dagu app     # pass service names to compose up
 #   ./up.sh --dry-run       # print discovered GID + planned actions
 #
-# DOCKER_GID is host-specific (the group of /var/run/docker.sock). Compose
-# requires it for Dagu's sock access; this script always re-discovers and
-# writes it (plus DEVCAKE_WS_HOST and DEVCAKE_TAG) into .env so plain
-# `docker compose up -d` works afterwards too.
+# DOCKER_GID is the group of /var/run/docker.sock as a Linux container sees
+# it (CAKE-128). Host-path stat alone is wrong on Docker Desktop (symlink /
+# VM remapping). Prefer the in-container probe; fall back to host-stat when
+# the probe fails. Compose requires the gid for Dagu's sock access; this
+# script always re-discovers and writes it (plus DEVCAKE_WS_HOST and
+# DEVCAKE_TAG) into .env so plain `docker compose up -d` works afterwards too.
 # On --bake, after the health gate, a hello dispatch smoke proves Dagu can
 # launch Dev containers (control-plane health ≠ dispatch health).
 set -euo pipefail
@@ -25,7 +27,7 @@ BAKE_TARGETS=()
 COMPOSE_ARGS=()
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \?//'
+  sed -n '2,18p' "$0" | sed 's/^# \?//'
   exit "${1:-0}"
 }
 
@@ -63,14 +65,38 @@ done
 # ONE derivation, shared with the CI bring-up (ADR-0034; policy stays here)
 # shellcheck source=scripts/lib/stack_env.sh
 source "$(dirname "$0")/scripts/lib/stack_env.sh"
+# shellcheck source=scripts/lib/oo_password.sh
+source "$(dirname "$0")/scripts/lib/oo_password.sh"
 
 discover_docker_gid() {
-  local gid=""
-  if ! gid="$(devcake_docker_gid "$SOCK")"; then
+  # Prefer in-container view (CAKE-128); fall back to host-stat. Prints the
+  # operator resolution line to stdout *after* returning the gid via a
+  # nameref would fight command-substitution — so this sets the global GID
+  # and prints the ── line itself. Caller must not re-echo.
+  local host_gid="" in_gid=""
+  if ! host_gid="$(devcake_docker_gid "$SOCK")"; then
     echo "error: cannot derive DOCKER_GID from $SOCK — is the Docker daemon running?" >&2
     exit 1
   fi
-  printf '%s\n' "$gid"
+  if in_gid="$(devcake_docker_gid_incontainer "$SOCK")"; then
+    GID="$in_gid"
+    if [[ "$in_gid" != "$host_gid" ]]; then
+      echo "── DOCKER_GID=${GID}  (in-container view; host path says ${host_gid})"
+    else
+      echo "── DOCKER_GID=${GID}  (from ${SOCK})"
+    fi
+  else
+    GID="$host_gid"
+    echo "── DOCKER_GID=${GID}  (from ${SOCK}; in-container probe failed — using host-stat)"
+  fi
+  if [[ "$GID" == "0" ]]; then
+    cat >&2 <<'EOF'
+── WARNING: DOCKER_GID=0 grants the dagu service root-group access to the
+   Docker socket (root-equivalent control of the engine host — see
+   docs/14-security.md). Any docker.sock grant is already root-equivalent;
+   this is not a new privilege class. Continuing non-interactively.
+EOF
+  fi
 }
 
 upsert_env_var() {
@@ -109,8 +135,8 @@ upsert_env_var() {
   mv "$tmp" "$file"
 }
 
-GID="$(discover_docker_gid)"
-echo "── DOCKER_GID=${GID}  (from ${SOCK})"
+GID=""
+discover_docker_gid
 
 # ADR-0025: per-run workspace base. HOST-ABSOLUTE on purpose — dev-run.yaml
 # bind sources resolve on the daemon host. Existing .env value wins (operator
@@ -147,6 +173,24 @@ if [[ ! -f .env ]]; then
     echo "error: no .env and no .env.example — create .env with bootstrap passwords first" >&2
     exit 1
   fi
+fi
+
+# OpenObserve bootstrap passwords: fail before any bake/compose when a
+# non-empty value cannot satisfy the pinned OO image. Selective parse only —
+# do not shell-source the env file. Empty values skip (app boot still refuses them).
+# Lockstep with docker-compose.yml openobserve pin v0.91.5
+# (src/config/src/utils/password.rs). Update this rule when bumping the image.
+if [[ -f .env ]]; then
+  _oo_root=""
+  _oo_ingest=""
+  while IFS= read -r line; do
+    case "$line" in
+      OO_ROOT_PASSWORD=*) _oo_root="${line#OO_ROOT_PASSWORD=}" ;;
+      OO_INGEST_PASSWORD=*) _oo_ingest="${line#OO_INGEST_PASSWORD=}" ;;
+    esac
+  done < <(grep -E '^(OO_ROOT_PASSWORD|OO_INGEST_PASSWORD)=' .env || true)
+  require_oo_password OO_ROOT_PASSWORD "$_oo_root" || exit 1
+  require_oo_password OO_INGEST_PASSWORD "$_oo_ingest" || exit 1
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -284,7 +328,47 @@ if [[ "$_ok" -eq 1 ]]; then
 else
   echo "── WARNING: app did not report live within ~60s. The stack is up," >&2
   echo "   but the app may be wedged — check: docker compose logs --tail=50 app" >&2
+  echo "   (OpenObserve crash-loop on a weak root password? also: docker compose logs openobserve)" >&2
 fi
+
+# Fatal post-start gate (CAKE-128): dagu HTTP health can be green while the
+# process still cannot open docker.sock (wrong DOCKER_GID). Bounded retry so
+# we measure writability, not a startup race. dry-run never reaches here.
+#
+# MUST exec as uid 1000 / gid $DOCKER_GID — the credentials the stock
+# entrypoint drops to via sudo. The pinned dagu image has empty Config.User,
+# so bare `compose exec` is root and `test -w` on a root-owned 0660 socket
+# always succeeds (false green for the Desktop wrong-gid failure class).
+echo "── verifying dagu can write the Docker socket…"
+_sock_ok=0
+for _ in $(seq 1 15); do
+  if docker compose exec -T --user "1000:${GID}" dagu \
+      sh -c 'test -w /var/run/docker.sock' \
+      >/dev/null 2>&1; then
+    _sock_ok=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$_sock_ok" -ne 1 ]]; then
+  _obs_gid="$(
+    docker compose exec -T dagu sh -c 'stat -c %g /var/run/docker.sock' \
+      2>/dev/null || echo unknown
+  )"
+  cat >&2 <<EOF
+error: dagu cannot write /var/run/docker.sock (resolved DOCKER_GID=${GID}; socket gid inside the container=${_obs_gid}).
+Fix: set the gid the container actually sees, e.g. in docker-compose.override.yml:
+
+services:
+  dagu:
+    environment:
+      DOCKER_GID: "0"
+
+Then re-run ./up.sh (or export DOCKER_GID and recreate dagu).
+EOF
+  exit 1
+fi
+echo "── dagu docker.sock writable ✓"
 
 # Host baker: same machine and socket as today's bake — not a compose
 # service, not a new socket-holder. It reads the app-published keep-set

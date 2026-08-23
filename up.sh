@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Bring up the DevCake stack with discovered DOCKER_GID.
 #
-#   ./up.sh                 # upsert GID/WS_HOST/TAG → compose up -d → baker
-#   ./up.sh --bake          # bake control plane + hello, then up + baker + hello smoke
+#   ./up.sh                    # upsert GID/WS_HOST/TAG → compose up -d → baker
+#   ./up.sh --bake             # bake control plane + hello, then up + baker + hello smoke
 #   ./up.sh --bake app admin
 #   ./up.sh --bake --no-hello-smoke   # bake/up without the dispatch proof
-#   ./up.sh -- dagu app     # pass service names to compose up
-#   ./up.sh --dry-run       # print discovered GID + planned actions
+#   ./up.sh -- dagu app        # pass service names to compose up
+#   ./up.sh --dry-run          # print discovered GID + planned actions
+#   ./up.sh --foreground-baker # up, then run baker in foreground (no nohup)
 #
 # DOCKER_GID is the group of /var/run/docker.sock as a Linux container sees
 # it (CAKE-128). Host-path stat alone is wrong on Docker Desktop (symlink /
@@ -16,18 +17,21 @@
 # DEVCAKE_TAG) into .env so plain `docker compose up -d` works afterwards too.
 # On --bake, after the health gate, a hello dispatch smoke proves Dagu can
 # launch Dev containers (control-plane health ≠ dispatch health).
+# Use --foreground-baker in terminals, CI, and automation that reaps
+# detached children.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 SOCK="${DOCKER_SOCK:-/var/run/docker.sock}"
 DRY_RUN=0
 DO_BAKE=0
+FOREGROUND_BAKER=0
 NO_HELLO_SMOKE=0
 BAKE_TARGETS=()
 COMPOSE_ARGS=()
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \?//'
+  sed -n '2,21p' "$0" | sed 's/^# \?//'
   exit "${1:-0}"
 }
 
@@ -35,6 +39,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --foreground-baker) FOREGROUND_BAKER=1; shift ;;
     --no-hello-smoke) NO_HELLO_SMOKE=1; shift ;;
     --bake)
       DO_BAKE=1
@@ -65,6 +70,8 @@ done
 # ONE derivation, shared with the CI bring-up (ADR-0034; policy stays here)
 # shellcheck source=scripts/lib/stack_env.sh
 source "$(dirname "$0")/scripts/lib/stack_env.sh"
+# shellcheck source=scripts/lib/baker_host.sh
+source "$(dirname "$0")/scripts/lib/baker_host.sh"
 # shellcheck source=scripts/lib/oo_password.sh
 source "$(dirname "$0")/scripts/lib/oo_password.sh"
 
@@ -212,7 +219,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     fi
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
-  echo "── would: start host baker (.factory/watch.pid) — not a compose service"
+  if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
+    echo "── would: run host baker in foreground (exec python3 -m dev_factory; no nohup)"
+  else
+    echo "── would: start host baker detached (.factory/watch.pid) — not a compose service"
+  fi
   exit 0
 fi
 
@@ -370,19 +381,56 @@ EOF
 fi
 echo "── dagu docker.sock writable ✓"
 
+# CAKE-130: --bake proves dispatch health (Dagu → Dev container → Redis →
+# finalize). Control-plane /health and image receipts do not catch a dagu that
+# cannot talk to the Docker socket (observed on Docker Desktop). Plain
+# ./up.sh (no --bake) skips this gate — day-to-day restarts stay fast.
+# Runs BEFORE the host baker so --foreground-baker (which execs and never
+# returns) still gets the dispatch proof.
+if [[ "$DO_BAKE" -eq 1 ]]; then
+  if [[ "$NO_HELLO_SMOKE" -eq 1 ]]; then
+    echo "── skipping hello dispatch smoke (--no-hello-smoke)"
+  else
+    # Selective ADMIN_* read — same family as OO_INGEST_* below; never
+    # shell-source the env file (Compose syntax ≠ shell; values may contain spaces).
+    _ADMIN_USER=""
+    _ADMIN_PASSWORD=""
+    if [[ -f .env ]]; then
+      while IFS= read -r line; do
+        case "$line" in
+          ADMIN_USER=*) _ADMIN_USER="${line#ADMIN_USER=}" ;;
+          ADMIN_PASSWORD=*) _ADMIN_PASSWORD="${line#ADMIN_PASSWORD=}" ;;
+        esac
+      done < <(grep -E '^(ADMIN_USER|ADMIN_PASSWORD)=' .env || true)
+    fi
+    if [[ -z "$_ADMIN_USER" || -z "$_ADMIN_PASSWORD" ]]; then
+      echo "── WARNING: skipping hello dispatch smoke — ADMIN_USER / ADMIN_PASSWORD missing from .env" >&2
+    else
+      echo "── hello dispatch smoke (scripts/ci_dispatch_hello.sh)…"
+      # Subshell: the smoke needs ADMIN_* in its env; the baker launched
+      # below must not inherit them.
+      if ! (
+        export ADMIN_USER="$_ADMIN_USER"
+        export ADMIN_PASSWORD="$_ADMIN_PASSWORD"
+        ./scripts/ci_dispatch_hello.sh
+      ); then
+        echo "── ERROR: hello dispatch smoke failed — the stack is up but Dagu" >&2
+        echo "   cannot complete a Dev container run. Check:" >&2
+        echo "     docker compose logs --tail=50 dagu" >&2
+        echo "   Look for the preceding 'hello run_id=…' line for the run id." >&2
+        echo "   Known cause: Docker-socket permissions (Docker Desktop hosts especially)." >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 # Host baker: same machine and socket as today's bake — not a compose
 # service, not a new socket-holder. It reads the app-published keep-set
 # and compiles + probes when pins change.
 _FACTORY_DIR="$(pwd)/.factory"
 mkdir -p "$_FACTORY_DIR"
-if [[ -f "$_FACTORY_DIR/watch.pid" ]]; then
-  _old="$(cat "$_FACTORY_DIR/watch.pid" 2>/dev/null || true)"
-  if [[ -n "$_old" ]] && kill -0 "$_old" 2>/dev/null; then
-    echo "── restarting host baker (was pid ${_old})"
-    kill "$_old" 2>/dev/null || true
-    sleep 0.3
-  fi
-fi
+devcake_baker_prepare_pidfile "$_FACTORY_DIR/watch.pid"
 # Ingest creds so the baker can ship a dying word to OO if the app is
 # already gone (the app's push_oo_log chokepoint cannot run then).
 # Read only those keys — do not shell-source the env file into this process.
@@ -398,48 +446,27 @@ export PYTHONPATH="$(pwd)/scripts:$(pwd)/app"
 export DEVCAKE_OO_URL="http://127.0.0.1:5080"
 # Inherit OO_INGEST_* from the exports above — do not put the password
 # on the process argv (readable via ps /proc).
-nohup python3 -m dev_factory \
-  >>"$_FACTORY_DIR/watch.log" 2>&1 &
-echo $! >"$_FACTORY_DIR/watch.pid"
-echo "── host baker watching keep-set (pid $! → .factory/watch.log)"
-
-# CAKE-130: --bake proves dispatch health (Dagu → Dev container → Redis →
-# finalize). Control-plane /health and image receipts do not catch a dagu that
-# cannot talk to the Docker socket (observed on Docker Desktop). Plain
-# ./up.sh (no --bake) skips this gate — day-to-day restarts stay fast.
-if [[ "$DO_BAKE" -eq 1 ]]; then
-  if [[ "$NO_HELLO_SMOKE" -eq 1 ]]; then
-    echo "── skipping hello dispatch smoke (--no-hello-smoke)"
-  else
-    # Selective ADMIN_* read — same family as OO_INGEST_* above; never
-    # shell-source the env file (Compose syntax ≠ shell; values may contain spaces).
-    _ADMIN_USER=""
-    _ADMIN_PASSWORD=""
-    if [[ -f .env ]]; then
-      while IFS= read -r line; do
-        case "$line" in
-          ADMIN_USER=*) _ADMIN_USER="${line#ADMIN_USER=}" ;;
-          ADMIN_PASSWORD=*) _ADMIN_PASSWORD="${line#ADMIN_PASSWORD=}" ;;
-        esac
-      done < <(grep -E '^(ADMIN_USER|ADMIN_PASSWORD)=' .env || true)
-    fi
-    if [[ -z "$_ADMIN_USER" || -z "$_ADMIN_PASSWORD" ]]; then
-      echo "── WARNING: skipping hello dispatch smoke — ADMIN_USER / ADMIN_PASSWORD missing from .env" >&2
-    else
-      export ADMIN_USER="$_ADMIN_USER"
-      export ADMIN_PASSWORD="$_ADMIN_PASSWORD"
-      echo "── hello dispatch smoke (scripts/ci_dispatch_hello.sh)…"
-      if ! ./scripts/ci_dispatch_hello.sh; then
-        echo "── ERROR: hello dispatch smoke failed — the stack is up but Dagu" >&2
-        echo "   cannot complete a Dev container run. Check:" >&2
-        echo "     docker compose logs --tail=50 dagu" >&2
-        echo "   Look for the preceding 'hello run_id=…' line for the run id." >&2
-        echo "   Known cause: Docker-socket permissions (Docker Desktop hosts especially)." >&2
-        exit 1
-      fi
-    fi
-  fi
+_BAKER_LOG="$_FACTORY_DIR/watch.log"
+_BAKER_PIDFILE="$_FACTORY_DIR/watch.pid"
+if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
+  # Foreground mode for terminals / CI / automation that reaps detached
+  # children. Write $$ then exec so the pidfile names the baker after replace.
+  echo "── host baker in foreground (pidfile $_BAKER_PIDFILE; Ctrl-C to stop)"
+  echo "── stack up (admin: http://localhost:8080); baker takes this terminal"
+  echo $$ >"$_BAKER_PIDFILE"
+  exec python3 -m dev_factory
 fi
+# Ensure the log exists; measure baseline BEFORE launch so the startup
+# print is counted as progress (not raced into the baseline).
+[[ -f "$_BAKER_LOG" ]] || : >"$_BAKER_LOG"
+_BAKER_BASELINE=$(wc -c <"$_BAKER_LOG" 2>/dev/null | tr -d ' ' || echo 0)
+_BAKER_LAUNCH="nohup python3 -m dev_factory >>${_BAKER_LOG} 2>&1 &"
+nohup python3 -m dev_factory \
+  >>"$_BAKER_LOG" 2>&1 &
+_BAKER_PID=$!
+echo "$_BAKER_PID" >"$_BAKER_PIDFILE"
+devcake_baker_wait_liveness "$_BAKER_PID" "$_BAKER_LOG" "$_BAKER_PIDFILE" \
+  "$_BAKER_LAUNCH" 12 "$_BAKER_BASELINE"
 
 echo "── stack starting (admin: http://localhost:8080)"
 echo "   bootstrap passwords still come from .env; operator secrets via Config."

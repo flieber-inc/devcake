@@ -139,7 +139,17 @@ def delete_template(mission_type: str, name: str) -> None:
     _require_type(mission_type)
     if name in _builtins() or name == "default":
         raise ValueError(f"{name!r} is a built-in preset and cannot be deleted")
-    path = _dir(mission_type) / f"{name}.yaml"
+    if not _NAME_RE.fullmatch(name):
+        raise ValueError("template name must match "
+                         "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
+    root = _dir(mission_type).resolve()
+    path = root / f"{name}.yaml"
+    try:
+        path.resolve().relative_to(root)
+    except ValueError as e:
+        raise ValueError(
+            f"template path escapes {mission_type!r} template directory"
+        ) from e
     if not path.exists():
         raise FileNotFoundError(f"no template {mission_type}/{name}")
     path.unlink()
@@ -290,8 +300,23 @@ def save_devtype_prompt(dev_type: str, name: str, text: str) -> None:
                   "name": name, "template": text})
 
 
+_DEV_TYPE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
 def delete_devtype_prompt(dev_type: str, name: str) -> None:
-    path = _dev_dir(dev_type) / f"{name}.yaml"
+    if not _DEV_TYPE_NAME_RE.fullmatch(dev_type or ""):
+        raise ValueError("dev_type must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    if not _NAME_RE.fullmatch(name):
+        raise ValueError("template name must match "
+                         "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
+    root = _dev_dir(dev_type).resolve()
+    path = root / f"{name}.yaml"
+    try:
+        path.resolve().relative_to(root)
+    except ValueError as e:
+        raise ValueError(
+            f"template path escapes {dev_type!r} template directory"
+        ) from e
     if not path.exists():
         raise FileNotFoundError(f"no template {dev_type}/{name}")
     path.unlink()

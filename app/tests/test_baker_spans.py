@@ -81,3 +81,18 @@ def test_replay_puts_claim_and_probe_on_the_same_trace(monkeypatch):
     probe = next(s for s in finished if s.name == "baker.probe.http_401")
     assert probe.attributes["devcake.baker.cause"] == "auth"
     assert probe.status.status_code.name == "ERROR"
+
+
+def test_replay_ignores_launch_failed_non_span_records(monkeypatch):
+    """CAKE-134: outbox launch_failed is OO-only; replay must not raise."""
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+    from devcake.bake_status import replay_baker_spans
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    replay_baker_spans(
+        [{"event": "launch_failed", "detail": "host crash", "ts": "t"}],
+        provider.get_tracer("test"),
+    )
+    assert list(exporter.get_finished_spans()) == []

@@ -961,6 +961,137 @@ main() {{
     assert "--foreground-baker" in result.stderr
 
 
+def _baker_host_docker_stub_body(data_root: Path, *, fail: bool = False) -> str:
+    """Shell body fragment: stub `docker compose exec -T app` into data_root."""
+    root = data_root.as_posix()
+    if fail:
+        return f"""
+docker() {{
+  echo "docker stub forced failure: $*" >&2
+  return 1
+}}
+"""
+    return f"""
+DATA_ROOT="{root}"
+docker() {{
+  if [[ "${{1:-}}" != "compose" || "${{2:-}}" != "exec" \\
+        || "${{3:-}}" != "-T" || "${{4:-}}" != "app" ]]; then
+    echo "unexpected docker $*" >&2
+    return 1
+  fi
+  shift 4
+  case "${{1:-}}" in
+    mkdir)
+      local path=""
+      for a in "$@"; do
+        if [[ "$a" == /data/* ]]; then path="$a"; fi
+      done
+      [[ -n "$path" ]] || return 1
+      mkdir -p "$DATA_ROOT/${{path#/data/}}"
+      return 0
+      ;;
+    tee)
+      local dest="${{2:-}}"
+      [[ "$dest" == /data/* ]] || return 1
+      local rel="${{dest#/data/}}"
+      mkdir -p "$(dirname "$DATA_ROOT/$rel")"
+      cat > "$DATA_ROOT/$rel"
+      return 0
+      ;;
+    *)
+      echo "unexpected docker compose exec app $*" >&2
+      return 1
+      ;;
+  esac
+}}
+"""
+
+
+def test_baker_host_liveness_failure_emits_outbox_and_error_status(tmp_path):
+    """CAKE-134: launch death ships outbox + honest error status (no heartbeat)."""
+    import json
+
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    data_root = tmp_path / "container_data"
+    data_root.mkdir()
+    launch = "nohup python3 -m dev_factory &"
+    logfile.write_text(
+        "Traceback (most recent call last):\n"
+        "  File \"<stdin>\", line 1, in <module>\n"
+        "ModuleNotFoundError: No module named 'missing_pkg'\n"
+    )
+    pidfile.write_text("8\n")
+    stub = _baker_host_docker_stub_body(data_root)
+    result = _run_baker_host_driver(tmp_path, f"""
+{stub}
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 1; fi
+  return 0
+}}
+sleep() {{ :; }}
+tail() {{ command tail "$@"; }}
+main() {{
+  set +e
+  devcake_baker_wait_liveness 8 "{logfile}" "{pidfile}" "{launch}" 4
+  echo "rc=$?"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
+    assert f"launch: {launch}" in result.stderr
+    assert "--foreground-baker" in result.stderr
+
+    outbox = data_root / "harness_outbox"
+    assert outbox.is_dir(), result.stderr + result.stdout
+    failed = list(outbox.glob("*-launch_failed.jsonl"))
+    assert len(failed) == 1, failed
+    line = failed[0].read_text().strip()
+    assert "\n" not in line
+    rec = json.loads(line)
+    assert rec["event"] == "launch_failed"
+    assert isinstance(rec["ts"], str) and "T" in rec["ts"]
+    assert isinstance(rec["detail"], str)
+    assert launch in rec["detail"]
+    assert "ModuleNotFoundError: No module named 'missing_pkg'" in rec["detail"]
+    assert len(rec["detail"]) <= 2000
+
+    status_path = data_root / "harness_bake_status.json"
+    assert status_path.is_file(), result.stderr
+    status = json.loads(status_path.read_text())
+    assert status["state"] == "error"
+    assert "heartbeat_at" not in status
+    assert str(status["detail"]).startswith("host baker died at launch:")
+    assert "ModuleNotFoundError" in status["detail"] or "Traceback" in status["detail"]
+
+
+def test_baker_host_liveness_failure_emit_is_best_effort(tmp_path):
+    """Docker write failures must not mask diagnostics or change rc=1."""
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    logfile.write_text("boom\n")
+    pidfile.write_text("9\n")
+    stub = _baker_host_docker_stub_body(tmp_path / "unused", fail=True)
+    result = _run_baker_host_driver(tmp_path, f"""
+{stub}
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 1; fi
+  return 0
+}}
+sleep() {{ :; }}
+tail() {{ command tail "$@"; }}
+main() {{
+  set +e
+  devcake_baker_wait_liveness 9 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4
+  echo "rc=$?"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
+    assert "launch: nohup python3 -m dev_factory &" in result.stderr
+    assert "--foreground-baker" in result.stderr
+
+
 def test_up_sh_bake_invokes_hello_dispatch_smoke():
     """CAKE-130: --bake proves Dagu→Dev dispatch via ci_dispatch_hello.sh."""
     text = _up_sh_text()

@@ -37,6 +37,42 @@ check("an alive baker does not warn", () => {
   assert.equal(alerts.some((a) => a.id === "baker-dead"), false);
 });
 
+// CAKE-134: launch-failure detail on /data must surface in the critical body.
+check("dead baker with error detail includes the launch-failure cause", () => {
+  const cause = "host baker died at launch: ModuleNotFoundError: No module named 'x'";
+  const alerts = deriveAlerts({
+    bake_status: {
+      baker_alive: false,
+      baker_detail: "host baker has not checked in",
+      state: "error",
+      detail: cause,
+    },
+  });
+  const hit = alerts.find((a) => a.id === "baker-dead");
+  assert.ok(hit, "baker-dead alert missing");
+  assert.equal(hit.severity, "critical");
+  assert.match(hit.body, /host baker has not checked in/);
+  assert.match(hit.body, /ModuleNotFoundError: No module named 'x'/);
+  assert.match(hit.body, /\.\/up\.sh/);
+  assert.match(hit.body, /\.\/up\.sh --foreground-baker/);
+  assert.equal(alerts.some((a) => a.id === "baker-error"), false);
+});
+
+check("dead baker without error detail stays generic", () => {
+  const alerts = deriveAlerts({
+    bake_status: {
+      baker_alive: false,
+      baker_detail: "host baker last checked in 41s ago",
+    },
+  });
+  const hit = alerts.find((a) => a.id === "baker-dead");
+  assert.ok(hit, "baker-dead alert missing");
+  assert.match(hit.body, /host baker last checked in 41s ago/);
+  assert.match(hit.body, /\.\/up\.sh/);
+  assert.doesNotMatch(hit.body, /host baker died at launch/);
+  assert.doesNotMatch(hit.body, /ModuleNotFoundError/);
+});
+
 check("circuit breaker stays critical red in the same list", () => {
   const alerts = deriveAlerts({
     bake_status: { baker_alive: false, baker_detail: "gone" },

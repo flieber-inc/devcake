@@ -961,6 +961,100 @@ main() {{
     assert "--foreground-baker" in result.stderr
 
 
+def test_up_sh_bake_invokes_hello_dispatch_smoke():
+    """CAKE-130: --bake proves Dagu→Dev dispatch via ci_dispatch_hello.sh."""
+    text = _up_sh_text()
+    assert "ci_dispatch_hello.sh" in text
+    assert "--no-hello-smoke" in text
+    assert "NO_HELLO_SMOKE" in text
+
+
+def test_up_sh_hello_smoke_ordered_before_success_banner():
+    """Success banner must not print until the bake-path hello smoke finishes."""
+    text = _up_sh_text()
+    smoke_at = text.index("ci_dispatch_hello.sh")
+    success_at = text.index("stack starting")
+    assert smoke_at < success_at
+
+
+def test_up_sh_hello_smoke_reads_admin_without_sourcing_env():
+    """ADMIN_* for the smoke come from selective .env parse — never source .env."""
+    text = _up_sh_text()
+    assert "source .env" not in text
+    assert ". .env" not in text
+    assert "ADMIN_USER" in text
+    assert "ADMIN_PASSWORD" in text
+    # Same selective-key family as OO_INGEST_* (grep matching keys + export).
+    assert "ADMIN_USER=*" in text or "ADMIN_USER=" in text
+    assert "grep -E" in text
+
+
+def test_up_sh_hello_smoke_failure_points_at_dagu_and_socket():
+    """Failed hello gate names diagnostics operators need (dagu logs + sock)."""
+    text = _up_sh_text()
+    assert "docker compose logs" in text and "dagu" in text
+    assert "Docker-socket" in text or "docker socket" in text.lower() or "Docker Desktop" in text
+
+
+def test_up_sh_validates_oo_passwords_before_bake_and_compose():
+    """CAKE-131: OO policy gate must fail before any bake/compose action."""
+    text = _up_sh_text()
+    assert "require_oo_password OO_ROOT_PASSWORD" in text
+    assert "require_oo_password OO_INGEST_PASSWORD" in text
+    assert "oo_password.sh" in text
+    # Match real action lines (leading indent), not earlier comments that
+    # mention the same verbs.
+    lines = text.splitlines()
+    gate_line = next(
+        i for i, line in enumerate(lines)
+        if "require_oo_password OO_ROOT_PASSWORD" in line
+    )
+    bake = next(
+        i for i, line in enumerate(lines)
+        if line.lstrip().startswith("docker buildx bake")
+    )
+    compose = next(
+        i for i, line in enumerate(lines)
+        if line.lstrip().startswith("docker compose up -d")
+    )
+    assert gate_line < bake
+    assert gate_line < compose
+
+
+def test_up_sh_health_gate_hints_openobserve_logs():
+    """Weak OO root password crash-loops OO; the app health gate must name it."""
+    text = _up_sh_text()
+    # Locate the ~60s live-timeout warning branch (not the redis/dagu probe).
+    idx = text.index("app did not report live within")
+    branch = text[idx : idx + 400]
+    assert "docker compose logs" in branch and "app" in branch
+    assert "docker compose logs openobserve" in branch
+
+
+def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
+    """CAKE-128: host-stat alone is wrong on Docker Desktop; probe + gate.
+
+    Text contract only — live Desktop acceptance is a residual on Linux agents.
+    Exact operator strings are the public seam operators and dry-run share.
+
+    The writability gate must exec as the post-entrypoint credentials (uid 1000
+    / gid $DOCKER_GID). The pinned dagu image has empty Config.User, so bare
+    ``compose exec`` is root and false-greens a wrong DOCKER_GID.
+    """
+    text = _up_sh_text()
+    assert "devcake_docker_gid_incontainer" in text
+    assert "in-container view" in text
+    assert "host path says" in text
+    assert "in-container probe failed" in text
+    assert "docs/14-security.md" in text
+    assert "root-group" in text
+    # Gate identity must match the running daemon (not root).
+    assert 'docker compose exec -T --user "1000:${GID}" dagu' in text
+    assert "test -w /var/run/docker.sock" in text
+    assert "docker-compose.override.yml" in text
+    assert 'DOCKER_GID: "0"' in text
+
+
 def test_tee_run_keeps_a_tail_and_writes_through():
     factory = _load_factory()
     from dev_factory.run import tee_run
@@ -1160,6 +1254,88 @@ def test_once_real_harness_image_is_ready_without_keep_set(tmp_path, monkeypatch
         house={"grok-build": "0.2.112"}, digest="sha256:abc")
     assert status["state"] == "ready"
     assert status["detail"] == ""
+
+
+def test_once_preserves_keep_set_published_during_reconcile(tmp_path, monkeypatch):
+    """A keep-set published mid-tick must survive cleanup for the next claim.
+
+    Public seam: watch.once — may remove only the claimed `.taking` inbox,
+    never the live harness_keep_set.json publication path.
+    """
+    _load_factory()
+    import dev_factory.watch as watch
+
+    keep_a = json.dumps({
+        "pins": [
+            {"template": "claude-code", "cli_version": "2.1.229"},
+            {"template": "grok-build", "cli_version": "0.2.112"},
+        ],
+    })
+    keep_b = json.dumps({
+        "pins": [
+            {"template": "codex", "cli_version": "0.149.0"},
+            {"template": "claude-code", "cli_version": "2.1.240"},
+        ],
+    })
+    data: dict[str, str] = {watch.KEEP_SET: keep_a}
+    seen_keep_bodies: list[str] = []
+
+    def compose_claim(rel: str) -> None:
+        if rel in data:
+            data[rel + watch.TAKING_SUFFIX] = data.pop(rel)
+
+    def compose_read(rel: str) -> str | None:
+        return data.get(rel)
+
+    def compose_write(rel: str, text: str) -> None:
+        data[rel] = text
+
+    def compose_rm(rel: str) -> None:
+        data.pop(rel, None)
+
+    def compose_ls(rel: str) -> list[str]:
+        prefix = rel.rstrip("/") + "/"
+        names: list[str] = []
+        for key in data:
+            if key.startswith(prefix):
+                names.append(key[len(prefix):].split("/", 1)[0])
+        return names
+
+    def fake_reconcile(*, keep_set_path, **_kw):
+        body = Path(keep_set_path).read_text()
+        seen_keep_bodies.append(body)
+        # App publishes a newer desired set while this claimed tick is in flight.
+        data[watch.KEEP_SET] = keep_b
+        return {
+            "state": "ready",
+            "digest": "sha256:abc",
+            "jobs": [],
+            "detail": "",
+        }
+
+    monkeypatch.setattr(watch, "compose_claim", compose_claim)
+    monkeypatch.setattr(watch, "compose_read", compose_read)
+    monkeypatch.setattr(watch, "compose_write", compose_write)
+    monkeypatch.setattr(watch, "compose_rm", compose_rm)
+    monkeypatch.setattr(watch, "compose_ls", compose_ls)
+    monkeypatch.setattr(
+        watch, "docker_name_list",
+        lambda argv: ["devcake/dev-hello:latest", "devcake/dev-grok-build:0.2.112"])
+    monkeypatch.setattr(watch, "reconcile", fake_reconcile)
+
+    house = {"grok-build": "0.2.112", "claude-code": "2.1.229", "codex": "0.147.0"}
+    status = watch.once(
+        work=tmp_path, tag="latest", house=house, digest="sha256:abc")
+    assert status["state"] == "ready"
+    assert data.get(watch.KEEP_SET) == keep_b
+    assert watch.KEEP_SET + watch.TAKING_SUFFIX not in data
+    assert seen_keep_bodies == [keep_a]
+
+    status = watch.once(
+        work=tmp_path, tag="latest", house=house, digest="sha256:abc")
+    assert status["state"] == "ready"
+    assert seen_keep_bodies == [keep_a, keep_b]
+    assert watch.KEEP_SET + watch.TAKING_SUFFIX not in data
 
 
 def test_write_status_stamps_a_heartbeat(tmp_path):

@@ -777,6 +777,41 @@ def test_up_sh_persists_devcake_tag_into_env():
         assert f"upsert_env_var {key}" in text
 
 
+def test_up_sh_bake_invokes_hello_dispatch_smoke():
+    """CAKE-130: --bake proves Dagu→Dev dispatch via ci_dispatch_hello.sh."""
+    text = _up_sh_text()
+    assert "ci_dispatch_hello.sh" in text
+    assert "--no-hello-smoke" in text
+    assert "NO_HELLO_SMOKE" in text
+
+
+def test_up_sh_hello_smoke_ordered_before_success_banner():
+    """Success banner must not print until the bake-path hello smoke finishes."""
+    text = _up_sh_text()
+    smoke_at = text.index("ci_dispatch_hello.sh")
+    success_at = text.index("stack starting")
+    assert smoke_at < success_at
+
+
+def test_up_sh_hello_smoke_reads_admin_without_sourcing_env():
+    """ADMIN_* for the smoke come from selective .env parse — never source .env."""
+    text = _up_sh_text()
+    assert "source .env" not in text
+    assert ". .env" not in text
+    assert "ADMIN_USER" in text
+    assert "ADMIN_PASSWORD" in text
+    # Same selective-key family as OO_INGEST_* (grep matching keys + export).
+    assert "ADMIN_USER=*" in text or "ADMIN_USER=" in text
+    assert "grep -E" in text
+
+
+def test_up_sh_hello_smoke_failure_points_at_dagu_and_socket():
+    """Failed hello gate names diagnostics operators need (dagu logs + sock)."""
+    text = _up_sh_text()
+    assert "docker compose logs" in text and "dagu" in text
+    assert "Docker-socket" in text or "docker socket" in text.lower() or "Docker Desktop" in text
+
+
 def test_up_sh_validates_oo_passwords_before_bake_and_compose():
     """CAKE-131: OO policy gate must fail before any bake/compose action."""
     text = _up_sh_text()

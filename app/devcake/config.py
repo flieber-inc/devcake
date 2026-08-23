@@ -1483,7 +1483,18 @@ def save_dev_type(dt: DevType) -> None:
 
 
 def delete_dev_type(name: str) -> None:
-    (CONFIG_PATH.parent / "dev_types" / f"{name}.yaml").unlink(missing_ok=True)
+    """Unlink ``dev_types/{name}.yaml`` after charset + path confinement.
+
+    Callers normally pass Dev Type keys already validated at create time;
+    re-check here so unlink cannot leave ``CONFIG_PATH.parent / "dev_types"``.
+    """
+    from .pathsafety import confined
+    if not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", name or ""):
+        raise ValueError(
+            "dev type name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        )
+    path = confined(CONFIG_PATH.parent / "dev_types", f"{name}.yaml")
+    path.unlink(missing_ok=True)
 
 
 def load_dev_types() -> dict[str, DevType]:

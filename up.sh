@@ -60,6 +60,8 @@ done
 # ONE derivation, shared with the CI bring-up (ADR-0034; policy stays here)
 # shellcheck source=scripts/lib/stack_env.sh
 source "$(dirname "$0")/scripts/lib/stack_env.sh"
+# shellcheck source=scripts/lib/oo_password.sh
+source "$(dirname "$0")/scripts/lib/oo_password.sh"
 
 discover_docker_gid() {
   # Prefer in-container view (CAKE-128); fall back to host-stat. Prints the
@@ -166,6 +168,24 @@ if [[ ! -f .env ]]; then
     echo "error: no .env and no .env.example — create .env with bootstrap passwords first" >&2
     exit 1
   fi
+fi
+
+# OpenObserve bootstrap passwords: fail before any bake/compose when a
+# non-empty value cannot satisfy the pinned OO image. Selective parse only —
+# do not shell-source the env file. Empty values skip (app boot still refuses them).
+# Lockstep with docker-compose.yml openobserve pin v0.91.5
+# (src/config/src/utils/password.rs). Update this rule when bumping the image.
+if [[ -f .env ]]; then
+  _oo_root=""
+  _oo_ingest=""
+  while IFS= read -r line; do
+    case "$line" in
+      OO_ROOT_PASSWORD=*) _oo_root="${line#OO_ROOT_PASSWORD=}" ;;
+      OO_INGEST_PASSWORD=*) _oo_ingest="${line#OO_INGEST_PASSWORD=}" ;;
+    esac
+  done < <(grep -E '^(OO_ROOT_PASSWORD|OO_INGEST_PASSWORD)=' .env || true)
+  require_oo_password OO_ROOT_PASSWORD "$_oo_root" || exit 1
+  require_oo_password OO_INGEST_PASSWORD "$_oo_ingest" || exit 1
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -298,6 +318,7 @@ if [[ "$_ok" -eq 1 ]]; then
 else
   echo "── WARNING: app did not report live within ~60s. The stack is up," >&2
   echo "   but the app may be wedged — check: docker compose logs --tail=50 app" >&2
+  echo "   (OpenObserve crash-loop on a weak root password? also: docker compose logs openobserve)" >&2
 fi
 
 # Fatal post-start gate (CAKE-128): dagu HTTP health can be green while the

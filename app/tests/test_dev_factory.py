@@ -777,6 +777,41 @@ def test_up_sh_persists_devcake_tag_into_env():
         assert f"upsert_env_var {key}" in text
 
 
+def test_up_sh_validates_oo_passwords_before_bake_and_compose():
+    """CAKE-131: OO policy gate must fail before any bake/compose action."""
+    text = _up_sh_text()
+    assert "require_oo_password OO_ROOT_PASSWORD" in text
+    assert "require_oo_password OO_INGEST_PASSWORD" in text
+    assert "oo_password.sh" in text
+    # Match real action lines (leading indent), not earlier comments that
+    # mention the same verbs.
+    lines = text.splitlines()
+    gate_line = next(
+        i for i, line in enumerate(lines)
+        if "require_oo_password OO_ROOT_PASSWORD" in line
+    )
+    bake = next(
+        i for i, line in enumerate(lines)
+        if line.lstrip().startswith("docker buildx bake")
+    )
+    compose = next(
+        i for i, line in enumerate(lines)
+        if line.lstrip().startswith("docker compose up -d")
+    )
+    assert gate_line < bake
+    assert gate_line < compose
+
+
+def test_up_sh_health_gate_hints_openobserve_logs():
+    """Weak OO root password crash-loops OO; the app health gate must name it."""
+    text = _up_sh_text()
+    # Locate the ~60s live-timeout warning branch (not the redis/dagu probe).
+    idx = text.index("app did not report live within")
+    branch = text[idx : idx + 400]
+    assert "docker compose logs" in branch and "app" in branch
+    assert "docker compose logs openobserve" in branch
+
+
 def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
     """CAKE-128: host-stat alone is wrong on Docker Desktop; probe + gate.
 

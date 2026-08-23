@@ -777,6 +777,25 @@ def test_up_sh_persists_devcake_tag_into_env():
         assert f"upsert_env_var {key}" in text
 
 
+def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
+    """CAKE-128: host-stat alone is wrong on Docker Desktop; probe + gate.
+
+    Text contract only — live Desktop acceptance is a residual on Linux agents.
+    Exact operator strings are the public seam operators and dry-run share.
+    """
+    text = _up_sh_text()
+    assert "devcake_docker_gid_incontainer" in text
+    assert "in-container view" in text
+    assert "host path says" in text
+    assert "in-container probe failed" in text
+    assert "docs/14-security.md" in text
+    assert "root-group" in text
+    assert "docker compose exec -T dagu" in text
+    assert "test -w /var/run/docker.sock" in text
+    assert "docker-compose.override.yml" in text
+    assert 'DOCKER_GID: "0"' in text
+
+
 def test_tee_run_keeps_a_tail_and_writes_through():
     factory = _load_factory()
     from dev_factory.run import tee_run

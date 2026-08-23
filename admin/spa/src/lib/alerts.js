@@ -284,8 +284,10 @@ export default function deriveAlerts(health) {
       title: "Host baker is not running",
       body:
         (bake.baker_detail ? `${bake.baker_detail}. ` : "") +
-        "Harness images will not compile. Restart the stack with ./up.sh — " +
-        "the baker is a host process started with the app, not a container.",
+        "Harness images will not compile. Restart with ./up.sh " +
+        "(or ./up.sh --foreground-baker when the parent may reap detached " +
+        "children). The baker is a host process started with the app, not a " +
+        "container.",
     });
   } else if (bake.state === "error" && bake.detail && bake.baker_alive) {
     alerts.push({

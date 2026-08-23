@@ -777,6 +777,177 @@ def test_up_sh_persists_devcake_tag_into_env():
         assert f"upsert_env_var {key}" in text
 
 
+def test_up_sh_diagnoses_stale_baker_pid_file():
+    """Dead watch.pid must be reported and removed before a new baker starts."""
+    text = _up_sh_text()
+    assert "baker_host.sh" in text
+    assert "devcake_baker_prepare_pidfile" in text
+    assert "watch.pid" in text
+    # Diagnostic + cleanup live in the sourced helper (unit-tested below).
+    helper = _baker_host_sh_text()
+    assert "stale" in helper.lower()
+    assert "watch.pid" in helper or "pidfile" in helper
+    assert "rm -f" in helper
+
+
+def _baker_host_sh_text() -> str:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "scripts" / "lib" / "baker_host.sh",
+        Path("/srv/repo-scripts/lib/baker_host.sh"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None, "baker_host.sh missing — bind /srv/repo-scripts"
+    return path.read_text()
+
+
+def test_up_sh_confirms_baker_liveness_after_launch():
+    """Detached baker must be confirmed alive with log progress after launch."""
+    text = _up_sh_text()
+    assert "devcake_baker_wait_liveness" in text
+    helper = _baker_host_sh_text()
+    assert "kill -0" in helper
+    assert "watch.log" in helper or "logfile" in helper
+    assert "tail" in helper
+    assert "launch:" in helper
+    assert "pidfile:" in helper
+    assert "--foreground-baker" in helper
+
+
+def test_up_sh_foreground_baker_bypasses_nohup():
+    """--foreground-baker runs python3 -m dev_factory without nohup/detach."""
+    text = _up_sh_text()
+    assert "--foreground-baker" in text
+    # Documented in the header that usage() prints.
+    header = "\n".join(text.splitlines()[:20])
+    assert "--foreground-baker" in header
+    assert "FOREGROUND_BAKER" in text
+    # Foreground branch uses exec (or un-nohup'd invoke); default keeps nohup.
+    assert "nohup python3 -m dev_factory" in text
+    assert "exec python3 -m dev_factory" in text
+    # Flag gate: foreground path must not wrap the exec in nohup.
+    fg_idx = text.index("FOREGROUND_BAKER")
+    # Find the foreground exec near a FOREGROUND_BAKER test.
+    exec_idx = text.index("exec python3 -m dev_factory")
+    window = text[max(0, exec_idx - 200): exec_idx]
+    assert "nohup" not in window
+    assert "FOREGROUND_BAKER" in text[fg_idx:exec_idx + 40] or "foreground" in window.lower()
+
+
+def _baker_host_sh_path() -> Path:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "scripts" / "lib" / "baker_host.sh",
+        Path("/srv/repo-scripts/lib/baker_host.sh"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None, "baker_host.sh missing — bind /srv/repo-scripts"
+    return path
+
+
+def _run_baker_host_driver(tmp_path: Path, body: str) -> subprocess.CompletedProcess[str]:
+    """Source baker_host.sh under stubbed kill/sleep/tail (shell-stub idiom)."""
+    driver = tmp_path / "driver.sh"
+    helper = _baker_host_sh_path()
+    driver.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        + body
+        + f'\n# shellcheck source=/dev/null\nsource "{helper}"\n'
+        + 'main "$@"\n'
+    )
+    driver.chmod(0o700)
+    return subprocess.run(
+        ["bash", str(driver)],
+        capture_output=True, text=True, cwd=str(tmp_path),
+    )
+
+
+def test_baker_host_clears_stale_pidfile(tmp_path):
+    pidfile = tmp_path / "watch.pid"
+    pidfile.write_text("999001\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 1; fi
+  return 0
+}}
+main() {{
+  devcake_baker_prepare_pidfile "{pidfile}"
+}}
+""")
+    assert result.returncode == 0, result.stderr
+    assert "stale" in result.stdout.lower()
+    assert "999001" in result.stdout
+    assert str(pidfile) in result.stdout
+    assert not pidfile.exists()
+
+
+def test_baker_host_restarts_live_pid(tmp_path):
+    pidfile = tmp_path / "watch.pid"
+    pidfile.write_text("4242\n")
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  devcake_baker_prepare_pidfile "{pidfile}"
+}}
+""")
+    assert result.returncode == 0, result.stderr
+    assert "restarting host baker" in result.stdout
+    assert "4242" in result.stdout
+    assert pidfile.exists()  # still present until new launch overwrites
+    assert killed.read_text().strip() == "4242"
+
+
+def test_baker_host_wait_liveness_succeeds_when_log_grows(tmp_path):
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    logfile.write_text("")
+    pidfile.write_text("7\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  return 0
+}}
+sleep() {{
+  echo "dev_factory: watching" >> "{logfile}"
+}}
+main() {{
+  devcake_baker_wait_liveness 7 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "liveness confirmed" in result.stdout
+
+
+def test_baker_host_wait_liveness_fails_when_pid_dies(tmp_path):
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    logfile.write_text("boot\n")
+    pidfile.write_text("8\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 1; fi
+  return 0
+}}
+sleep() {{ :; }}
+tail() {{ command tail "$@"; }}
+main() {{
+  set +e
+  devcake_baker_wait_liveness 8 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4
+  echo "rc=$?"
+}}
+""")
+    assert result.returncode == 0, result.stderr
+    assert "rc=1" in result.stdout
+    assert "launch: nohup python3 -m dev_factory &" in result.stderr
+    assert f"pidfile: {pidfile}" in result.stderr
+    assert "--foreground-baker" in result.stderr
+
+
 def test_tee_run_keeps_a_tail_and_writes_through():
     factory = _load_factory()
     from dev_factory.run import tee_run

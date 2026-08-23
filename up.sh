@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
 # Bring up the DevCake stack with host-discovered DOCKER_GID.
 #
-#   ./up.sh                 # upsert GID/WS_HOST/TAG → compose up -d → baker
-#   ./up.sh --bake          # bake control plane + hello, then up + baker
+#   ./up.sh                    # upsert GID/WS_HOST/TAG → compose up -d → baker
+#   ./up.sh --bake             # bake control plane + hello, then up + baker
 #   ./up.sh --bake app admin
-#   ./up.sh -- dagu app     # pass service names to compose up
-#   ./up.sh --dry-run       # print discovered GID + planned actions
+#   ./up.sh -- dagu app        # pass service names to compose up
+#   ./up.sh --dry-run          # print discovered GID + planned actions
+#   ./up.sh --foreground-baker # up, then run baker in foreground (no nohup)
 #
 # DOCKER_GID is host-specific (the group of /var/run/docker.sock). Compose
 # requires it for Dagu's sock access; this script always re-discovers and
 # writes it (plus DEVCAKE_WS_HOST and DEVCAKE_TAG) into .env so plain
-# `docker compose up -d` works afterwards too.
+# `docker compose up -d` works afterwards too. Use --foreground-baker in
+# terminals, CI, and automation that reaps detached children.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 SOCK="${DOCKER_SOCK:-/var/run/docker.sock}"
 DRY_RUN=0
 DO_BAKE=0
+FOREGROUND_BAKER=0
 BAKE_TARGETS=()
 COMPOSE_ARGS=()
 
 usage() {
-  sed -n '2,13p' "$0" | sed 's/^# \?//'
+  sed -n '2,15p' "$0" | sed 's/^# \?//'
   exit "${1:-0}"
 }
 
@@ -29,6 +32,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --foreground-baker) FOREGROUND_BAKER=1; shift ;;
     --bake)
       DO_BAKE=1
       shift
@@ -58,6 +62,8 @@ done
 # ONE derivation, shared with the CI bring-up (ADR-0034; policy stays here)
 # shellcheck source=scripts/lib/stack_env.sh
 source "$(dirname "$0")/scripts/lib/stack_env.sh"
+# shellcheck source=scripts/lib/baker_host.sh
+source "$(dirname "$0")/scripts/lib/baker_host.sh"
 
 discover_docker_gid() {
   local gid=""
@@ -158,7 +164,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     fi
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
-  echo "── would: start host baker (.factory/watch.pid) — not a compose service"
+  if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
+    echo "── would: run host baker in foreground (exec python3 -m dev_factory; no nohup)"
+  else
+    echo "── would: start host baker detached (.factory/watch.pid) — not a compose service"
+  fi
   exit 0
 fi
 
@@ -281,14 +291,7 @@ fi
 # and compiles + probes when pins change.
 _FACTORY_DIR="$(pwd)/.factory"
 mkdir -p "$_FACTORY_DIR"
-if [[ -f "$_FACTORY_DIR/watch.pid" ]]; then
-  _old="$(cat "$_FACTORY_DIR/watch.pid" 2>/dev/null || true)"
-  if [[ -n "$_old" ]] && kill -0 "$_old" 2>/dev/null; then
-    echo "── restarting host baker (was pid ${_old})"
-    kill "$_old" 2>/dev/null || true
-    sleep 0.3
-  fi
-fi
+devcake_baker_prepare_pidfile "$_FACTORY_DIR/watch.pid"
 # Ingest creds so the baker can ship a dying word to OO if the app is
 # already gone (the app's push_oo_log chokepoint cannot run then).
 # Read only those keys — do not source the whole .env into this shell.
@@ -304,10 +307,24 @@ export PYTHONPATH="$(pwd)/scripts:$(pwd)/app"
 export DEVCAKE_OO_URL="http://127.0.0.1:5080"
 # Inherit OO_INGEST_* from the exports above — do not put the password
 # on the process argv (readable via ps /proc).
+_BAKER_LOG="$_FACTORY_DIR/watch.log"
+_BAKER_PIDFILE="$_FACTORY_DIR/watch.pid"
+if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
+  # Foreground mode for terminals / CI / automation that reaps detached
+  # children. Write $$ then exec so the pidfile names the baker after replace.
+  echo "── host baker in foreground (pidfile $_BAKER_PIDFILE; Ctrl-C to stop)"
+  echo "── stack up (admin: http://localhost:8080); baker takes this terminal"
+  echo $$ >"$_BAKER_PIDFILE"
+  exec python3 -m dev_factory
+fi
+# Ensure the log exists so the post-start baseline is defined (do not truncate).
+[[ -f "$_BAKER_LOG" ]] || : >"$_BAKER_LOG"
+_BAKER_LAUNCH="nohup python3 -m dev_factory >>${_BAKER_LOG} 2>&1 &"
 nohup python3 -m dev_factory \
-  >>"$_FACTORY_DIR/watch.log" 2>&1 &
-echo $! >"$_FACTORY_DIR/watch.pid"
-echo "── host baker watching keep-set (pid $! → .factory/watch.log)"
+  >>"$_BAKER_LOG" 2>&1 &
+_BAKER_PID=$!
+echo "$_BAKER_PID" >"$_BAKER_PIDFILE"
+devcake_baker_wait_liveness "$_BAKER_PID" "$_BAKER_LOG" "$_BAKER_PIDFILE" "$_BAKER_LAUNCH" 12
 
 echo "── stack starting (admin: http://localhost:8080)"
 echo "   bootstrap passwords still come from .env; operator secrets via Config."

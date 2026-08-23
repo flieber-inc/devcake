@@ -27,6 +27,7 @@ check("a dead baker is a critical non-dismissable alert", () => {
   assert.equal(hit.dismissable, undefined);
   assert.match(hit.title, /baker/i);
   assert.match(hit.body, /\.\/up\.sh/);
+  assert.match(hit.body, /\.\/up\.sh --foreground-baker/);
 });
 
 check("an alive baker does not warn", () => {

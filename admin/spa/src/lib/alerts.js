@@ -278,13 +278,18 @@ export default function deriveAlerts(health) {
   // honesty class as a tripped breaker: critical, not dismissable.
   const bake = health.bake_status || {};
   if (bake.baker_alive === false) {
+    const cause =
+      bake.state === "error" && bake.detail
+        ? ` ${String(bake.detail)}.`
+        : "";
     alerts.push({
       id: "baker-dead",
       severity: "critical",
       title: "Host baker is not running",
       body:
-        (bake.baker_detail ? `${bake.baker_detail}. ` : "") +
-        "Harness images will not compile. Restart with ./up.sh " +
+        (bake.baker_detail ? `${bake.baker_detail}.` : "") +
+        cause +
+        " Harness images will not compile. Restart with ./up.sh " +
         "(or ./up.sh --foreground-baker when the parent may reap detached " +
         "children). The baker is a host process started with the app, not a " +
         "container.",

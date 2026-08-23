@@ -29,6 +29,53 @@ devcake_baker_prepare_pidfile() {
   rm -f "$pidfile"
 }
 
+# Best-effort: push launch-failure evidence into the app /data mailbox so
+# OpenObserve (outbox drain) and the admin dead-baker alert (bake status)
+# see why the baker died. Never stamps heartbeat_at — liveness stays false.
+# Failures of docker/python here must not change the caller's exit path.
+#
+# Usage: devcake_baker_emit_launch_failure <logfile> <launch_cmd>
+devcake_baker_emit_launch_failure() {
+  local logfile="$1" launch_cmd="$2"
+  (
+    set +e
+    local excerpt first_line outbox_detail status_detail ns outbox_json status_json
+    excerpt="$(tail -n 15 "$logfile" 2>/dev/null || true)"
+    first_line="$(printf '%s\n' "$excerpt" | sed '/^[[:space:]]*$/d' | head -n 1)"
+    [[ -n "$first_line" ]] || first_line="(no log output)"
+    # Cap short status detail to one line / sane length.
+    first_line="$(printf '%s' "$first_line" | tr '\n' ' ' | cut -c1-200)"
+    status_detail="host baker died at launch: ${first_line}"
+    outbox_detail="$(printf 'launch: %s\n\n--- watch.log (last 15 lines) ---\n%s' \
+      "$launch_cmd" "$excerpt")"
+    ns="$(date +%s%N 2>/dev/null || date +%s)"
+    outbox_json="$(DETAIL="$outbox_detail" python3 -c '
+import json, os
+from datetime import datetime, timezone
+print(json.dumps({
+    "ts": datetime.now(timezone.utc).isoformat(),
+    "event": "launch_failed",
+    # Total cap, character-safe (shell cut -c on multiline input caps per line)
+    "detail": os.environ["DETAIL"][:2000],
+}, separators=(",", ":")))
+' 2>/dev/null)" || return 0
+    status_json="$(DETAIL="$status_detail" python3 -c '
+import json, os
+print(json.dumps({
+    "state": "error",
+    "detail": os.environ["DETAIL"],
+}, separators=(",", ":")))
+' 2>/dev/null)" || return 0
+    [[ -n "$outbox_json" && -n "$status_json" ]] || return 0
+    docker compose exec -T app mkdir -p /data/harness_outbox >/dev/null 2>&1 || true
+    printf '%s\n' "$outbox_json" \
+      | docker compose exec -T app tee \
+          "/data/harness_outbox/${ns}-launch_failed.jsonl" >/dev/null 2>&1 || true
+    printf '%s\n' "$status_json" \
+      | docker compose exec -T app tee /data/harness_bake_status.json >/dev/null 2>&1 || true
+  ) || true
+}
+
 # Confirm a detached baker stays alive and its log progresses for ~seconds.
 # Requires PID alive AND logfile size growth past the pre-launch baseline
 # (stdout/stderr → watch.log). Pass baseline_bytes from BEFORE launch so the
@@ -56,6 +103,7 @@ devcake_baker_wait_liveness() {
       echo "   last log lines (${logfile}):" >&2
       tail -n 40 "$logfile" 2>/dev/null >&2 || true
       echo "   tip: retry with ./up.sh --foreground-baker when the parent reaps detached children" >&2
+      devcake_baker_emit_launch_failure "$logfile" "$launch_cmd"
       return 1
     fi
     size=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
@@ -70,5 +118,6 @@ devcake_baker_wait_liveness() {
   echo "   last log lines (${logfile}):" >&2
   tail -n 40 "$logfile" 2>/dev/null >&2 || true
   echo "   tip: retry with ./up.sh --foreground-baker when the parent reaps detached children" >&2
+  devcake_baker_emit_launch_failure "$logfile" "$launch_cmd"
   return 1
 }

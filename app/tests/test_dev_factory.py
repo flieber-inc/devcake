@@ -978,6 +978,88 @@ def test_once_real_harness_image_is_ready_without_keep_set(tmp_path, monkeypatch
     assert status["detail"] == ""
 
 
+def test_once_preserves_keep_set_published_during_reconcile(tmp_path, monkeypatch):
+    """A keep-set published mid-tick must survive cleanup for the next claim.
+
+    Public seam: watch.once — may remove only the claimed `.taking` inbox,
+    never the live harness_keep_set.json publication path.
+    """
+    _load_factory()
+    import dev_factory.watch as watch
+
+    keep_a = json.dumps({
+        "pins": [
+            {"template": "claude-code", "cli_version": "2.1.229"},
+            {"template": "grok-build", "cli_version": "0.2.112"},
+        ],
+    })
+    keep_b = json.dumps({
+        "pins": [
+            {"template": "codex", "cli_version": "0.149.0"},
+            {"template": "claude-code", "cli_version": "2.1.240"},
+        ],
+    })
+    data: dict[str, str] = {watch.KEEP_SET: keep_a}
+    seen_keep_bodies: list[str] = []
+
+    def compose_claim(rel: str) -> None:
+        if rel in data:
+            data[rel + watch.TAKING_SUFFIX] = data.pop(rel)
+
+    def compose_read(rel: str) -> str | None:
+        return data.get(rel)
+
+    def compose_write(rel: str, text: str) -> None:
+        data[rel] = text
+
+    def compose_rm(rel: str) -> None:
+        data.pop(rel, None)
+
+    def compose_ls(rel: str) -> list[str]:
+        prefix = rel.rstrip("/") + "/"
+        names: list[str] = []
+        for key in data:
+            if key.startswith(prefix):
+                names.append(key[len(prefix):].split("/", 1)[0])
+        return names
+
+    def fake_reconcile(*, keep_set_path, **_kw):
+        body = Path(keep_set_path).read_text()
+        seen_keep_bodies.append(body)
+        # App publishes a newer desired set while this claimed tick is in flight.
+        data[watch.KEEP_SET] = keep_b
+        return {
+            "state": "ready",
+            "digest": "sha256:abc",
+            "jobs": [],
+            "detail": "",
+        }
+
+    monkeypatch.setattr(watch, "compose_claim", compose_claim)
+    monkeypatch.setattr(watch, "compose_read", compose_read)
+    monkeypatch.setattr(watch, "compose_write", compose_write)
+    monkeypatch.setattr(watch, "compose_rm", compose_rm)
+    monkeypatch.setattr(watch, "compose_ls", compose_ls)
+    monkeypatch.setattr(
+        watch, "docker_name_list",
+        lambda argv: ["devcake/dev-hello:latest", "devcake/dev-grok-build:0.2.112"])
+    monkeypatch.setattr(watch, "reconcile", fake_reconcile)
+
+    house = {"grok-build": "0.2.112", "claude-code": "2.1.229", "codex": "0.147.0"}
+    status = watch.once(
+        work=tmp_path, tag="latest", house=house, digest="sha256:abc")
+    assert status["state"] == "ready"
+    assert data.get(watch.KEEP_SET) == keep_b
+    assert watch.KEEP_SET + watch.TAKING_SUFFIX not in data
+    assert seen_keep_bodies == [keep_a]
+
+    status = watch.once(
+        work=tmp_path, tag="latest", house=house, digest="sha256:abc")
+    assert status["state"] == "ready"
+    assert seen_keep_bodies == [keep_a, keep_b]
+    assert watch.KEEP_SET + watch.TAKING_SUFFIX not in data
+
+
 def test_write_status_stamps_a_heartbeat(tmp_path):
     factory = _load_factory()
     body = factory.write_status(

@@ -25,6 +25,8 @@ import tempfile
 from pathlib import Path
 
 from . import security
+from .config import HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE
+from .pathsafety import confined
 
 log = logging.getLogger("devcake.secrets")
 
@@ -40,6 +42,8 @@ CONNECTION_FIELDS: dict[str, set[str]] = {
     # skills source has no PR surface and is read-only by construction
     "skill": {"token", "token_ro"},
 }
+
+_HARNESS_VAR_RE = re.compile(f"^{HARNESS_VAR_PATTERN}$")
 
 
 def connection_instances(config) -> tuple[tuple[str, str], ...]:
@@ -81,11 +85,24 @@ def _root() -> Path:
 
 
 def _conn_path(scope: str, instance: str) -> Path:
-    return _root() / "connections" / f"{scope}-{instance}.json"
+    """Build connections/{scope}-{instance}.json under the secrets root.
+
+    Validates scope + instance *before* interpolating so a skipped caller
+    gate cannot turn ``instance`` into a path separator or ``..`` escape
+    (CAKE-136 / CodeQL py/path-injection).
+    """
+    if scope not in CONNECTION_FIELDS:
+        raise ValueError(f"unknown connection scope {scope!r}")
+    if not instance or re.fullmatch(_INSTANCE_NAME_RE, instance) is None:
+        raise ValueError(f"invalid connection instance {instance!r}")
+    return confined(_root() / "connections", f"{scope}-{instance}.json")
 
 
 def _harness_path(var: str) -> Path:
-    return _root() / "harness" / f"{var}.json"
+    """Build harness/{VAR}.json under the secrets root (store-level gate)."""
+    if not var or _HARNESS_VAR_RE.fullmatch(var) is None:
+        raise ValueError(f"invalid harness var {var!r}")
+    return confined(_root() / "harness", f"{var}.json")
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -316,7 +333,7 @@ def write_credential_file(dev_type: str, filename: str, content: str) -> Path:
     if len(data) > MAX_CREDENTIAL_FILE_BYTES:
         raise ValueError(
             f"credential file too large ({len(data)} > {MAX_CREDENTIAL_FILE_BYTES})")
-    path = _root() / dev_type / filename
+    path = confined(_root(), dev_type, filename)
     _atomic_write_bytes(path, data)
     if len(raw) >= 8:
         security.register_runtime_secret(
@@ -327,7 +344,7 @@ def write_credential_file(dev_type: str, filename: str, content: str) -> Path:
 def delete_credential_file(dev_type: str, filename: str) -> None:
     """Unlink one OAuth/uploaded credential file. Missing = no-op."""
     require_credential_ref(dev_type, filename)
-    path = _root() / dev_type / filename
+    path = confined(_root(), dev_type, filename)
     path.unlink(missing_ok=True)
     # drop empty dir so inventory doesn't keep a ghost. suppress: a concurrent
     # OAuth write can race the empty check (TOCTOU) — unlink already succeeded.
@@ -507,7 +524,15 @@ def register_all() -> None:
 # bundle secrets section: {"connections": {...}, "harness": {...}}.
 
 def _profile_path(name: str) -> Path:
-    return _root() / "profiles" / f"{name}.json"
+    """Build profiles/{name}.json under the secrets root (store-level gate).
+
+    Charset matches ``profiles.PROFILE_NAME_RE`` (lazy import avoids the
+    profiles → secrets cycle). ``confined`` then closes traversal.
+    """
+    from .profiles import PROFILE_NAME_RE
+    if not PROFILE_NAME_RE.fullmatch(name or ""):
+        raise ValueError(f"invalid profile name {name!r}")
+    return confined(_root() / "profiles", f"{name}.json")
 
 
 def write_profile_secrets(name: str, data: dict) -> None:

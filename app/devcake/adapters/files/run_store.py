@@ -39,12 +39,18 @@ class RunStore:
         """Charset-validated, lexically-contained run JSON path — or None.
 
         Same RUN_ID_RE fence as WorkspaceStore._path (CAKE-137): URL-supplied
-        ids must not escape the runs root via ``../`` joins.
+        ids must not escape the runs root via ``../`` joins. After the regex
+        gate, normalize + root-prefix check so CodeQL ``py/path-injection``
+        sees a SafeAccessCheck (normpath → startswith), not only a custom
+        charset guard.
         """
         if not RUN_ID_RE.match(run_id or ""):
             return None
-        p = self.root / f"{run_id}.json"
-        return p if p.parent == self.root else None
+        root = os.path.normpath(str(self.root))
+        full = os.path.normpath(os.path.join(root, f"{run_id}.json"))
+        if not full.startswith(root + os.sep):
+            return None
+        return Path(full)
 
     def _write_text(self, path: Path, text: str) -> None:
         fd, tmp = tempfile.mkstemp(dir=self.root, suffix=".tmp")

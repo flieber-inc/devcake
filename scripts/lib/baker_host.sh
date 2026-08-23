@@ -48,7 +48,6 @@ devcake_baker_emit_launch_failure() {
     status_detail="host baker died at launch: ${first_line}"
     outbox_detail="$(printf 'launch: %s\n\n--- watch.log (last 15 lines) ---\n%s' \
       "$launch_cmd" "$excerpt")"
-    outbox_detail="$(printf '%s' "$outbox_detail" | cut -c1-2000)"
     ns="$(date +%s%N 2>/dev/null || date +%s)"
     outbox_json="$(DETAIL="$outbox_detail" python3 -c '
 import json, os
@@ -56,7 +55,8 @@ from datetime import datetime, timezone
 print(json.dumps({
     "ts": datetime.now(timezone.utc).isoformat(),
     "event": "launch_failed",
-    "detail": os.environ["DETAIL"],
+    # Total cap, character-safe (shell cut -c on multiline input caps per line)
+    "detail": os.environ["DETAIL"][:2000],
 }, separators=(",", ":")))
 ' 2>/dev/null)" || return 0
     status_json="$(DETAIL="$status_detail" python3 -c '

@@ -1020,6 +1020,7 @@ def test_baker_host_liveness_failure_emits_outbox_and_error_status(tmp_path):
         "Traceback (most recent call last):\n"
         "  File \"<stdin>\", line 1, in <module>\n"
         "ModuleNotFoundError: No module named 'missing_pkg'\n"
+        + "A" * 3000 + "\n"  # single oversized line — the 2000 cap must be total
     )
     pidfile.write_text("8\n")
     stub = _baker_host_docker_stub_body(data_root)
@@ -1054,7 +1055,7 @@ main() {{
     assert isinstance(rec["detail"], str)
     assert launch in rec["detail"]
     assert "ModuleNotFoundError: No module named 'missing_pkg'" in rec["detail"]
-    assert len(rec["detail"]) <= 2000
+    assert len(rec["detail"]) == 2000  # input exceeds the cap → exact truncation
 
     status_path = data_root / "harness_bake_status.json"
     assert status_path.is_file(), result.stderr

@@ -389,9 +389,8 @@ Forge connection test and `/health` surface protection state; amber warning when
 
 Apple Silicon Docker Desktop can bring the stack up cleanly, but four traps
 are easy to misread if you only follow Linux-host habits. This subsection
-documents the **post-fix** path (CAKE-128 / CAKE-130 / CAKE-131 on tip): what
-`./up.sh` prints, which gates must pass, and which probe is still required
-before production use.
+documents what `./up.sh` prints, which gates must pass, and which probe is
+still required before production use.
 
 #### Docker socket gid — never trust the Mac host path
 

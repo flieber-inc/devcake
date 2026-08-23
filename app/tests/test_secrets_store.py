@@ -67,6 +67,72 @@ def test_harness_delete_unlinks(monkeypatch, tmp_path):
     s.delete_harness_secret("NEVER_SET")                             # no-op
 
 
+# ── store-level path confinement (CAKE-136: defense-in-depth, not HTTP-only) ─
+
+def test_conn_path_rejects_traversal_directly(monkeypatch, tmp_path):
+    """Builders must refuse hostile instance/scope even when callers skip
+    the HTTP regex gates — CodeQL py/path-injection cluster on secrets.py."""
+    s = _store(monkeypatch, tmp_path)
+    conn_root = tmp_path / "secrets" / "connections"
+    conn_root.mkdir(parents=True)
+
+    for instance in ("../x", "a/b", "", ".", ".."):
+        with pytest.raises(ValueError):
+            s._conn_path("repo", instance)
+        with pytest.raises(ValueError):
+            s.write_connection_secret("repo", instance, "token", "v-1234")
+
+    with pytest.raises(ValueError):
+        s._conn_path("nope", "main")
+    with pytest.raises(ValueError):
+        s.write_connection_secret("nope", "main", "token", "v-1234")
+
+    # Nothing escaped the connections jail; no stray nested dirs from a/b.
+    assert list(conn_root.rglob("*")) == []
+    assert not (tmp_path / "secrets" / "x.json").exists()
+    assert not (tmp_path / "x.json").exists()
+
+
+def test_harness_path_rejects_traversal_directly(monkeypatch, tmp_path):
+    s = _store(monkeypatch, tmp_path)
+    harness_root = tmp_path / "secrets" / "harness"
+    harness_root.mkdir(parents=True)
+
+    for var in ("../evil", "bad/var", "lower_case", "1LEADING", ""):
+        with pytest.raises(ValueError):
+            s._harness_path(var)
+        with pytest.raises(ValueError):
+            s.write_harness_secret(var, "v-1234")
+
+    assert list(harness_root.rglob("*")) == []
+    assert not (tmp_path / "secrets" / "evil.json").exists()
+
+
+def test_profile_path_rejects_traversal_directly(monkeypatch, tmp_path):
+    s = _store(monkeypatch, tmp_path)
+    profiles_root = tmp_path / "secrets" / "profiles"
+    profiles_root.mkdir(parents=True)
+
+    for name in ("../evil", "a/b", "", ".hidden", "-leading-dash"):
+        with pytest.raises(ValueError):
+            s._profile_path(name)
+        with pytest.raises(ValueError):
+            s.write_profile_secrets(name, {"connections": {}})
+
+    assert list(profiles_root.rglob("*")) == []
+    assert not (tmp_path / "secrets" / "evil.json").exists()
+
+
+def test_store_builders_accept_well_formed_names(monkeypatch, tmp_path):
+    s = _store(monkeypatch, tmp_path)
+    s.write_connection_secret("repo", "main", "token", "tok-ok-1234")
+    assert (tmp_path / "secrets" / "connections" / "repo-main.json").is_file()
+    s.write_harness_secret("XAI_API_KEY", "xai-ok-1234")
+    assert (tmp_path / "secrets" / "harness" / "XAI_API_KEY.json").is_file()
+    s.write_profile_secrets("My Profile", {"harness": {}})
+    assert (tmp_path / "secrets" / "profiles" / "My Profile.json").is_file()
+
+
 # ── endpoint input validation (audit A5: the traversal oracle) ───────────────
 
 def _main(monkeypatch, tmp_path):

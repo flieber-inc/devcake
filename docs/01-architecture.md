@@ -131,6 +131,7 @@ app/devcake/
   config.py        # single pydantic schema authority for config.yaml (root-level:
                    #   cross-cutting — consumed by domain, adapters, and api alike)
   security.py      # redaction choke point, fed token shapes by the registry (14)
+  pathsafety.py    # path-component hygiene + resolve confinement under a base
   harness.py       # harness registry: CLI/image/credential runtime adapters (08)
   secrets.py       # GUI-stored operator secrets under /data/secrets (ADR-0011)
   staffing.py      # staffability chokepoint vs ReceiptStore (dispatch/steward/OAuth)

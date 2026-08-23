@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...domain.run import Run
+from ...domain.workspaces import RUN_ID_RE
 
 RUNS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "runs"
 
@@ -33,6 +34,17 @@ class RunStore:
         # across calls: mutate-then-save() promptly (the existing contract);
         # get() stays a fresh parse for the correctness-critical readers.
         self._parse_cache: dict[str, tuple[int, int, Run]] = {}
+
+    def _path(self, run_id: str) -> Path | None:
+        """Charset-validated, lexically-contained run JSON path — or None.
+
+        Same RUN_ID_RE fence as WorkspaceStore._path (CAKE-137): URL-supplied
+        ids must not escape the runs root via ``../`` joins.
+        """
+        if not RUN_ID_RE.match(run_id or ""):
+            return None
+        p = self.root / f"{run_id}.json"
+        return p if p.parent == self.root else None
 
     def _write_text(self, path: Path, text: str) -> None:
         fd, tmp = tempfile.mkstemp(dir=self.root, suffix=".tmp")
@@ -72,7 +84,13 @@ class RunStore:
                 run.run_id, gen, self.wipe_generation,
             )
             return
-        path = self.root / f"{run.run_id}.json"
+        path = self._path(run.run_id)
+        if path is None:
+            log.info(
+                "drop save for invalid run id %r — refused by RUN_ID_RE path fence",
+                run.run_id,
+            )
+            return
         # lost-update fence (audit F8): the single-process contract says
         # "mutate-then-save promptly" on ONE object per run — but get()
         # (fresh parse) and all() (shared cache) can hand two writers two
@@ -135,8 +153,8 @@ class RunStore:
         log.error("run record %s unreadable (%s) — quarantined to %s", path.name, why, dest)
 
     def get(self, run_id: str) -> Optional[Run]:
-        path = self.root / f"{run_id}.json"
-        if not path.exists():
+        path = self._path(run_id)
+        if path is None or not path.exists():
             return None
         return Run.model_validate_json(path.read_text())
 
@@ -225,7 +243,9 @@ class RunStore:
         aborts after the durable save — a workspace create failure — must
         leave no phantom `dispatched` record behind to burn an attempt.
         Best-effort; also drops the parse-cache entry."""
-        path = self.root / f"{run_id}.json"
+        path = self._path(run_id)
+        if path is None:
+            return
         try:
             path.unlink()
         except OSError:

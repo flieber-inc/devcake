@@ -303,10 +303,16 @@ fi
 # Fatal post-start gate (CAKE-128): dagu HTTP health can be green while the
 # process still cannot open docker.sock (wrong DOCKER_GID). Bounded retry so
 # we measure writability, not a startup race. dry-run never reaches here.
+#
+# MUST exec as uid 1000 / gid $DOCKER_GID — the credentials the stock
+# entrypoint drops to via sudo. The pinned dagu image has empty Config.User,
+# so bare `compose exec` is root and `test -w` on a root-owned 0660 socket
+# always succeeds (false green for the Desktop wrong-gid failure class).
 echo "── verifying dagu can write the Docker socket…"
 _sock_ok=0
 for _ in $(seq 1 15); do
-  if docker compose exec -T dagu sh -c 'test -w /var/run/docker.sock' \
+  if docker compose exec -T --user "1000:${GID}" dagu \
+      sh -c 'test -w /var/run/docker.sock' \
       >/dev/null 2>&1; then
     _sock_ok=1
     break

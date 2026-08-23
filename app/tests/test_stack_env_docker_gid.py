@@ -138,3 +138,100 @@ def test_host_docker_gid_returns_numeric_gid_for_statable_path(tmp_path: Path):
     )
     assert got.returncode == 0, got.stderr
     assert got.stdout.strip() == expected
+
+
+def _compose_yml() -> Path | None:
+    for p in (
+        Path(__file__).resolve().parents[2] / "docker-compose.yml",
+        Path("/srv/docker-compose.yml"),
+    ):
+        if p.is_file():
+            return p
+    return None
+
+
+def _dagu_image_pin() -> str | None:
+    """Digest-pinned dagu image from compose — no second pin in the suite."""
+    import re
+
+    compose = _compose_yml()
+    if compose is None:
+        return None
+    m = re.search(
+        r"image:\s*(ghcr\.io/dagucloud/dagu:[^\s@]+@sha256:[0-9a-f]{64})",
+        compose.read_text(),
+    )
+    return m.group(1) if m else None
+
+
+def test_dagu_socket_writability_polarity_matches_entrypoint_creds():
+    """Wrong DOCKER_GID class must fail ``test -w``; matching gid must pass.
+
+    Mirrors the REVIEW reject evidence on the pinned dagu image: root (bare
+    compose exec) false-greens a root-owned 0660 socket; ``--user 1000:1``
+    fails; ``--user 1000:0`` passes. Creates the stand-in as root inside the
+    container, then re-runs with docker ``--user`` — the same identity switch
+    ``up.sh`` uses for the post-start gate. Skips when docker/image unavailable.
+    """
+    import pytest
+
+    image = _dagu_image_pin()
+    if image is None:
+        pytest.skip("docker-compose.yml / dagu pin not mounted")
+
+    try:
+        inspect = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        pytest.skip("docker CLI not on PATH (hermetic app-test)")
+
+    if inspect.returncode != 0:
+        pull = subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if pull.returncode != 0:
+            pytest.skip(
+                f"dagu image unavailable for polarity probe: {pull.stderr[-200:]}"
+            )
+
+    # Seed a root-owned 0660 file into a tiny volume the follow-up runs share.
+    # Mount must stay writable: ``test -w`` fails on :ro binds even for root.
+    vol = "devcake-cake128-sock-polarity"
+    subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
+    seed = subprocess.run(
+        [
+            "docker", "run", "--rm", "-v", f"{vol}:/sock",
+            "--entrypoint", "sh", image, "-c",
+            "install -m 0660 /dev/null /sock/fake.sock && "
+            "stat -c '%u:%g %a' /sock/fake.sock",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if seed.returncode != 0:
+        pytest.skip(f"could not seed fake socket: {seed.stderr[-200:]}")
+    assert "0:0 660" in seed.stdout.replace("\n", " ")
+
+    def _test_w(user: str | None) -> int:
+        cmd = ["docker", "run", "--rm", "-v", f"{vol}:/sock", "--entrypoint", "sh"]
+        if user is not None:
+            cmd.extend(["--user", user])
+        cmd.extend([image, "-c", "test -w /sock/fake.sock"])
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+        ).returncode
+
+    try:
+        assert _test_w(None) == 0, "root (bare exec) false-greens root-owned 0660"
+        assert _test_w("1000:1") != 0, "uid 1000 gid 1 must not write root:root 0660"
+        assert _test_w("1000:0") == 0, "uid 1000 gid 0 must write root:root 0660"
+    finally:
+        subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)

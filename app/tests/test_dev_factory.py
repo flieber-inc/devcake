@@ -782,6 +782,10 @@ def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
 
     Text contract only — live Desktop acceptance is a residual on Linux agents.
     Exact operator strings are the public seam operators and dry-run share.
+
+    The writability gate must exec as the post-entrypoint credentials (uid 1000
+    / gid $DOCKER_GID). The pinned dagu image has empty Config.User, so bare
+    ``compose exec`` is root and false-greens a wrong DOCKER_GID.
     """
     text = _up_sh_text()
     assert "devcake_docker_gid_incontainer" in text
@@ -790,7 +794,8 @@ def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
     assert "in-container probe failed" in text
     assert "docs/14-security.md" in text
     assert "root-group" in text
-    assert "docker compose exec -T dagu" in text
+    # Gate identity must match the running daemon (not root).
+    assert 'docker compose exec -T --user "1000:${GID}" dagu' in text
     assert "test -w /var/run/docker.sock" in text
     assert "docker-compose.override.yml" in text
     assert 'DOCKER_GID: "0"' in text

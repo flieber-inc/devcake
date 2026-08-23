@@ -2,8 +2,9 @@
 # Bring up the DevCake stack with host-discovered DOCKER_GID.
 #
 #   ./up.sh                 # upsert GID/WS_HOST/TAG → compose up -d → baker
-#   ./up.sh --bake          # bake control plane + hello, then up + baker
+#   ./up.sh --bake          # bake control plane + hello, then up + baker + hello smoke
 #   ./up.sh --bake app admin
+#   ./up.sh --bake --no-hello-smoke   # bake/up without the dispatch proof
 #   ./up.sh -- dagu app     # pass service names to compose up
 #   ./up.sh --dry-run       # print discovered GID + planned actions
 #
@@ -11,17 +12,20 @@
 # requires it for Dagu's sock access; this script always re-discovers and
 # writes it (plus DEVCAKE_WS_HOST and DEVCAKE_TAG) into .env so plain
 # `docker compose up -d` works afterwards too.
+# On --bake, after the health gate, a hello dispatch smoke proves Dagu can
+# launch Dev containers (control-plane health ≠ dispatch health).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 SOCK="${DOCKER_SOCK:-/var/run/docker.sock}"
 DRY_RUN=0
 DO_BAKE=0
+NO_HELLO_SMOKE=0
 BAKE_TARGETS=()
 COMPOSE_ARGS=()
 
 usage() {
-  sed -n '2,13p' "$0" | sed 's/^# \?//'
+  sed -n '2,16p' "$0" | sed 's/^# \?//'
   exit "${1:-0}"
 }
 
@@ -29,6 +33,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --no-hello-smoke) NO_HELLO_SMOKE=1; shift ;;
     --bake)
       DO_BAKE=1
       shift
@@ -155,6 +160,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
       echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake app admin hello"
     else
       echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake ${BAKE_TARGETS[*]}"
+    fi
+    if [[ "$NO_HELLO_SMOKE" -eq 1 ]]; then
+      echo "── would: skip hello dispatch smoke (--no-hello-smoke)"
+    else
+      echo "── would: hello dispatch smoke (scripts/ci_dispatch_hello.sh)"
     fi
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
@@ -291,7 +301,7 @@ if [[ -f "$_FACTORY_DIR/watch.pid" ]]; then
 fi
 # Ingest creds so the baker can ship a dying word to OO if the app is
 # already gone (the app's push_oo_log chokepoint cannot run then).
-# Read only those keys — do not source the whole .env into this shell.
+# Read only those keys — do not shell-source the env file into this process.
 if [[ -f .env ]]; then
   while IFS= read -r line; do
     case "$line" in
@@ -308,6 +318,44 @@ nohup python3 -m dev_factory \
   >>"$_FACTORY_DIR/watch.log" 2>&1 &
 echo $! >"$_FACTORY_DIR/watch.pid"
 echo "── host baker watching keep-set (pid $! → .factory/watch.log)"
+
+# CAKE-130: --bake proves dispatch health (Dagu → Dev container → Redis →
+# finalize). Control-plane /health and image receipts do not catch a dagu that
+# cannot talk to the Docker socket (observed on Docker Desktop). Plain
+# ./up.sh (no --bake) skips this gate — day-to-day restarts stay fast.
+if [[ "$DO_BAKE" -eq 1 ]]; then
+  if [[ "$NO_HELLO_SMOKE" -eq 1 ]]; then
+    echo "── skipping hello dispatch smoke (--no-hello-smoke)"
+  else
+    # Selective ADMIN_* read — same family as OO_INGEST_* above; never
+    # shell-source the env file (Compose syntax ≠ shell; values may contain spaces).
+    _ADMIN_USER=""
+    _ADMIN_PASSWORD=""
+    if [[ -f .env ]]; then
+      while IFS= read -r line; do
+        case "$line" in
+          ADMIN_USER=*) _ADMIN_USER="${line#ADMIN_USER=}" ;;
+          ADMIN_PASSWORD=*) _ADMIN_PASSWORD="${line#ADMIN_PASSWORD=}" ;;
+        esac
+      done < <(grep -E '^(ADMIN_USER|ADMIN_PASSWORD)=' .env || true)
+    fi
+    if [[ -z "$_ADMIN_USER" || -z "$_ADMIN_PASSWORD" ]]; then
+      echo "── WARNING: skipping hello dispatch smoke — ADMIN_USER / ADMIN_PASSWORD missing from .env" >&2
+    else
+      export ADMIN_USER="$_ADMIN_USER"
+      export ADMIN_PASSWORD="$_ADMIN_PASSWORD"
+      echo "── hello dispatch smoke (scripts/ci_dispatch_hello.sh)…"
+      if ! ./scripts/ci_dispatch_hello.sh; then
+        echo "── ERROR: hello dispatch smoke failed — the stack is up but Dagu" >&2
+        echo "   cannot complete a Dev container run. Check:" >&2
+        echo "     docker compose logs --tail=50 dagu" >&2
+        echo "   Look for the preceding 'hello run_id=…' line for the run id." >&2
+        echo "   Known cause: Docker-socket permissions (Docker Desktop hosts especially)." >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
 
 echo "── stack starting (admin: http://localhost:8080)"
 echo "   bootstrap passwords still come from .env; operator secrets via Config."

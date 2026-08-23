@@ -242,6 +242,8 @@ cp .env.example .env
 into `.env`, optionally bakes, then runs compose. Control ports bind
 `127.0.0.1`. Images are **Bake-only** — compose never builds them.
 
+**macOS / Docker Desktop:** see [`docs/13-deployment.md`](docs/13-deployment.md) §8b before first `./up.sh --bake` — socket gid, install gates, and the nested-engine probe.
+
 **Before the first real mission:**
 
 1. Sandbox (or tightly controlled) Linear team — ticket writers = agent trust.

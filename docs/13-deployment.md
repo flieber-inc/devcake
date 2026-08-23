@@ -384,6 +384,103 @@ Recommended operator setup:
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 Forge connection test and `/health` surface protection state; amber warning when unprotected.
+
+### 8b. macOS Docker Desktop
+
+Apple Silicon Docker Desktop can bring the stack up cleanly, but four traps
+are easy to misread if you only follow Linux-host habits. This subsection
+documents what `./up.sh` prints, which gates must pass, and which probe is
+still required before production use.
+
+#### Docker socket gid — never trust the Mac host path
+
+On the Mac host, `/var/run/docker.sock` often appears as a symlink owned
+`root:daemon` over a user-owned target. Inside a Linux container the same
+bind presents as `root:root` mode `0660`. **Never trust the host-side gid** —
+it is not what Dagu sees.
+
+`./up.sh` resolves `DOCKER_GID` via `devcake_docker_gid_incontainer()` in
+`scripts/lib/stack_env.sh`: a one-shot `docker run` that bind-mounts the
+socket into compose’s pinned `redis:7-alpine@sha256:…` image and runs
+`stat -c %g` on the sock. That in-container view wins over host-stat.
+
+Operator lines:
+
+| Line | Meaning |
+|---|---|
+| `── DOCKER_GID=<n>  (in-container view; host path says <m>)` | Mismatch — **expected on Desktop**; in-container wins |
+| `── DOCKER_GID=<n>  (from …; in-container probe failed — using host-stat)` | Probe failed; fell back to host-stat (fix or re-check the daemon) |
+| `── WARNING: DOCKER_GID=0 …` | **Expected on Docker Desktop** — grants the dagu service root-group on the socket |
+
+After `compose up`, `up.sh` fatally gates writability with:
+
+```bash
+docker compose exec -T --user "1000:${GID}" dagu sh -c 'test -w /var/run/docker.sock'
+```
+
+Bare `docker compose exec` (no `--user`) is **root** on the pinned dagu image
+(`Config.User` empty) and **false-greens** a wrong gid on a root-owned `0660`
+socket. Operators debugging by hand must use `--user 1000:$DOCKER_GID`.
+
+**Security consequence:** any `docker.sock` grant is root-equivalent control
+of the engine ([`14-security.md`](14-security.md) §5). DevCake’s normative
+posture is a **dedicated** host. A **shared** Docker Desktop engine that also
+runs unrelated workloads has a larger blast radius — that is the security
+decision you are making by installing here.
+
+#### Hello dispatch smoke — final install gate on `--bake`
+
+`./up.sh --bake` (not plain `./up.sh`) runs `scripts/ci_dispatch_hello.sh`
+after compose-up, the warn-only app health gate, and the fatal sock
+writability gate — and **before** the host baker. Hello must come first so
+`--foreground-baker` (which `exec`s and never returns) still gets the
+dispatch proof. On the detached path the baker then starts and `up.sh`
+echoes `── stack starting…`. On `--foreground-baker`, after hello the baker
+takes the terminal (`── stack up …; baker takes this terminal`) and never
+reaches the detached `stack starting` line.
+
+What it proves: **control-plane health ≠ image health ≠ dispatch health**.
+App `/health` and baked images can be fine while Dagu still cannot launch a
+Dev container (Desktop socket class). Skip paths (not a pass):
+`--no-hello-smoke`, or empty/missing `ADMIN_USER` / `ADMIN_PASSWORD` after
+selective `.env` grep → warning skip.
+
+On failure: `docker compose logs --tail=50 dagu`; use the preceding
+`hello run_id=…` line; known cause includes Docker-socket permissions on
+Desktop.
+
+#### Nested-engine probe — required on this host type
+
+Before relying on nested Podman in real missions on Docker Desktop, run
+`scripts/harness_probe/nested_probe.sh` once after baking a harness image.
+See **Nested-engine rig receipt** at the top of this document (do not
+duplicate the matrix here) — Desktop is explicitly a host type that needs
+its own receipt.
+
+#### Shorter Desktop notes
+
+1. **OpenObserve passwords** — [`.env.example`](../.env.example) is the
+   source of truth. OO v0.91.5 requires 8–128 characters with at least one
+   lowercase, one uppercase, one digit, and one special (non-alphanumeric);
+   all-hex is rejected. A weak `OO_ROOT_PASSWORD` makes OpenObserve panic
+   (`ZO_ROOT_USER_PASSWORD is too weak`) and crash-loop; operators often see
+   only the generic ~60s app health-gate timeout — also check
+   `docker compose logs openobserve`. `up.sh` runs the composition gate for
+   non-empty `OO_ROOT_PASSWORD` / `OO_INGEST_PASSWORD` before bake/compose;
+   empties still defer to app-boot `_refuse_insecure_passwords`. **Quote
+   trap:** selective `.env` parse does not strip surrounding quotes, so a
+   mixed-case hex wrapped in double quotes can pass the composition gate
+   (quotes count as “special”) while Compose may deliver the unquoted value
+   that OO rejects. Prefer unquoted values (the documented / CI shape).
+2. **`.env` is Compose syntax, not shell.** Do not shell-source the env
+   file. Checkout paths with spaces are supported by `up.sh` / selective
+   parsers; naive shell sourcing is not.
+3. **OAuth / Dev runs are ephemeral.** Launched through Dagu; absent from
+   `docker compose ps` **by design**. Watch the run id in the admin **Runs**
+   view. Absence from `docker ps` while a login is supposedly waiting for
+   the user is the anomaly (missing/failed container), not a missing
+   compose service.
+
 - **Upgrade:** `docker compose pull` (third-party images only) → `docker buildx bake all` → `docker compose up -d`. State survives (volumes). When the pinned **dagu** image is bumped, snapshot the `dagu_data` volume FIRST — `docker run --rm -v devcake_dagu_data:/v -v "$PWD":/out alpine tar czf /out/dagu_data-pre-bump.tar.gz -C /v .` — its run history is advisory (the board is truth), but a state-format migration can make rollback to the previous pin lossy (§4). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
 - **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker buildx bake all`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull: never` on every `docker.run` step, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebaked (no registry pull can rescue a missing tag either).
 - **Deploy ordering under ADR-0025 — the DAG, compose, and env deploy lockstep.** `./dagu/dags` is a LIVE `:ro` bind-mount and Dagu re-reads the YAML per dispatch, so a new `dev-run.yaml` goes live at `git pull`, before `./up.sh`. In that window the old dagu container has no `DEVCAKE_WS_HOST` (the new bind source would expand empty → a root-owned junk dir at the host root), and images that predate the deploy mishandle `DEVCAKE_PHASE` (a post-ADR-0025 image without a phase exits 20 loudly — there is no single-container fallback). The deploy ritual closes the window: **`docker compose stop dagu` → `git pull` → `./up.sh --bake`**. `./up.sh --bake` now enforces the sharp edges itself (AUD-003/004): it stops dagu before the multi-minute bake (so a running dagu can't see the new DAG without the new env), resolves `DEVCAKE_TAG` once (shell env > `.env` > `latest`), exports it for BOTH the bake and `compose up`, **and upserts it into `.env`** so images and the running stack never desync on a later plain compose, and upserts + `mkdir 0700`s `DEVCAKE_WS_HOST`. `up -d` force-recreates dagu with the new env. The explicit `stop dagu` before `git pull` is still recommended to close the brief pull→up window. In-flight DAG-runs are orphaned by the dagu recreate and reconcile-adopted at the next app boot.

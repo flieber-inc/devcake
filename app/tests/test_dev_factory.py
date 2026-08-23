@@ -916,11 +916,24 @@ sleep() {{
   echo "dev_factory: watching" >> "{logfile}"
 }}
 main() {{
-  devcake_baker_wait_liveness 7 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4
+  # baseline 0 measured before launch (passed explicitly)
+  devcake_baker_wait_liveness 7 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4 0
 }}
 """)
     assert result.returncode == 0, result.stderr + result.stdout
     assert "liveness confirmed" in result.stdout
+
+
+def test_up_sh_measures_baker_log_baseline_before_launch():
+    """Pre-launch baseline avoids racing the startup print into the check."""
+    text = _up_sh_text()
+    assert "_BAKER_BASELINE" in text
+    # Baseline assignment appears before the nohup launch.
+    base_idx = text.index("_BAKER_BASELINE")
+    nohup_idx = text.index("nohup python3 -m dev_factory")
+    assert base_idx < nohup_idx
+    assert 'devcake_baker_wait_liveness' in text
+    assert '"$_BAKER_BASELINE"' in text or "$_BAKER_BASELINE" in text
 
 
 def test_baker_host_wait_liveness_fails_when_pid_dies(tmp_path):

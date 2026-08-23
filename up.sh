@@ -317,14 +317,17 @@ if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
   echo $$ >"$_BAKER_PIDFILE"
   exec python3 -m dev_factory
 fi
-# Ensure the log exists so the post-start baseline is defined (do not truncate).
+# Ensure the log exists; measure baseline BEFORE launch so the startup
+# print is counted as progress (not raced into the baseline).
 [[ -f "$_BAKER_LOG" ]] || : >"$_BAKER_LOG"
+_BAKER_BASELINE=$(wc -c <"$_BAKER_LOG" 2>/dev/null | tr -d ' ' || echo 0)
 _BAKER_LAUNCH="nohup python3 -m dev_factory >>${_BAKER_LOG} 2>&1 &"
 nohup python3 -m dev_factory \
   >>"$_BAKER_LOG" 2>&1 &
 _BAKER_PID=$!
 echo "$_BAKER_PID" >"$_BAKER_PIDFILE"
-devcake_baker_wait_liveness "$_BAKER_PID" "$_BAKER_LOG" "$_BAKER_PIDFILE" "$_BAKER_LAUNCH" 12
+devcake_baker_wait_liveness "$_BAKER_PID" "$_BAKER_LOG" "$_BAKER_PIDFILE" \
+  "$_BAKER_LAUNCH" 12 "$_BAKER_BASELINE"
 
 echo "── stack starting (admin: http://localhost:8080)"
 echo "   bootstrap passwords still come from .env; operator secrets via Config."

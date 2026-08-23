@@ -30,16 +30,22 @@ devcake_baker_prepare_pidfile() {
 }
 
 # Confirm a detached baker stays alive and its log progresses for ~seconds.
-# Requires PID alive AND logfile size growth (stdout/stderr → watch.log).
+# Requires PID alive AND logfile size growth past the pre-launch baseline
+# (stdout/stderr → watch.log). Pass baseline_bytes from BEFORE launch so the
+# startup print is not raced into the baseline.
 # On failure prints launch command, pidfile path, last log lines; returns 1.
 #
-# Usage: devcake_baker_wait_liveness <pid> <logfile> <pidfile> <launch_cmd> [seconds]
+# Usage: devcake_baker_wait_liveness <pid> <logfile> <pidfile> <launch_cmd> \
+#          [seconds] [baseline_bytes]
 devcake_baker_wait_liveness() {
   local pid="$1" logfile="$2" pidfile="$3" launch_cmd="$4"
   local seconds="${5:-12}"
-  local baseline=0 size=0 elapsed=0 step=2
+  local baseline="${6-}"
+  local size=0 elapsed=0 step=2
   [[ -f "$logfile" ]] || : >"$logfile"
-  baseline=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
+  if [[ -z "$baseline" ]]; then
+    baseline=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
+  fi
   while [[ "$elapsed" -lt "$seconds" ]]; do
     sleep "$step"
     elapsed=$((elapsed + step))

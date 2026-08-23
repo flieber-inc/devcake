@@ -24,6 +24,7 @@ from pathlib import Path
 
 import yaml
 
+from ..pathsafety import confined
 from . import DEFAULT_PLAYBOOKS, PLAYBOOK_VARS, _VAR
 
 log = logging.getLogger("devcake.prompts")
@@ -130,7 +131,8 @@ def save_template(mission_type: str, name: str, text: str) -> None:
         raise ValueError("template name must match "
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     validate_template(mission_type, text)
-    _atomic_yaml(_dir(mission_type) / f"{name}.yaml",
+    path = confined(_dir(mission_type).resolve(), f"{name}.yaml")
+    _atomic_yaml(path,
                  {"schema_version": 1, "mission_type": mission_type,
                   "name": name, "template": text})
 
@@ -143,9 +145,8 @@ def delete_template(mission_type: str, name: str) -> None:
         raise ValueError("template name must match "
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     root = _dir(mission_type).resolve()
-    path = root / f"{name}.yaml"
     try:
-        path.resolve().relative_to(root)
+        path = confined(root, f"{name}.yaml")
     except ValueError as e:
         raise ValueError(
             f"template path escapes {mission_type!r} template directory"
@@ -295,7 +296,8 @@ def save_devtype_prompt(dev_type: str, name: str, text: str) -> None:
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     if len(text.encode()) > _MAX_TEMPLATE_BYTES:
         raise ValueError(f"template exceeds {_MAX_TEMPLATE_BYTES // 1024} KB")
-    _atomic_yaml(_dev_dir(dev_type) / f"{name}.yaml",
+    path = confined(_dev_dir(dev_type).resolve(), f"{name}.yaml")
+    _atomic_yaml(path,
                  {"schema_version": 1, "dev_type": dev_type,
                   "name": name, "template": text})
 
@@ -310,9 +312,8 @@ def delete_devtype_prompt(dev_type: str, name: str) -> None:
         raise ValueError("template name must match "
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     root = _dev_dir(dev_type).resolve()
-    path = root / f"{name}.yaml"
     try:
-        path.resolve().relative_to(root)
+        path = confined(root, f"{name}.yaml")
     except ValueError as e:
         raise ValueError(
             f"template path escapes {dev_type!r} template directory"

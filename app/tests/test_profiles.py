@@ -110,6 +110,29 @@ def test_name_hygiene_rejects_traversal_shapes(monkeypatch, tmp_path, bad):
     assert e.value.status == 422
 
 
+@pytest.mark.parametrize("bad", ["../config", "a/b", ".."])
+def test_profile_path_confinement_refuses_escape_if_name_gate_bypassed(
+        monkeypatch, tmp_path, bad):
+    """Belt under require_name: hostile components must not leave profiles/.
+
+    Even if the PROFILE_NAME_RE gate is skipped, CRUD must refuse and must
+    not touch a sibling sentinel outside config/profiles/.
+    """
+    _, profiles, *_ = _env(monkeypatch, tmp_path)
+    profiles_dir = tmp_path / "config" / "profiles"
+    profiles_dir.mkdir(parents=True)
+    sentinel = tmp_path / "config" / "config.yaml"
+    sentinel.write_text("schema_version: 1\nkeep: me\n")
+    monkeypatch.setattr(profiles, "require_name", lambda n: None)
+
+    with pytest.raises(ValueError):
+        profiles.delete_profile(bad)
+
+    assert sentinel.exists()
+    assert "keep: me" in sentinel.read_text()
+    assert list(profiles_dir.glob("*")) == []
+
+
 def test_stale_profile_schema_refused(monkeypatch, tmp_path):
     sb, profiles, secrets, config_mod, _ = _env(monkeypatch, tmp_path)
     cfg, dts = _small_world(config_mod, secrets)

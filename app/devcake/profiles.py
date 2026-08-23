@@ -31,6 +31,7 @@ import yaml
 
 from . import secrets as secrets_store
 from .config import AppConfig, DevType, _atomic_yaml
+from .pathsafety import confined
 from .settings_bundle import (BUNDLE_KIND, BUNDLE_SCHEMA_VERSION, BundleError,
                               _utcnow, serialize_current)
 
@@ -47,7 +48,7 @@ def _dir() -> Path:
 
 
 def _path(name: str) -> Path:
-    return _dir() / f"{name}.yaml"
+    return confined(_dir(), f"{name}.yaml")
 
 
 def _state_path() -> Path:

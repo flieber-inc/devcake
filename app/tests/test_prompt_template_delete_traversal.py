@@ -1,11 +1,13 @@
-"""Path-injection hardening on prompt-template DELETE (CAKE-135).
+"""Path-injection hardening on prompt-template DELETE (CAKE-135 / CAKE-139).
 
 Save paths already gate names with _NAME_RE; delete paths must refuse
 traversal names / invalid Dev Type names and must not unlink outside the
-intended template subdirectory.
+intended template subdirectory. CAKE-139: filesystem sinks use
+pathsafety.confined so the unlink/exists value is the confined Path.
 """
 
 import asyncio
+import re
 
 import pytest
 from fastapi import HTTPException
@@ -77,6 +79,38 @@ def test_delete_template_happy_path(monkeypatch, tmp_path):
     assert path.exists()
     t.delete_template("EXECUTE", "terse")
     assert not path.exists()
+
+
+def test_delete_template_confined_belt_when_name_re_bypassed(monkeypatch, tmp_path):
+    """Even if _NAME_RE is skipped, delete must not unlink outside the type dir."""
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    base = tmp_path / "config" / "prompt_templates"
+    sentinel = base / "evil.yaml"
+    sentinel.write_text("sentinel\n")
+    monkeypatch.setattr(t, "_NAME_RE", re.compile(r".+"))
+
+    with pytest.raises(ValueError):
+        t.delete_template("EXECUTE", "../evil")
+
+    assert sentinel.exists()
+    assert (base / "EXECUTE" / "Development.yaml").exists()
+
+
+def test_delete_devtype_prompt_confined_belt_when_name_re_bypassed(
+        monkeypatch, tmp_path):
+    """Even if _NAME_RE is skipped, delete must not unlink outside the dev dir."""
+    t = _tpl(monkeypatch, tmp_path)
+    root = tmp_path / "config" / "devtype_prompt_templates"
+    (root / "judgment").mkdir(parents=True)
+    sentinel = root / "evil.yaml"
+    sentinel.write_text("sentinel\n")
+    monkeypatch.setattr(t, "_NAME_RE", re.compile(r".+"))
+
+    with pytest.raises(ValueError):
+        t.delete_devtype_prompt("judgment", "../evil")
+
+    assert sentinel.exists()
 
 
 def test_delete_devtype_prompt_happy_path(monkeypatch, tmp_path):

@@ -1,0 +1,17 @@
+# Models-as-data barrier for the DevCake redaction chokepoint.
+#
+# Type uses a trailing "!" so CodeQL selects the module itself (not an
+# instance of the module). Without "!", Member[redact] never matches.
+# See github/codeql ApiGraphModelsSpecific.qll getExtraNodeFromType.
+#
+# Kind "cleartext-storage" is the forward-compatible name for
+# py/clear-text-storage-sensitive-data. Upstream CleartextStorageCustomizations
+# currently has no SanitizerFromModel hook that consumes barrierNode kinds
+# (unlike PathInjection / SqlInjection), so this pack alone cannot close
+# alert 1 until that hook exists or a false-positive packet dismisses it.
+extensions:
+  - addsTo:
+      pack: codeql/python-all
+      extensible: barrierModel
+    data:
+      - ["devcake.security!", "Member[redact].ReturnValue", "cleartext-storage"]

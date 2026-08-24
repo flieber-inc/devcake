@@ -391,6 +391,13 @@ values and token patterns with `«REDACTED»` (`app/devcake/security.py`):
 Redaction matters **because Devs hold secrets**. It is the last line of defense
 for **app-mediated** posts to PMO systems and forges, not a substitute for zone C.
 
+**Scanner models:** CodeQL advanced setup loads
+`.github/codeql/extensions/devcake-redact/` as a models-as-data pack that
+declares `security.redact` as a taint barrier (the scanner-side mirror of this
+chokepoint). When `redact()` moves, is renamed, or gains sibling scrubbers that
+must also stop taint, update that model file in the same change — the pack is a
+pinned mirror, not a second redaction implementation.
+
 ---
 
 ## 8. Warnings vs gates

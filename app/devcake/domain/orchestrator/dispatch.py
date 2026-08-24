@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from pathlib import Path
 
 from opentelemetry import trace
 from opentelemetry.propagate import inject
@@ -1011,33 +1010,39 @@ def _credential_spec(mgr, dev_type: DevType) -> tuple[dict[str, str], list[dict]
             log.warning("secret env %s for dev type %s not stored — add it "
                         "on the admin Config page", var, dev_type.name)
     files = []
-    secrets_dir = (Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
-                   / "secrets" / dev_type.name)
     for cf in harness.credential_files:
-        p = secrets_dir / cf.secret_file
-        if not p.exists():
-            log.warning("credential file %s missing for %s — connect via OAuth "
-                        "or upload it on the admin Config page", p, dev_type.name)
+        content = _secrets.read_credential_file(dev_type.name, cf.secret_file)
+        if content is None:
+            log.warning(
+                "credential file %s missing for %s — connect via OAuth "
+                "or upload it on the admin Config page",
+                cf.secret_file, dev_type.name,
+            )
             continue
-        content = p.read_text()
         # Host-side Grok OAuth refresh at the inject chokepoint (no Dev
         # write-back). Fail closed → CredentialRefreshError → runspec.error.
         if (cf.secret_file == "grok-auth.json"
                 and getattr(mgr, "oidc_tokens", None) is not None):
             from ..grok_oauth import (CredentialRefreshError,
                                       ensure_fresh_for_inject)
-            from ... import secrets as _sec
 
             def _write(text: str, _dt=dev_type.name, _fn=cf.secret_file) -> None:
-                _sec.write_credential_file(_dt, _fn, text)
+                _secrets.write_credential_file(_dt, _fn, text)
+
+            _dt, _fn = dev_type.name, cf.secret_file
+            _snapshot = content
+
+            def _reread(_dt=_dt, _fn=_fn, _snapshot=_snapshot) -> str:
+                return _secrets.read_credential_file(_dt, _fn) or _snapshot
 
             try:
                 content = ensure_fresh_for_inject(
                     content,
                     token_port=mgr.oidc_tokens,
                     write_full=_write,
-                    lock_path=secrets_dir / ".grok-auth.lock",
-                    reread=p.read_text,
+                    lock_path=_secrets.credential_path(
+                        dev_type.name, ".grok-auth.lock"),
+                    reread=_reread,
                 )
             except CredentialRefreshError:
                 raise

@@ -114,6 +114,7 @@ class StewardService:
             outcome = "secret_env_gate"
             error = (f"secret env {', '.join(missing)} referenced by "
                      "mcp_setup_commands but not stored")
+            # Logs missing env var NAMEs only — values never reach this call.
             log.warning("steward periodic run skipped — %s", error)
         else:
             async with self._lock:

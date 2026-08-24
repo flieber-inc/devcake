@@ -1007,6 +1007,7 @@ def _credential_spec(mgr, dev_type: DevType) -> tuple[dict[str, str], list[dict]
         if (v := _secrets.read_harness_secret(var)):
             env[var] = v
         else:
+            # Logs the env var NAME only — values never reach this call.
             log.warning("secret env %s for dev type %s not stored — add it "
                         "on the admin Config page", var, dev_type.name)
     files = []

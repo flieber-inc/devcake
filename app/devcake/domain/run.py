@@ -45,6 +45,8 @@ def aware(ts: datetime) -> datetime:
 
 
 def auth_digest(value: str) -> str:
+    # Fingerprints a high-entropy machine-minted ACL secret (token_urlsafe);
+    # not a human-password KDF use.
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 

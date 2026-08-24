@@ -541,3 +541,40 @@ contract:
 **Not backlog (explicit non-goals):** multi-tenant SaaS hardening; treating
 prompt injection as a ship-blocking defect; hard-gating dispatch on every
 advisory warning by default; promising sandboxed multi-customer isolation.
+
+---
+
+## 12. CodeQL heuristic false-positive packet
+
+After confinement and chokepoint work (credential reads through the secrets
+port; redaction models-as-data pack), remaining open CodeQL alerts on tip are
+**heuristic false positives**, not code defects. This section is the operator
+evidence packet: each row proves what actually flows into the flagged sink so
+a human can dismiss honestly in GitHub Security → Code scanning.
+
+**This document does not dismiss alerts.** Dismissal is an operator security
+decision in the GitHub UI. Branch protection (making the CodeQL check required)
+is also a repo setting, not code.
+
+### Operator handoff
+
+1. For each open alert in the table below: GitHub Security → Code scanning →
+   dismiss as **False positive**, comment citing `docs/14-security.md` §12 and
+   the alert number.
+2. After the board is zero: make the CodeQL check a **required** status check
+   in branch protection so new regressions cannot merge silently.
+
+### Open-alert proofs
+
+Inventory re-verified open on `main` @ `9139bca` via
+`gh api …/code-scanning/alerts?state=open`. Alert numbers are GitHub’s
+stable IDs for this repository.
+
+| Alert | Rule | Site | Proof | Disposition |
+|---|---|---|---|---|
+| **#1** | `py/clear-text-storage-sensitive-data` | `app/devcake/domain/orchestrator/feed.py` `_audit` (~L248) | `detail = redact(detail)` runs before the JSONL append. Only the scrubbed string is written to `markers.AUDIT_PATH`. The models-as-data pack (§7 Scanner models; `.github/codeql/extensions/devcake-redact/`) declares `redact` as a `cleartext-storage` barrier, but upstream Python CleartextStorage has no `SanitizerFromModel` wiring — the pack is a silent no-op for this query until upstream adds the hook. Runtime posture is post-barrier. | False positive — operator dismiss citing this row (or wait for upstream CodeQL). Do **not** add a second scrubber. |
+| **#4** | `py/clear-text-logging-sensitive-data` | `app/devcake/adapters/gitea/provision.py` `_load` (~L698) | On unreadable JSON under `internal_forge/`, `log.error` interpolates only the filesystem **path** (`path`). `path.read_text()` / parsed token fields never reach the log call; the handler returns `None` so provisioning treats the secret as absent. | False positive — operator dismiss citing this row. |
+| **#6** | `py/clear-text-logging-sensitive-data` | `app/devcake/domain/steward_service.py` periodic gate (~L117) | `missing_referenced_secret_env(dt)` returns env **var names** that are referenced but have no stored value (`harness.py`). The warning string joins those names; secret **values** are absent by construction and never enter the log. | False positive — operator dismiss citing this row. |
+| **#7** | `py/incomplete-url-substring-sanitization` | `app/tests/test_giveup_and_tripwire_loud.py` (~L198) | Pytest assertion `assert "https://oo.example" in body` checks that a fixture OpenObserve URL substring appears in a PMO comment body. This is test expectation text, not application URL sanitization. | False positive — operator dismiss citing this row. |
+| **#60** | `py/weak-sensitive-data-hashing` | `app/devcake/domain/run.py` `auth_digest` (~L48) | SHA-256 fingerprints the per-run Redis ACL password so a Dev reply can be verified without retaining plaintext. The mint is `secrets.token_urlsafe(24)` in `adapters/redis/messaging.py` `create_run_user` — high-entropy machine generation, not a human password. A fingerprint of that secret does not need a password KDF; the alert’s “password” label is naming, not substance. Verified still `token_urlsafe(24)` at packet time. | False positive — operator dismiss citing this row. (If the mint ever regresses to low entropy, upgrade the mint and keep sha256.) |
+| **#72** | `py/clear-text-logging-sensitive-data` | `app/devcake/domain/orchestrator/dispatch.py` `_credential_spec` (~L1011) | When a Dev-Type `secret_env` name has no stored value, `log.warning` records the env var **name** and the Dev Type **name** only. `read_harness_secret(var)` returned falsy, so no secret value is interpolated. (Prior Path-logging credential-file sink is gone after the secrets-port read migration; this tip alert is the name-only residual.) | False positive — operator dismiss citing this row. |

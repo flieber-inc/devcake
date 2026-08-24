@@ -82,3 +82,41 @@ def test_confined_escape_cannot_leave_base(tmp_path: Path) -> None:
     # Happy path stays inside.
     inside = confined(base, "ok.txt")
     assert str(inside).startswith(str(base.resolve()))
+
+
+def test_confined_multi_part_normpath_belt_under_constant_base(
+        tmp_path: Path) -> None:
+    """Multi-part join under a constant base stays inside after the
+    normalize-then-prefix belt (CAKE-140) and resolve."""
+    import os
+
+    base = tmp_path / "prompt_templates"
+    base.mkdir()
+    path = confined(base, "EXECUTE", "terse.yaml")
+    base_norm = os.path.normpath(str(base))
+    assert os.path.normpath(str(path)).startswith(base_norm + os.sep)
+    assert path == (base / "EXECUTE" / "terse.yaml").resolve()
+
+
+def test_confined_refuses_symlink_escape_after_normpath_belt(
+        tmp_path: Path) -> None:
+    """A symlink inside the jail that points outside must still raise;
+    the outside sentinel must remain untouched (CAKE-140).
+
+    The normalize-then-prefix check is lexical (does not follow links);
+    resolve()+relative_to remains the symlink belt.
+    """
+    jail = tmp_path / "jail"
+    jail.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    sentinel = outside_dir / "secret.txt"
+    sentinel.write_text("keep-me\n")
+    link = jail / "escape"
+    link.symlink_to(outside_dir)
+
+    with pytest.raises(ValueError):
+        confined(jail, "escape", "secret.txt")
+
+    assert sentinel.exists()
+    assert sentinel.read_text() == "keep-me\n"

@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 from . import security
-from .config import HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE
+from .config import DEV_TYPE_NAME_RE, HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE
 from .pathsafety import confined
 
 log = logging.getLogger("devcake.secrets")
@@ -312,7 +312,7 @@ def require_credential_ref(dev_type: str, filename: str) -> None:
     """Path components only — refuse reserved dirs and traversal."""
     if (not dev_type or dev_type in _RESERVED_SECRET_DIRS
             or "/" in dev_type or "\\" in dev_type or ".." in dev_type
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", dev_type)):
+            or not DEV_TYPE_NAME_RE.fullmatch(dev_type)):
         raise ValueError(f"invalid credential dev_type {dev_type!r}")
     base = os.path.basename(filename or "")
     if (not base or base != filename or base in (".", "..")
@@ -464,7 +464,7 @@ def inventory() -> dict[str, list[dict]]:
         for d in sorted(root.iterdir()):
             if not d.is_dir() or d.name in _RESERVED_SECRET_DIRS:
                 continue
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", d.name):
+            if not DEV_TYPE_NAME_RE.fullmatch(d.name):
                 continue
             for p in sorted(d.iterdir()):
                 if p.is_file():

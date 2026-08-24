@@ -45,9 +45,19 @@ def _canon(name: str | None) -> str:
 _MAX_TEMPLATE_BYTES = 64 * 1024   # the prompt rides a Redis runspec reply
 
 
-def _dir(mission_type: str) -> Path:
+def _prompt_templates_root() -> Path:
+    """Constant trusted root for mission-type prompt templates (CAKE-140).
+
+    Tainted ``mission_type`` values must ride as ``confined`` parts under this
+    root — never be joined into the base before confinement.
+    """
     from ..config import CONFIG_PATH
-    return CONFIG_PATH.parent / "prompt_templates" / mission_type
+    return CONFIG_PATH.parent / "prompt_templates"
+
+
+def _dir(mission_type: str) -> Path:
+    """Per-type subdirectory for read/list/seed (type from PLAYBOOK_VARS or disk)."""
+    return _prompt_templates_root() / mission_type
 
 
 def _require_type(mission_type: str) -> None:
@@ -131,7 +141,7 @@ def save_template(mission_type: str, name: str, text: str) -> None:
         raise ValueError("template name must match "
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     validate_template(mission_type, text)
-    path = confined(_dir(mission_type).resolve(), f"{name}.yaml")
+    path = confined(_prompt_templates_root(), mission_type, f"{name}.yaml")
     _atomic_yaml(path,
                  {"schema_version": 1, "mission_type": mission_type,
                   "name": name, "template": text})
@@ -144,9 +154,8 @@ def delete_template(mission_type: str, name: str) -> None:
     if not _NAME_RE.fullmatch(name):
         raise ValueError("template name must match "
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
-    root = _dir(mission_type).resolve()
     try:
-        path = confined(root, f"{name}.yaml")
+        path = confined(_prompt_templates_root(), mission_type, f"{name}.yaml")
     except ValueError as e:
         raise ValueError(
             f"template path escapes {mission_type!r} template directory"
@@ -238,16 +247,25 @@ def template_warnings(config) -> list[str]:
 # seeded trio also gets the "Customer Success" preset. Identifying prompts
 # are plain prefix text: no {var} rendering, no placeholder validation.
 
-def _dev_dir(dev_type: str) -> Path:
+def _devtype_prompt_templates_root() -> Path:
+    """Constant trusted root for Dev-Type identifying-prompt templates (CAKE-140).
+
+    Tainted ``dev_type`` values must ride as ``confined`` parts under this
+    root — never be joined into the base before confinement.
+    """
     from ..config import CONFIG_PATH
-    return CONFIG_PATH.parent / "devtype_prompt_templates" / dev_type
+    return CONFIG_PATH.parent / "devtype_prompt_templates"
+
+
+def _dev_dir(dev_type: str) -> Path:
+    """Per-dev-type subdirectory for read/list/seed (type from dev_types keys or disk)."""
+    return _devtype_prompt_templates_root() / dev_type
 
 
 def known_devtype_dirs() -> list[Path]:
     """Every dev type that has a prompt-template dir on disk — the settings-
     bundle apply prunes dirs of dev types the bundle removed (ADR-0013)."""
-    from ..config import CONFIG_PATH
-    root = CONFIG_PATH.parent / "devtype_prompt_templates"
+    root = _devtype_prompt_templates_root()
     return sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
 
 
@@ -296,24 +314,21 @@ def save_devtype_prompt(dev_type: str, name: str, text: str) -> None:
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
     if len(text.encode()) > _MAX_TEMPLATE_BYTES:
         raise ValueError(f"template exceeds {_MAX_TEMPLATE_BYTES // 1024} KB")
-    path = confined(_dev_dir(dev_type).resolve(), f"{name}.yaml")
+    path = confined(_devtype_prompt_templates_root(), dev_type, f"{name}.yaml")
     _atomic_yaml(path,
                  {"schema_version": 1, "dev_type": dev_type,
                   "name": name, "template": text})
 
 
-_DEV_TYPE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-
-
 def delete_devtype_prompt(dev_type: str, name: str) -> None:
-    if not _DEV_TYPE_NAME_RE.fullmatch(dev_type or ""):
+    from ..config import DEV_TYPE_NAME_RE
+    if not DEV_TYPE_NAME_RE.fullmatch(dev_type or ""):
         raise ValueError("dev_type must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
     if not _NAME_RE.fullmatch(name):
         raise ValueError("template name must match "
                          "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
-    root = _dev_dir(dev_type).resolve()
     try:
-        path = confined(root, f"{name}.yaml")
+        path = confined(_devtype_prompt_templates_root(), dev_type, f"{name}.yaml")
     except ValueError as e:
         raise ValueError(
             f"template path escapes {dev_type!r} template directory"

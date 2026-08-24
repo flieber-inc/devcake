@@ -244,6 +244,7 @@ def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
     # match settings_bundle.audit_event so on-disk JSONL is scrubbed too.
     detail = redact(detail)
     markers.AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # redact(detail) already scrubbed; JSONL write is post-barrier (scanner cannot see MaD yet).
     with open(markers.AUDIT_PATH, "a") as f:
         f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
                             "instance": getattr(mgr, "instance_name", ""),

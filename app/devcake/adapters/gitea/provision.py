@@ -695,6 +695,7 @@ class GiteaProvisioner:
         try:
             return json.loads(path.read_text())
         except Exception:  # noqa: BLE001 — unreadable secret reads as absent (logged); provisioning re-mints from absence
+            # Logs the secret file path only — content never reaches this call.
             log.error("unreadable internal-forge secret %s", path)
             return None
 

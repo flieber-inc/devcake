@@ -195,6 +195,7 @@ def test_give_up_feed_includes_trace_id_when_oo_ui_configured(
     assert "missing result.json" in body
     assert "T-1-1-EXECUTE-CCCCCC" in body
     assert trace_id in body
+    # Test assertion on comment-body text — not URL sanitization.
     assert "https://oo.example" in body
 
 

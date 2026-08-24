@@ -57,3 +57,12 @@ jobs:
         uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           category: "/language:${{ matrix.language }}"
+        env:
+          # Local model packs cannot be expressed via config `packs:` (that
+          # key only accepts registry scope/name). These CLI flags add the
+          # extensions search path and activate our pack by name — same
+          # pattern codeql-action uses for its own pr-diff-range pack.
+          CODEQL_ACTION_EXTRA_OPTIONS: >-
+            {"database":{"run-queries":[
+            "--additional-packs=${{ github.workspace }}/.github/codeql/extensions",
+            "--extension-packs=flieber-inc/devcake-redact"]}}

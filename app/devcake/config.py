@@ -609,6 +609,13 @@ class CostInputs(BaseModel):
         return "operator:" + hashlib.sha256(canon.encode()).hexdigest()[:8]
 
 
+# Single charset authority for Dev Type names (beside DevType). Call sites
+# that re-check before path sinks / shutil must import these — do not
+# re-spell the character class inline (CAKE-140).
+DEV_TYPE_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+DEV_TYPE_NAME_RE = re.compile(DEV_TYPE_NAME_PATTERN)
+
+
 class DevType(BaseModel):
     """docs/02 §6 — one YAML per Dev Type under /data/config/dev_types/.
 
@@ -620,7 +627,7 @@ class DevType(BaseModel):
     # no ":" — dev-type breakers share /health's circuit_breakers map with
     # per-repo `repo:<name>` entries (M10); a colon would let a dev type
     # collide with (and mask) a repo breaker
-    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    name: str = Field(pattern=DEV_TYPE_NAME_PATTERN)
     harness_template: str
     identifying_prompt: str = ""
     # Operator shell. Additive after aiming unless override_harness_adapter.
@@ -1351,7 +1358,9 @@ def reconcile_managed_pmos(current: list[dict], incoming: list[dict], *,
 
 def _atomic_yaml(path: Path, data: dict) -> None:
     """tmp + fsync + replace; unlink temp on any failure after mkstemp
-    (same atomic-write cleanup contract as secrets._atomic_write_bytes)."""
+    (same atomic-write cleanup contract as secrets._atomic_write_bytes).
+
+    Unconfined sink — callers must pass an already-confined or otherwise trusted path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
@@ -1479,7 +1488,14 @@ def save_config(cfg: AppConfig) -> None:
 
 
 def save_dev_type(dt: DevType) -> None:
-    _atomic_yaml(CONFIG_PATH.parent / "dev_types" / f"{dt.name}.yaml", dt.model_dump())
+    """Write ``dev_types/{name}.yaml`` after charset + path confinement."""
+    from .pathsafety import confined
+    if not DEV_TYPE_NAME_RE.fullmatch(dt.name or ""):
+        raise ValueError(
+            "dev type name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        )
+    path = confined(CONFIG_PATH.parent / "dev_types", f"{dt.name}.yaml")
+    _atomic_yaml(path, dt.model_dump())
 
 
 def delete_dev_type(name: str) -> None:
@@ -1489,7 +1505,7 @@ def delete_dev_type(name: str) -> None:
     re-check here so unlink cannot leave ``CONFIG_PATH.parent / "dev_types"``.
     """
     from .pathsafety import confined
-    if not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", name or ""):
+    if not DEV_TYPE_NAME_RE.fullmatch(name or ""):
         raise ValueError(
             "dev type name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$"
         )

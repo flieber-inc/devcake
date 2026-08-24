@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 
 from fastapi import HTTPException
 
-from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
-                      delete_dev_type, save_config, save_dev_type,
+from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DEV_TYPE_NAME_RE,
+                      DevType, delete_dev_type, save_config, save_dev_type,
                       validate_assignment_map, validate_memory_bindings)
 from ..harness import HARNESSES, dev_type_status
 from ..house_pins import HOUSE_PINS, LAUNCH_SUPPORTED
@@ -22,10 +21,6 @@ from ..pathsafety import confined
 from ..prompts import templates as prompt_templates
 
 log = logging.getLogger("devcake")
-
-# Same charset as DevType.name — re-checked at rename/remove move sites even
-# when `name in dev_types` (defense in depth for shutil sinks / CodeQL).
-_DEV_TYPE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 async def get_prompt_templates(*, config, dev_types):
@@ -158,9 +153,9 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
     new = str(body.get("new_name") or "")
     if name not in dev_types:
         raise HTTPException(404, f"no Dev Type named {name!r}")
-    if not _DEV_TYPE_NAME_RE.fullmatch(name or ""):
+    if not DEV_TYPE_NAME_RE.fullmatch(name or ""):
         raise HTTPException(422, "name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
-    if not _DEV_TYPE_NAME_RE.fullmatch(new) or ":" in new:
+    if not DEV_TYPE_NAME_RE.fullmatch(new) or ":" in new:
         raise HTTPException(422, "new_name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
     if new in dev_types:
         raise HTTPException(409, f"a Dev Type named {new!r} already exists")
@@ -213,7 +208,7 @@ async def remove_dev_type(name: str, *, config, dev_types):
 
     if name not in dev_types:
         raise HTTPException(404, f"no Dev Type named {name!r}")
-    if not _DEV_TYPE_NAME_RE.fullmatch(name or ""):
+    if not DEV_TYPE_NAME_RE.fullmatch(name or ""):
         raise HTTPException(422, "name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
     if any(a.dev_type == name for a in config.assignments.values()):
         raise HTTPException(409, f"{name} is assigned to a mission type")

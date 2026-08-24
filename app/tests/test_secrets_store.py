@@ -288,6 +288,53 @@ def test_delete_credential_file_unlinks(monkeypatch, tmp_path):
         s.delete_credential_file("judgment", "../harness/X.json")
 
 
+def test_read_credential_file_allowlist_refusal(monkeypatch, tmp_path):
+    """Reserved dirs and invalid dev_type names refuse before any read."""
+    s = _store(monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        s.read_credential_file("harness", "x.json")
+    with pytest.raises(ValueError):
+        s.read_credential_file("connections", "x.json")
+    with pytest.raises(ValueError):
+        s.read_credential_file("../etc", "passwd")
+    with pytest.raises(ValueError):
+        s.read_credential_file("bad.name", "auth.json")
+
+
+def test_read_credential_file_traversal_refusal(monkeypatch, tmp_path):
+    """Hostile filenames must not escape the Dev-Type credential dir."""
+    s = _store(monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        s.read_credential_file("judgment", "../harness/X.json")
+    with pytest.raises(ValueError):
+        s.read_credential_file("judgment", "../etc/passwd")
+    with pytest.raises(ValueError):
+        s.read_credential_file("judgment", "a/b.json")
+
+
+def test_read_credential_file_absent_returns_none(monkeypatch, tmp_path):
+    s = _store(monkeypatch, tmp_path)
+    assert s.read_credential_file("judgment", "grok-auth.json") is None
+
+
+def test_read_credential_file_present_returns_content(monkeypatch, tmp_path):
+    s = _store(monkeypatch, tmp_path)
+    expected = '{"token":"oauth-read-sentinel-abcdef"}'
+    s.write_credential_file("judgment", "grok-auth.json", expected)
+    assert s.read_credential_file("judgment", "grok-auth.json") == expected
+
+
+def test_credential_path_confined_lock_sidecar(monkeypatch, tmp_path):
+    """Lock sidecar path for grok refresh — same allowlist + confined builder."""
+    s = _store(monkeypatch, tmp_path)
+    path = s.credential_path("main-dev", ".grok-auth.lock")
+    assert path == (tmp_path / "secrets" / "main-dev" / ".grok-auth.lock").resolve()
+    with pytest.raises(ValueError):
+        s.credential_path("harness", ".grok-auth.lock")
+    with pytest.raises(ValueError):
+        s.credential_path("main-dev", "../etc/passwd")
+
+
 def test_inventory_presence_only_never_values(monkeypatch, tmp_path):
     s = _store(monkeypatch, tmp_path)
     s.write_connection_secret("pmo", "linear", "api_key", "pmo-sentinel-secret-xyz")

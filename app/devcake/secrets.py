@@ -320,6 +320,18 @@ def require_credential_ref(dev_type: str, filename: str) -> None:
         raise ValueError(f"invalid credential filename {filename!r}")
 
 
+def credential_path(dev_type: str, filename: str) -> Path:
+    """Confined path under /data/secrets/{dev_type}/{filename}.
+
+    Allowlist via ``require_credential_ref`` then ``confined`` — the single
+    builder for credential write / read / delete and the grok-auth lock
+    sidecar. Callers that only need bytes should prefer
+    ``read_credential_file`` / ``write_credential_file``.
+    """
+    require_credential_ref(dev_type, filename)
+    return confined(_root(), dev_type, filename)
+
+
 # Operator-uploaded / OAuth credential files (raw text, not JSON dicts).
 MAX_CREDENTIAL_FILE_BYTES = 1 * 1024 * 1024
 
@@ -327,13 +339,12 @@ MAX_CREDENTIAL_FILE_BYTES = 1 * 1024 * 1024
 def write_credential_file(dev_type: str, filename: str, content: str) -> Path:
     """Atomically write a raw credential file under /data/secrets/{dev_type}/.
     0600; registers content for redaction when long enough (≥8)."""
-    require_credential_ref(dev_type, filename)
     raw = content if isinstance(content, str) else str(content or "")
     data = raw.encode()
     if len(data) > MAX_CREDENTIAL_FILE_BYTES:
         raise ValueError(
             f"credential file too large ({len(data)} > {MAX_CREDENTIAL_FILE_BYTES})")
-    path = confined(_root(), dev_type, filename)
+    path = credential_path(dev_type, filename)
     _atomic_write_bytes(path, data)
     if len(raw) >= 8:
         security.register_runtime_secret(
@@ -341,10 +352,17 @@ def write_credential_file(dev_type: str, filename: str, content: str) -> Path:
     return path
 
 
+def read_credential_file(dev_type: str, filename: str) -> str | None:
+    """Read a raw credential file. ``None`` when absent (caller logs)."""
+    path = credential_path(dev_type, filename)
+    if not path.exists():
+        return None
+    return path.read_text()
+
+
 def delete_credential_file(dev_type: str, filename: str) -> None:
     """Unlink one OAuth/uploaded credential file. Missing = no-op."""
-    require_credential_ref(dev_type, filename)
-    path = confined(_root(), dev_type, filename)
+    path = credential_path(dev_type, filename)
     path.unlink(missing_ok=True)
     # drop empty dir so inventory doesn't keep a ghost. suppress: a concurrent
     # OAuth write can race the empty check (TOCTOU) — unlink already succeeded.
@@ -352,7 +370,6 @@ def delete_credential_file(dev_type: str, filename: str) -> None:
     if parent.is_dir() and not any(parent.iterdir()):
         with contextlib.suppress(OSError):
             parent.rmdir()
-
 
 # ── status (never echoes values) ────────────────────────────────────────────
 

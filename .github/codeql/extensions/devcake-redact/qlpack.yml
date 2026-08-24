@@ -1,0 +1,9 @@
+# Scanner-side mirror of app/devcake/security.py::redact (docs/14 §7).
+# When redact moves or gains siblings, update models/redact.yml in lockstep.
+name: flieber-inc/devcake-redact
+version: 0.0.1
+library: true
+extensionTargets:
+  codeql/python-all: "*"
+dataExtensions:
+  - models/*.yml

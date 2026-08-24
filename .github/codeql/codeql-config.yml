@@ -1,0 +1,7 @@
+# Advanced-setup CodeQL config for DevCake.
+# Wires the in-repo redact sanitizer model pack (scanner mirror of docs/14 §7).
+name: "DevCake CodeQL"
+
+packs:
+  python:
+    - ./.github/codeql/extensions/devcake-redact

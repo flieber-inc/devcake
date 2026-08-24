@@ -1,0 +1,59 @@
+# CodeQL advanced setup — replaces GitHub default setup for this repo.
+#
+# Coverage mirrors the previous default-setup languages (analyses on main):
+#   python, javascript-typescript, actions — on pull_request + push to main.
+# Query suite: default (same as former default-setup query_suite).
+#
+# Operator action at merge: disable CodeQL default setup in repo Settings →
+# Code security → CodeQL. Default setup and advanced setup cannot coexist;
+# leaving both on duplicates scans. Coordinate the flip when merging this PR.
+#
+# Action pins follow the same SHA-pin convention as ci.yml / docker-*.yml.
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly catch-up for newly published queries (default setup was weekly).
+    - cron: "17 5 * * 1"
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+          - actions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          category: "/language:${{ matrix.language }}"

@@ -16,6 +16,29 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.4.3 (2026-08-25)
+
+Patch release in the v0.4 "Hummingbird" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.4.3).
+
+- **Fixed — fresh installs on macOS / Docker Desktop** (#313–#319).
+  `DOCKER_GID` is derived from the in-container view of the Docker socket;
+  the host baker no longer sweeps a keep-set published mid-reconcile,
+  verifies its own liveness after launch, and gains `--foreground-baker`;
+  `./up.sh --bake` proves dispatch with a hello smoke before reporting
+  success; OpenObserve's password policy is validated up front; baker
+  launch failures ship diagnostics to OpenObserve and the admin alerts.
+  Docker Desktop guidance lives in [`docs/13-deployment.md`](docs/13-deployment.md) §8b.
+- **Security — GitHub Security tab at zero** (#320–#329). The CodeQL
+  path-injection class is closed by a shared path-confinement helper
+  applied across the operator-facing stores and dispatch, with dispatch
+  reading credential files through the secrets-store port; CodeQL runs as
+  advanced setup from a SHA-pinned in-repo workflow with a model pack for
+  the redaction chokepoint; the six remaining alerts are documented false
+  positives with a proof table in [`docs/14-security.md`](docs/14-security.md) §12,
+  dismissed citing the packet. Dependabot's two alerts closed via the
+  transitive `postcss` bump, and automated security fixes are enabled.
+
 ## v0.4.2 (2026-08-20)
 
 Patch release in the v0.4 "Hummingbird" line.

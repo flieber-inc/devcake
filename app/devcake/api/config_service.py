@@ -105,6 +105,10 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
     """Validate + apply a config PUT in place; hot-reload adapters; restore
     the previous config if the reload fails. `reload` is the composition
     root's reload_connections."""
+    dirty_dts: list[tuple[object, list[str]]] = []
+    skill_renames: list[tuple[str, str]] = []
+    pmo_renames: list[tuple[str, str]] = []
+    repo_renames: list[tuple[str, str]] = []
     try:
         reject_stale_patch(body)
         # inherit before merge — deep_merge replaces the list wholesale, so
@@ -141,11 +145,14 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         repo_renames = plan_list_renames(
             current.get("repos") or [], merged_dict.get("repos") or [])
         if repo_renames:
-            _rewrite_repo_citations(merged_dict, repo_renames, dev_types)
+            # In-memory only until reload succeeds — same timing as secrets.
+            dirty_dts = _rewrite_repo_citations(
+                merged_dict, repo_renames, dev_types)
         if pmo_renames:
             _rewrite_pmo_citations(merged_dict, pmo_renames)
         merged = AppConfig.model_validate(merged_dict)
     except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
+        _revert_devtype_memory_repos(dirty_dts, persist=True)
         raise HTTPException(422, str(e))
     previous = current
     renamed_from = {
@@ -164,6 +171,7 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
             dev_types=dev_types)
         dry_run_adapters(merged)
     except BundleError as e:
+        _revert_devtype_memory_repos(dirty_dts, persist=True)
         raise HTTPException(e.status, str(e))
     # a removed instance's stored secrets go with it — otherwise a later
     # instance reusing the name silently inherits the dead credential
@@ -189,6 +197,16 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         reload()                                 # hot reload pmo + forge
     except Exception as e:  # noqa: BLE001 — rollback contract: ANY reload failure restores the previous config; the 500 carries the cause
         log.exception("reload_connections failed — restoring previous config")
+        # Reverse rekey BEFORE restore reload so build_managers keeps the
+        # original manager object under the prior name (not delete+add).
+        if rekey_pmo is not None:
+            for old_name, new_name in pmo_renames:
+                try:
+                    rekey_pmo(new_name, old_name)
+                except Exception:  # noqa: BLE001 — best-effort; restore reload still runs
+                    log.exception("could not reverse PMO rekey %r → %r",
+                                  new_name, old_name)
+        _revert_devtype_memory_repos(dirty_dts, persist=True)
         restored = AppConfig.model_validate(previous)
         for field in type(restored).model_fields:
             setattr(config, field, getattr(restored, field))
@@ -198,6 +216,8 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         except Exception:
             log.exception("restore reload also failed")
         raise HTTPException(500, f"config reload failed; previous config restored: {e}")
+    # Dev Type citations persist only after reload — parity with secrets/mirrors.
+    _persist_devtype_memory_repos(dirty_dts)
     for scope, pairs in (("skill", skill_renames),
                          ("pmo", pmo_renames),
                          ("repo", repo_renames)):
@@ -237,14 +257,17 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
 
 def _rewrite_repo_citations(merged_dict: dict,
                             renames: list[tuple[str, str]],
-                            dev_types: dict) -> None:
+                            dev_types: dict
+                            ) -> list[tuple[object, list[str]]]:
     """Rewrite every config citation of a renamed repo card name.
 
     Mutates the pre-validate merged dict (pmos lists) and live Dev Type
     objects so model_validate / semantics see the post-rename name set.
+    Does NOT persist Dev Types — caller saves only after successful reload
+    (and reverts on failure). Returns (dt, prior_memory_repos) pairs.
     """
     if not renames:
-        return
+        return []
     mapping = dict(renames)
 
     def _map_names(names: list) -> list[str]:
@@ -256,15 +279,41 @@ def _rewrite_repo_citations(merged_dict: dict,
         for field in ("repos", "reference_repos", "memory_repos"):
             if field in pmo and pmo[field] is not None:
                 pmo[field] = _map_names(list(pmo[field]))
-    dirty_dts = []
+    dirty: list[tuple[object, list[str]]] = []
     for dt in (dev_types or {}).values():
         before = list(getattr(dt, "memory_repos", None) or [])
         after = _map_names(before)
         if after != before:
             dt.memory_repos = after
-            dirty_dts.append(dt)
+            dirty.append((dt, before))
+    return dirty
+
+
+def _revert_devtype_memory_repos(
+        dirty: list[tuple[object, list[str]]], *, persist: bool = False
+) -> None:
+    """Undo in-memory Dev Type citation rewrites after a failed PUT."""
+    if not dirty:
+        return
     from ..config import save_dev_type
-    for dt in dirty_dts:
+    for dt, before in dirty:
+        dt.memory_repos = list(before)
+        if persist:
+            try:
+                save_dev_type(dt)
+            except Exception:  # noqa: BLE001 — best-effort heal of any premature disk write
+                log.exception(
+                    "could not restore Dev Type %r memory_repos after "
+                    "failed repo rename", getattr(dt, "name", "?"))
+
+
+def _persist_devtype_memory_repos(
+        dirty: list[tuple[object, list[str]]]) -> None:
+    """Write Dev Type citation rewrites only after successful reload."""
+    if not dirty:
+        return
+    from ..config import save_dev_type
+    for dt, _before in dirty:
         try:
             save_dev_type(dt)
         except Exception:  # noqa: BLE001 — best-effort persist; in-memory already rewritten

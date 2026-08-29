@@ -1442,3 +1442,143 @@ def test_config_put_removing_non_last_repo_keeps_survivor_token(
     assert secrets.read_connection_secret("repo", "bravo", "token") \
         == "SECRET_BRAVO"
     assert not (tmp_path / "secrets" / "connections" / "repo-alpha.json").exists()
+
+
+def test_config_put_repo_rename_dry_run_failure_leaves_devtype_disk_unchanged(
+        monkeypatch, tmp_path):
+    """A failed PUT mid-repo-rename must leave Dev Type memory_repos on disk
+    (and in memory) citing the old card — same timing as secrets/mirrors,
+    which only move after successful reload."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from devcake.api import config_service
+    from devcake.settings_bundle import BundleError
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(name="linear", team_key="ENG", repos=[]),
+    ]
+    cfg.repos = [
+        config_mod.RepoInstance(name="notes",
+                                url="https://github.com/acme/notes"),
+    ]
+    dts["senior-dev"].memory_repos = ["notes"]
+    # Persist the pre-rename citation so a premature save_dev_type is visible
+    # on disk via load_dev_types — not only the in-memory object.
+    config_mod.save_dev_type(dts["senior-dev"])
+    assert config_mod.load_dev_types()["senior-dev"].memory_repos == ["notes"]
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+
+    def _boom(*_a, **_k):
+        raise BundleError(422, "adapter boom")
+
+    monkeypatch.setattr(config_service, "dry_run_adapters", _boom)
+
+    body = {
+        "repos": [
+            {"name": "notebook", "forge": "github",
+             "url": "https://github.com/acme/notes"},
+        ],
+    }
+    with pytest.raises(HTTPException) as ei:
+        asyncio.new_event_loop().run_until_complete(
+            config_service.apply_config_patch(
+                body, config=cfg, dev_types=dts, managers={},
+                reload=lambda: None))
+    assert ei.value.status_code == 422
+    assert [r.name for r in cfg.repos] == ["notes"]
+    assert dts["senior-dev"].memory_repos == ["notes"]
+    assert config_mod.load_dev_types()["senior-dev"].memory_repos == ["notes"]
+
+
+def test_config_put_repo_rename_reload_failure_leaves_devtype_disk_unchanged(
+        monkeypatch, tmp_path):
+    """Reload failure after a repo rename must restore Dev Type memory_repos
+    (in memory and on disk) to the pre-PUT citation — secrets/mirrors never
+    moved, so Dev Types must not either."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(name="linear", team_key="ENG", repos=[]),
+    ]
+    cfg.repos = [
+        config_mod.RepoInstance(name="notes",
+                                url="https://github.com/acme/notes"),
+    ]
+    dts["senior-dev"].memory_repos = ["notes"]
+    config_mod.save_dev_type(dts["senior-dev"])
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    calls = {"n": 0}
+
+    def _reload():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("adapter exploded")
+
+    body = {
+        "repos": [
+            {"name": "notebook", "forge": "github",
+             "url": "https://github.com/acme/notes"},
+        ],
+    }
+    with pytest.raises(HTTPException) as ei:
+        asyncio.new_event_loop().run_until_complete(
+            config_service.apply_config_patch(
+                body, config=cfg, dev_types=dts, managers={},
+                reload=_reload))
+    assert ei.value.status_code == 500
+    assert [r.name for r in cfg.repos] == ["notes"]
+    assert dts["senior-dev"].memory_repos == ["notes"]
+    assert config_mod.load_dev_types()["senior-dev"].memory_repos == ["notes"]
+
+
+def test_config_put_pmo_rename_rewrites_cron_pmo(monkeypatch, tmp_path):
+    """In-place PMO rename must rewrite non-reserved crons[].pmo citations."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.crons = [
+        config_mod.memory_curator_seed(),
+        config_mod.CronJob(
+            id="nightly", name="Nightly", entry_stage="EXECUTE",
+            pmo="linear", description_template="nightly work"),
+    ]
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "pmos": [
+            {"name": "linearb", "system": "linear", "team_key": "ENG",
+             "repos": ["main"], "reference_repos": [], "memory_repos": []},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [p.name for p in cfg.pmos] == ["linearb"]
+    by_id = {c.id: c for c in cfg.crons}
+    assert by_id["nightly"].pmo == "linearb"
+    assert by_id["memory-curator"].pmo is None

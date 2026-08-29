@@ -11,7 +11,7 @@ from ..model import (LABEL_CREATED, LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_SKIP,
                      LABEL_TRACKING, MissionRef)
 from ..run import Run
 from . import steps
-from .markers import (COMMENT_SENTINEL, at_decomposition_limit,
+from .markers import (COMMENT_SENTINEL, at_decomposition_limit, defang,
                       decomposition_depth, decomposition_marker)
 
 log = logging.getLogger("devcake.missions")
@@ -63,13 +63,13 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 f"of EARLIER parts, got {deps!r}")
     # Redact agent-generated fields before hashing and create_mission so
     # redelivery and secrets scrubbing stay consistent. Marker syntax in the
-    # untrusted body is defanged (opening backtick stripped) BEFORE hashing: a
-    # Dev quoting a decomposition marker would otherwise shadow the child's
-    # own footer and confuse the replay child-scan.
+    # untrusted body is neutralized via defang() BEFORE hashing: a Dev quoting
+    # any marker family (decomposition footer shadow, or a repo-routing token
+    # that would gate as unparseable) must lose its teeth without changing the
+    # manifest that replay/top-up keys on.
     normalized = [{
         "title": redact(str(d.get("title") or f"part {i}")),
-        "description": redact(str(d.get("description") or "")).replace(
-            "`devcake:decomposition:v1", "devcake:decomposition:v1"),
+        "description": defang(redact(str(d.get("description") or ""))),
         "priority": str(d.get("priority") or "medium"),
         "blocked_by": list(d.get("blocked_by") or []),
     } for i, d in enumerate(drafts, start=1)]

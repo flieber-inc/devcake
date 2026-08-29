@@ -239,8 +239,14 @@ essentially work just like a forge adapter — and could just be one").
    consumed commit per run).
 6. **Read-only by construction:** authoring names refuse `/` (save/delete),
    the admin catalog tags external rows with their origin and disables
-   Delete; `GET /skills/{name}` accepts the path form. `/skills/sync` also
-   `ensure_fresh`es referenced cards — one refresh gesture.
+   Delete; `GET /skills/{name}` accepts the path form. Catalog listing
+   includes every configured `skill_sources` entry whose mirror is
+   readable (CAKE-146 — not gated on Dev Type selection). Operator
+   refresh: `POST /skills/sources/refresh` and `/skills/sync` (Restore
+   built-ins) share one `ensure_fresh` chokepoint over **all** configured
+   skill source names; connection probe is
+   `POST /connections/skill/{name}/test` (read-only reachability, no live
+   forge adapter).
 
 ## Related
 

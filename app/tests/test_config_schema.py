@@ -475,18 +475,18 @@ def test_registry_payload_carries_operator_notes():
     assert "Premium" in by_id["gitlab_issues"]["operator_note"]
     assert by_id["gitlab_issues"]["relations_supported"] is False
     assert by_id["linear"]["operator_note"] == ""
-    assert by_id["github_issues"]["experimental"] is True
-    assert by_id["gitlab_issues"]["experimental"] is True
+    assert by_id["github_issues"]["experimental"] is False
+    assert by_id["gitlab_issues"]["experimental"] is False
     assert by_id["linear"]["experimental"] is False
     assert by_id["gitea_issues"]["experimental"] is False
 
 
-def test_registry_marks_github_and_gitlab_issues_experimental():
+def test_registry_marks_github_and_gitlab_issues_launch_supported():
     """Launch vs experimental is registry metadata (not docs-only).
 
-    Linear + Gitea Issues are launch-supported; GitHub/GitLab Issues stay
-    experimental until the live contract battery graduates them (docs/05 §9.7–9.8,
-    docs/16). The SPA select and operator_note ride this flag.
+    All four current PMO systems are launch-supported. Vendor-gap sentences
+    stay in operator_note; the Experimental prefix does not. The SPA select
+    and help line ride this flag for any future experimental opt-in.
     """
     import asyncio
     from devcake.adapters.registry import PMO_SYSTEMS
@@ -494,17 +494,19 @@ def test_registry_marks_github_and_gitlab_issues_experimental():
 
     assert PMO_SYSTEMS["linear"].experimental is False
     assert PMO_SYSTEMS["gitea_issues"].experimental is False
-    assert PMO_SYSTEMS["github_issues"].experimental is True
-    assert PMO_SYSTEMS["gitlab_issues"].experimental is True
-    assert "experimental" in PMO_SYSTEMS["github_issues"].operator_note.lower()
-    assert "experimental" in PMO_SYSTEMS["gitlab_issues"].operator_note.lower()
+    assert PMO_SYSTEMS["github_issues"].experimental is False
+    assert PMO_SYSTEMS["gitlab_issues"].experimental is False
+    assert "experimental" not in PMO_SYSTEMS["github_issues"].operator_note.lower()
+    assert "experimental" not in PMO_SYSTEMS["gitlab_issues"].operator_note.lower()
+    assert "cannot attach files" in PMO_SYSTEMS["github_issues"].operator_note
+    assert "Premium" in PMO_SYSTEMS["gitlab_issues"].operator_note
 
     payload = asyncio.new_event_loop().run_until_complete(connections_registry())
     by_id = {s["id"]: s for s in payload["pmo_systems"]}
     assert by_id["linear"]["experimental"] is False
     assert by_id["gitea_issues"]["experimental"] is False
-    assert by_id["github_issues"]["experimental"] is True
-    assert by_id["gitlab_issues"]["experimental"] is True
+    assert by_id["github_issues"]["experimental"] is False
+    assert by_id["gitlab_issues"]["experimental"] is False
 
 
 def test_stale_put_bodies_rejected_not_dropped():

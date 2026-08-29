@@ -73,9 +73,9 @@ both lists recognizable within the first minute.
 
 **Use DevCake when:**
 
-- Your team already runs real work through a task board (**Linear** and
-  **Gitea Issues** are launch-supported; **GitHub Issues** and **GitLab
-  Issues** are experimental — [`05-pmo-adapter.md`](05-pmo-adapter.md)) and
+- Your team already runs real work through a task board (**Linear**,
+  **Gitea Issues**, **GitHub Issues**, and **GitLab Issues** are
+  launch-supported — [`05-pmo-adapter.md`](05-pmo-adapter.md)) and
   the board has discipline: tickets are written to be picked up, and labels
   mean things.
 - One adult operator can own a dedicated machine and the trust envelope that
@@ -153,11 +153,11 @@ multi-tenant sandbox, and receipts do not make agents injection-proof
 > tight.
 
 **Two minutes (engineers):** the thirty-second pitch, then:
-> Under the hood it's deliberately boring: your PMO system (Linear and Gitea
-> Issues launch-supported; GitHub/GitLab Issues experimental) is the single
-> source of truth, and labels form the state machine — triage, plan, execute,
-> review. Each step runs as a disposable Docker container wrapping a real
-> coding harness from the registry — Claude Code, Grok Build, Codex, Pi,
+> Under the hood it's deliberately boring: your PMO system (Linear, Gitea
+> Issues, GitHub Issues, and GitLab Issues — all launch-supported) is the
+> single source of truth, and labels form the state machine — triage, plan,
+> execute, review. Each step runs as a disposable Docker container wrapping a
+> real coding harness from the registry — Claude Code, Grok Build, Codex, Pi,
 > OpenCode, Qwen Code — using the subscription or API credentials you provide.
 > Dagu holds `docker.sock` on a dedicated host; that is intentional, not an
 > accident (`14`). There are no persistent per-Mission leases or checkouts: a

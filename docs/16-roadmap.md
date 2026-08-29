@@ -390,8 +390,8 @@ until that run exists, field evidence below stays operator-self-reported.
   `.zip` attachments extracted under `{stem}/`. **built**.
 - **Gitea Issues PMO adapter** (`gitea_issues`, 2026-07-21): first forge-issue
   family member — pure `PMOPort` on bundled or external Gitea (`team_key` =
-  `owner/repo`). GitHub/GitLab Issues adapters, if ever, copy this profile.
-  **built**.
+  `owner/repo`). GitHub/GitLab Issues later copied this profile and are now
+  launch-supported (CAKE-154). **built**.
 - **OpenObserve ingest auto-provision** on app boot (telemetry ops; lands with
   the harness/fault campaign window). **built**.
 - **Harness fault classification + model-backend brake** (ADR-0018; expanded
@@ -800,7 +800,6 @@ demos.
 | Memory + Cron pilot ship gate | ADR-0035 ship gate; residual above; code in tree (`domain/claims.py`, `domain/cron_service.py`, `api/cron_service.py`, admin Scheduled Tasks) | Built, not pilot-shipped — throwaway-box A/B receipts not yet written into docs/16 |
 | Fresh-`/data` operator-drill re-run | Residuals above; v0.2 FINAL trailer (same ritual) | Non-gating stranger-operability trailer; production use does not substitute for wipe-and-reconfigure |
 | Field-evidence detail pass | Field evidence section above; host-sizing for `docs/13` / `docs/18` | Founder publish decisions (what detail is quotable) — not a missing feature |
-| GitHub Issues / GitLab Issues PMO experimental | `adapters/registry.py` → `PMO_SYSTEMS`; docs/00, docs/05 §9.7–9.8; launch roster table below | In-tree, not launch-supported until each board's live `contract_tests_pmo.py` battery has been run |
 | Harness resume off for `pi` / `opencode` / `qwen-code` | `images/common/devcake_dev/harness/dialects.py` (`resume_spec = None`); launch roster note; docs/08 § per-template | Launch-supported templates; resume stays off until a committed capture pair lands in `RESUME_SPECS` |
 
 **Not residual (closed this audit):** dedicated skill sources (ADR-0016
@@ -813,8 +812,9 @@ still owed. Shipped entry under living log.
 **Match (no change):** six house harnesses launch-supported
 (`house_pins.LAUNCH_SUPPORTED` = all six; `Harness.experimental` default
 false for all — admin `(experimental)` chrome is harness-flag only). Launch-
-supported PMOs = Linear + Gitea Issues. PMO experimental is docs/product
-posture, not an admin SPA chip.
+supported PMOs = Linear + Gitea Issues + GitHub Issues + GitLab Issues.
+`PMOSystemInfo.experimental` stays available for future opt-ins; none of the
+current four set it.
 
 ---
 
@@ -1009,16 +1009,17 @@ long-lived incomplete dialect API.
 (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`, `qwen-code`) are
 launch-supported in the registry: dialect + Bake + hermetic captures +
 backend `aim()`. Host CLIs characterize only; production truth is the
-baked image / in-container adaptor. **GitHub Issues / GitLab Issues stay
-experimental** until each board's live battery has been run (hermetic
-pytest is necessary and not sufficient). Launch-supported PMOs remain
-Linear + Gitea Issues.
+baked image / in-container adaptor. **GitHub Issues / GitLab Issues are
+launch-supported** (`PMOSystemInfo.experimental=False`). Live
+`contract_tests_pmo.py` batteries remain useful ops proof but are not a
+blocker for the admin `experimental` flag. Launch-supported PMOs =
+Linear + Gitea Issues + GitHub Issues + GitLab Issues.
 
 **Build (this campaign)**
 
 | Kind | Names | Registry id | Gate / status |
 |---|---|---|---|
-| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | **experimental** — `PMOSystemInfo.experimental=True` in the adapter registry (admin SPA select suffix + operator_note). Live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
+| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | **launch-supported** — `PMOSystemInfo.experimental=False` in the adapter registry. Vendor-gap `operator_note` remains (GitHub attachments; GitLab Premium/EE relations). Live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
 | Platform | `HarnessDialect` + registry-as-id-source + `aim()` | — | shipped for all six house templates |
 | Harness | Pi, OpenCode, Qwen Code | `pi`, `opencode`, `qwen-code` | **launch-supported** (dialect + Bake + aim + captures; resume still off until a capture pair) |
 
@@ -1159,8 +1160,8 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
 - **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
   polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
   among deferred items, independent of any harness-platform work.
-- **Additional PMO adapters** beyond the launch-roster pair (GitHub Issues
-  + GitLab Issues are the 2026-08-15 campaign, above). Height / Shortcut /
+- **Additional PMO adapters** beyond the four launch-supported systems
+  (Linear, Gitea Issues, GitHub Issues, GitLab Issues). Height / Shortcut /
   Plane remain Linear-class candidates. Jira Cloud waits on feed fidelity.
   Monday.com is **scratched**. Copy the `gitea_issues` profile (pure
   `PMOPort`) for any future forge-issue sibling.

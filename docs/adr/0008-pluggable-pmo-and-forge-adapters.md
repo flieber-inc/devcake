@@ -56,8 +56,9 @@ instance, eventually — without touching the core.
    place that knows which PMO systems and forges exist (`PMO_SYSTEMS`,
    `make_pmo`, `make_forge`, `forges()`), including each adapter's secret env
    vars, token regexes, paste-guard prefixes, capability residual flags, and
-   launch-vs-experimental labeling (`PMOSystemInfo.experimental` — in-tree
-   GitHub/GitLab Issues are experimental; Linear + Gitea Issues are not).
+   launch-vs-experimental labeling (`PMOSystemInfo.experimental` — all four
+   current systems are launch-supported; `True` is reserved for future
+   opt-ins).
    Config `system`/`forge` fields are open strings validated against the
    registry (an unknown value 422s exactly like the old `Literal`s). A config
    PUT calls `reload_connections()`: both adapters rebuild, and managed labels

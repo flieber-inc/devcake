@@ -29,8 +29,8 @@ CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "co
 # activity-{instance}-{key} parses on the first hyphen). Branches use the
 # full uppercased identity; make_run_id truncates the scrubbed-upper
 # segment to 12 chars and AppConfig refuses colliding prefixes across
-# pmos + repos + skill_sources. Body (no anchors) is shared by skill
-# refs, repo markers, etc. (CAKE-87).
+# PMO instances (only PMOs mint run ids). Body (no anchors) is shared by
+# skill refs, repo markers, etc. (CAKE-87).
 INSTANCE_NAME_BODY = r"[a-z][a-z0-9_]{0,38}"
 _INSTANCE_NAME_RE = rf"^{INSTANCE_NAME_BODY}$"
 
@@ -1160,21 +1160,21 @@ class AppConfig(BaseModel):
                 f"skill_sources {sorted(overlap)} collide with repository "
                 f"card names — pick distinct names")
         # make_run_id truncates the scrubbed-upper instance segment to 12
-        # chars — refuse any two live names (pmos + repos + skill_sources)
-        # that would mint the same prefix (CAKE-151).
+        # chars — refuse two PMO instances that would mint the same prefix
+        # (CAKE-151). PMO names ONLY: repos and skill sources never prefix
+        # run ids or pmo_refs (the reserved-names doctrine), and a PMO
+        # sharing its name with a repo card is the normal Curator-board
+        # shape — refusing it here would refuse existing configs at boot.
         from .domain.ids import run_id_instance_prefix
         seen_prefixes: dict[str, str] = {}
-        for name in (
-                [p.name for p in self.pmos]
-                + [r.name for r in self.repos]
-                + list(src_names)):
+        for name in [p.name for p in self.pmos]:
             prefix = run_id_instance_prefix(name)
             prior = seen_prefixes.get(prefix)
             if prior is not None:
                 raise ValueError(
                     f"run-id instance prefix {prefix!r} collides between "
-                    f"{prior!r} and {name!r} — pick names that differ in "
-                    f"the first 12 scrubbed-upper characters")
+                    f"PMO instances {prior!r} and {name!r} — pick names "
+                    f"that differ in the first 12 scrubbed-upper characters")
             seen_prefixes[prefix] = name
         for p in self.pmos:
             for field in ("repos", "reference_repos", "memory_repos"):

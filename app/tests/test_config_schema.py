@@ -71,8 +71,9 @@ def test_instance_name_format_enforced():
 
 def test_run_id_instance_prefix_collision_refused():
     """Long names truncate to 12 scrubbed-upper chars in make_run_id — two
-    live names (across pmos + repos + skill_sources) that share that prefix
-    must fail config validation rather than mint colliding run ids."""
+    PMO instances that share that prefix must fail config validation rather
+    than mint colliding run ids. PMOs ONLY: repos and skill sources never
+    prefix run ids or pmo_refs (same doctrine as the reserved-names test)."""
     base = _base()
     # Same first-12 scrubbed upper: acme_engineering_board vs acme_engineering_x
     # → ACME_ENGINEER
@@ -82,15 +83,15 @@ def test_run_id_instance_prefix_collision_refused():
     ])
     with pytest.raises(Exception, match="run-id instance prefix"):
         AppConfig.model_validate(colliding)
-    # Cross-list: PMO + repo share the truncated prefix
+    # Cross-list: PMO + repo sharing the truncated prefix is FINE — repos
+    # mint no run ids, and refusing here would refuse existing configs
     cross = dict(
         base,
         pmos=[dict(base["pmos"][0], name="acme_engineering_board")],
         repos=[dict(base["repos"][0], name="acme_engineering_labs",
                     url="https://github.com/o/other")],
     )
-    with pytest.raises(Exception, match="run-id instance prefix"):
-        AppConfig.model_validate(cross)
+    AppConfig.model_validate(cross)
     # Distinct before char 12 — both accepted
     ok = dict(base, pmos=[
         dict(base["pmos"][0], name="acme_eng_board", team_key="A"),
@@ -99,6 +100,19 @@ def test_run_id_instance_prefix_collision_refused():
     AppConfig.model_validate(ok)
     # Legacy short names still validate
     AppConfig.model_validate(base)
+
+
+def test_pmo_and_repo_may_share_a_name_curator_convention():
+    """A Curator board is named after its notebook card (I2: a memory-bound
+    card may be a work repo only on a board whose repos == [that card]) —
+    identical PMO and repo names are live in real deployments and must keep
+    validating, or the upgrade refuses the existing config.yaml at boot."""
+    AppConfig.model_validate({
+        "pmos": [{"name": "devcakemem", "system": "github_issues",
+                  "team_key": "o/memory", "repos": ["devcakemem"]}],
+        "repos": [{"name": "devcakemem",
+                   "url": "https://github.com/o/memory"}],
+    })
 
 
 def test_reserved_pmo_instance_names_rejected():

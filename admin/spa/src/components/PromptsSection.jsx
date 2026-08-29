@@ -3,7 +3,7 @@ import { get, send } from "../api.js";
 import Button from "./Button.jsx";
 import { Section } from "./Card.jsx";
 import { ConfirmDialog, Modal } from "./Modal.jsx";
-import { Field, Input, Select, Textarea } from "./Field.jsx";
+import { Field, Help, Input, Select, Textarea } from "./Field.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import SettingRow from "./SettingRow.jsx";
 import MarkdownBody, {
@@ -18,6 +18,8 @@ import { MISSION_TYPES } from "../lib/missionStages.js";
 // delete IMMEDIATELY (the dev-type precedent — the modal has its own explicit
 // Save); only the ACTIVE selection rides the unified config draft
 // (cfg.active_prompt_templates.<TYPE> → the page-level Save review).
+// CAKE-150: per-PMO overrides ride cfg.pmos[i].active_prompt_templates
+// (inherit/override idiom mirrors AssignmentsSection / ADR-0019).
 
 function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSaved }) {
   const editing = !!initial;
@@ -90,6 +92,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
   const [switchNote, setSwitchNote] = useState("");
   const [err, setErr] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
+  const pmos = cfg.pmos || [];
   const refresh = () =>
     get("/prompt-templates")
       .then((d) => { setData(d); setLoadFailed(false); })
@@ -102,6 +105,16 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
     (cfg.active_prompt_templates || {})[mt] || (data?.active?.[mt]) || "Development";
   const activeDevOf = (n) =>
     (cfg.active_devtype_prompts || {})[n] || (data?.active_dev?.[n]) || "Development";
+
+  // CAKE-150: presence = override; empty select value deletes the key to inherit
+  const setPmoOverride = (i, p, mt, name) => {
+    if (!name) {
+      const { [mt]: _drop, ...rest } = p.active_prompt_templates || {};
+      setField(`cfg.pmos.${i}.active_prompt_templates`, rest);
+    } else {
+      setField(`cfg.pmos.${i}.active_prompt_templates.${mt}`, name);
+    }
+  };
 
   // union of template names across every group — the workflow switcher's
   // options (item 7): applying sets each group's DRAFT where the name
@@ -245,6 +258,57 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
           </div>
         );
       })}
+      {data && pmos.length > 0 && (
+        <>
+          <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+            Per-PMO overrides
+          </h4>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            Each PMO can pick a different playbook for the same Mission Type.
+            Inherit follows the global active above (live: a later global edit
+            applies here too).
+          </p>
+          {pmos.map((p, i) => (
+            <div key={p.name || i}
+              className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+              <h4 className="text-sm font-semibold">
+                Overrides — <span className="font-mono">{p.name || `PMO #${i + 1}`}</span>
+                <Help text="A row set here replaces the global active template for this PMO instance only. Inherit rows follow the global Mission Types table above." />
+              </h4>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[28rem] text-sm">
+                  <tbody>
+                    {MISSION_TYPES.map((mt) => {
+                      const entries = data.templates?.[mt] || [];
+                      const override = (p.active_prompt_templates || {})[mt] || "";
+                      return (
+                        <tr key={mt}
+                          className="border-t border-neutral-100 dark:border-neutral-800">
+                          <td className="w-32 py-2 font-mono text-xs font-semibold">{mt}</td>
+                          <td className="py-2">
+                            <Select value={override}
+                              aria-label={`${p.name || `PMO #${i + 1}`} ${mt} template`}
+                              onChange={(e) => setPmoOverride(i, p, mt, e.target.value)}>
+                              <option value="">
+                                Inherit (global: {activeOf(mt)})
+                              </option>
+                              {entries.map((t) => (
+                                <option key={t.name} value={t.name}>
+                                  {t.name}{t.builtin ? " (built-in)" : ""}
+                                </option>
+                              ))}
+                            </Select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
       {data && (
         <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
           Dev Types

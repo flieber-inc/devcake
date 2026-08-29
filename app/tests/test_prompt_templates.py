@@ -192,6 +192,65 @@ def test_resolve_falls_back_to_default_with_warning(monkeypatch, tmp_path):
 
 # ── slice 5: dispatch-level wiring ───────────────────────────────────────────
 
+def test_two_pmos_resolve_different_playbooks_for_same_mission_type(
+        monkeypatch, tmp_path):
+    """CAKE-150 Done-when: two PMO instances on one config can select
+    different named templates for the same Mission Type via the chokepoint."""
+    from devcake.config import (AppConfig, PMOInstance,
+                                active_prompt_template_for)
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    cfg = AppConfig(
+        active_prompt_templates={"ONBOARD": "Development"},
+        pmos=[
+            PMOInstance(name="eng", team_key="ENG"),
+            PMOInstance(name="cs", team_key="CS",
+                        active_prompt_templates={"ONBOARD": "Customer Success"}),
+        ],
+    )
+    eng, cs = cfg.pmos
+    eng_name = active_prompt_template_for(cfg, eng, "ONBOARD")
+    cs_name = active_prompt_template_for(cfg, cs, "ONBOARD")
+    assert eng_name == "Development"
+    assert cs_name == "Customer Success"
+    eng_text, eng_warn = t.resolve_playbook("ONBOARD", eng_name)
+    cs_text, cs_warn = t.resolve_playbook("ONBOARD", cs_name)
+    assert eng_warn is None and cs_warn is None
+    assert eng_text == DEFAULT_PLAYBOOKS["ONBOARD"]
+    assert cs_text == CS_PLAYBOOKS["ONBOARD"]
+    assert eng_text != cs_text
+
+
+def test_template_warnings_cover_pmo_overrides(monkeypatch, tmp_path):
+    """Health must check every PMO's effective selection, without duplicate
+    spam when an override matches the global active."""
+    from devcake.config import AppConfig, PMOInstance
+
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    # ghost only on one PMO override → one warning naming the ghost
+    cfg = AppConfig(
+        active_prompt_templates={"EXECUTE": "Development"},
+        pmos=[
+            PMOInstance(name="eng", team_key="ENG"),
+            PMOInstance(name="cs", team_key="CS",
+                        active_prompt_templates={"EXECUTE": "ghost"}),
+        ],
+    )
+    warns = t.template_warnings(cfg)
+    assert sum(1 for w in warns if "ghost" in w) == 1
+    # override == global → no duplicate missing-template spam for Development
+    same = AppConfig(
+        active_prompt_templates={"EXECUTE": "Development"},
+        pmos=[PMOInstance(
+            name="cs", team_key="CS",
+            active_prompt_templates={"EXECUTE": "Development"})],
+    )
+    assert t.template_warnings(same) == []
+
+
 def test_dispatch_uses_active_template_and_falls_back(monkeypatch, tmp_path):
     from test_transitions import make_mgr, mission
     from devcake.config import PMOInstance
@@ -224,6 +283,61 @@ def test_dispatch_uses_active_template_and_falls_back(monkeypatch, tmp_path):
     m.labels = {"DEVCAKE", "DEVCAKE-EXECUTE"}
     run_coro(mgr.dispatch(m, MissionType.EXECUTE, dev))
     assert launched and "Binding rules" in launched[0].spec_prompt
+
+
+def test_dispatch_uses_pmo_override_over_global(monkeypatch, tmp_path):
+    """Dispatch _pb must go through active_prompt_template_for so a per-PMO
+    override beats the global active for that instance."""
+    from test_transitions import make_mgr, mission
+    from devcake.config import PMOInstance
+    from devcake.domain.model import MissionType
+
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    t.save_template("EXECUTE", "cs-playbook", "CS-OVERRIDE-MARKER {key}")
+
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    m.url = "https://linear.app/acme/issue/T-1"
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=_ForgeWithDescriptor())
+    mgr.internal_forge = None
+    mgr.instance = PMOInstance(
+        name="cs", team_key="CS", repos=["main"],
+        active_prompt_templates={"EXECUTE": "cs-playbook"})
+    mgr.config.active_prompt_templates = {"EXECUTE": "Development"}
+    launched = []
+
+    async def launch(run, image):
+        launched.append(run)
+
+    mgr.runs.bootstrap = type("B", (), {"launch": staticmethod(launch)})()
+    run_coro(mgr.dispatch(m, MissionType.EXECUTE, mgr.dev_types["senior-dev"]))
+    assert launched and "CS-OVERRIDE-MARKER T-1" in launched[0].spec_prompt
+
+
+def test_delete_prompt_template_409_when_pmo_override_active(monkeypatch, tmp_path):
+    """Cannot delete a template that any PMO override (or the global active)
+    still selects — overrides must not dangle as the only reference."""
+    from fastapi import HTTPException
+    from devcake.api import devtypes_service
+    from devcake.config import AppConfig, PMOInstance
+
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    t.save_template("EXECUTE", "cs-only", "just {key}")
+    cfg = AppConfig(
+        active_prompt_templates={"EXECUTE": "Development"},
+        pmos=[PMOInstance(
+            name="cs", team_key="CS",
+            active_prompt_templates={"EXECUTE": "cs-only"})],
+    )
+    with pytest.raises(HTTPException) as e:
+        run_coro(devtypes_service.delete_prompt_template(
+            "EXECUTE", "cs-only", config=cfg))
+    assert e.value.status_code == 409
+    assert "cs" in str(e.value.detail).lower() or "ACTIVE" in str(e.value.detail)
+    # still on disk
+    assert (tmp_path / "config" / "prompt_templates" / "EXECUTE"
+            / "cs-only.yaml").exists()
 
 
 class _ForgeWithDescriptor:

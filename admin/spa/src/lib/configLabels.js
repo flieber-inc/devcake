@@ -224,6 +224,20 @@ export function metaFor(path) {
     return { group: "Prompts", label: `${m[1]} active template`,
              multiline: false, format: orEmpty };
   }
+  m = path.match(/^cfg\.pmos\.(\d+)\.active_prompt_templates\.([^.]+)$/);
+  if (m) {
+    return { group: "Prompts", multiline: false, format: orEmpty,
+             label: `${m[2]} template override (PMO #${+m[1] + 1})` };
+  }
+  m = path.match(/^cfg\.pmos\.(\d+)\.active_prompt_templates$/);
+  if (m) {
+    return { group: "Prompts", multiline: false,
+             label: `Prompt template overrides (PMO #${+m[1] + 1})`,
+             format: (v) => {
+               const keys = Object.keys(v || {});
+               return keys.length ? keys.join(", ") : "(none — inherit global)";
+             } };
+  }
   m = path.match(/^cfg\.pmos\.(\d+)\.repos$/);
   if (m) {
     return { group: "PMO", label: `Repositories (instance #${+m[1] + 1})`,

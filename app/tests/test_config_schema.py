@@ -719,6 +719,54 @@ def test_assignment_for_resolves_override_wholesale_or_global():
     assert assignment_for(cfg, cs, "EXECUTE").dev_type == "implementer"
 
 
+def test_active_prompt_template_for_inherits_global_or_override():
+    """CAKE-150: per-PMO playbook selection mirrors ADR-0019 — present key
+    on the instance wins; absent key inherits AppConfig.active_prompt_templates
+    (including a missing global key → None for resolve_playbook's default)."""
+    from devcake.config import active_prompt_template_for
+    base = _base()
+    base["active_prompt_templates"] = {"ONBOARD": "Development",
+                                       "EXECUTE": "Development"}
+    base["pmos"] = [
+        dict(base["pmos"][0], name="eng", team_key="ENG"),
+        dict(base["pmos"][0], name="cs", team_key="CS",
+             active_prompt_templates={"ONBOARD": "Customer Success"}),
+    ]
+    cfg = AppConfig.model_validate(base)
+    eng, cs = cfg.pmos
+    # no override → global name
+    assert active_prompt_template_for(cfg, eng, "ONBOARD") == "Development"
+    # override present → that name
+    assert active_prompt_template_for(cfg, cs, "ONBOARD") == "Customer Success"
+    # other types on the overriding instance still inherit global
+    assert active_prompt_template_for(cfg, cs, "EXECUTE") == "Development"
+    # missing global key → None (resolve_playbook falls back to Development)
+    assert active_prompt_template_for(cfg, eng, "PLAN") is None
+    # empty per-PMO map (legacy YAML) behaves like inherit-everywhere
+    bare = AppConfig.model_validate(_base())
+    assert bare.pmos[0].active_prompt_templates == {}
+    assert active_prompt_template_for(bare, bare.pmos[0], "ONBOARD") is None
+
+
+def test_pmo_active_prompt_templates_validated_at_the_model():
+    """Unknown mission-type keys and blank values must refuse loudly — a typo
+    must not be silently inert; remove the key to inherit."""
+    base = _base()
+    base["pmos"] = [dict(base["pmos"][0],
+                         active_prompt_templates={"DEPLOY": "Development"})]
+    with pytest.raises(Exception, match="unknown mission type"):
+        AppConfig.model_validate(base)
+    base["pmos"] = [dict(base["pmos"][0],
+                         active_prompt_templates={"ONBOARD": ""})]
+    with pytest.raises(Exception, match="remove the key to inherit|non-empty|blank|empty"):
+        AppConfig.model_validate(base)
+    # valid override accepted
+    base["pmos"] = [dict(base["pmos"][0],
+                         active_prompt_templates={"ONBOARD": "Customer Success"})]
+    cfg = AppConfig.model_validate(base)
+    assert cfg.pmos[0].active_prompt_templates["ONBOARD"] == "Customer Success"
+
+
 def test_global_assignments_validated_at_the_model(tmp_path):
     """SEC-3 (2026-08-12 audit): the global map is validated where EVERY
     entry point funnels — model_validate — so a hand-edited config.yaml

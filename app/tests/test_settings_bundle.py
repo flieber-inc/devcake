@@ -263,6 +263,14 @@ def test_cross_ref_violations_are_422(monkeypatch, tmp_path):
     with pytest.raises(sb.BundleError) as e:
         sb.validate_bundle(bad)
     assert "nowhere" in str(e.value)
+    # CAKE-150: per-PMO override names are checked the same way
+    bad = copy.deepcopy(bundle)
+    pmos = bad["config"]["app"]["pmos"]
+    pmos[0]["active_prompt_templates"] = {"PLAN": "nowhere-pmo"}
+    with pytest.raises(sb.BundleError) as e:
+        sb.validate_bundle(bad)
+    assert "nowhere-pmo" in str(e.value)
+    assert "pmos" in str(e.value).lower() or "linear" in str(e.value)
 
 
 def test_serialize_drops_orphan_active_devtype_prompts(monkeypatch, tmp_path):

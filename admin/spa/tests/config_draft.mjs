@@ -79,9 +79,9 @@ check("rename inside a same-length list still wins over fresh", () => {
 
 check("scaffolds carry every server-model field (pmo, repo, skill-source)", () => {
   assert.deepEqual(Object.keys(newPmoCard("x", "linear")).sort(),
-    ["api_base", "assignments", "discovery_routing", "intake_paused",
-     "managed", "memory_repos", "name", "reference_repos", "repos",
-     "system", "team_key"]);
+    ["active_prompt_templates", "api_base", "assignments",
+     "discovery_routing", "intake_paused", "managed", "memory_repos",
+     "name", "reference_repos", "repos", "system", "team_key"]);
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
      "default_branch", "forge", "merge_retry_window_minutes",
@@ -110,6 +110,17 @@ check("pmo card fields have real labels, not raw paths", () => {
     /Discovery routing/);
   assert.match(metaFor("cfg.pmos.1.managed").label, /Managed/);
   assert.notEqual(metaFor("cfg.pmos.1.assignments").group, "Other");
+});
+
+check("per-PMO prompt template override paths label under Prompts", () => {
+  const leaf = metaFor("cfg.pmos.0.active_prompt_templates.ONBOARD");
+  assert.equal(leaf.group, "Prompts");
+  assert.match(leaf.label, /ONBOARD template override/);
+  const map = metaFor("cfg.pmos.0.active_prompt_templates");
+  assert.equal(map.group, "Prompts");
+  assert.match(map.label, /Prompt template overrides/);
+  assert.equal(map.format({}), "(none — inherit global)");
+  assert.equal(map.format({ ONBOARD: "Customer Success" }), "ONBOARD");
 });
 
 check("no diff row ever renders [object Object]", () => {

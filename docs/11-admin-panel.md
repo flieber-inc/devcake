@@ -268,6 +268,8 @@ Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely
 ### Prompts (anchor `#/config/prompts`)
 Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{name}`) and per-Dev-Type **identifying-prompt templates** (`/devtype-prompts/{dev}/{name}`). Template create/edit/delete is **Immediate** (own Save in the modal); only the **active** selection per mission type / Dev Type rides the unified config draft (`active_prompt_templates` / `active_devtype_prompts`). Missing actives fall back to the built-in default; unresolved actives surface as `prompt_template_warnings` on `/health`. **View** uses the same **Rendered** / **Source** dialog as Skills (Markdown reading aid; unsubstituted `{var}` placeholders; Source is the stored template).
 
+Below the global Mission Type actives, **one override block per configured PMO instance** (ADR-0037 / CAKE-150): a select per Mission Type whose inherit option names the effective global template; choosing a template writes `pmos[i].active_prompt_templates[mt]`; choosing inherit deletes the key. Overrides save through the config draft (PUT `/config`), not a separate endpoint — same placement as ADR-0019 assignment overrides. GET `/prompt-templates` `active` stays the **global** map for the Prompts section. Deleting a template that any PMO override (or the global active) still selects returns 409.
+
 ### Limits (`#/config/limits`)
 
 Seven story-grouped cards (four since the 2026-08 reviewer round, plus

@@ -112,6 +112,11 @@ pmos:                                # 0..N instances; name is what Run records
                                      # WHOLESALE (dev_type + extra_cli_args together — args are
                                      # harness-specific, never mixed across rows); absent = inherit
                                      # live. e.g.  EXECUTE: {dev_type: csagent, extra_cli_args: ""}
+  active_prompt_templates: {}        # per-instance Mission-Type → playbook template overrides
+                                     # (ADR-0037 / CAKE-150): present key replaces the GLOBAL
+                                     # active_prompt_templates name for that type on THIS
+                                     # instance only; absent = inherit live. e.g.
+                                     #   ONBOARD: "Customer Success"
                                      # the API key VALUE is GUI-stored: /data/secrets/connections/pmo-linear.json
 
 repos:                               # 0..N (empty = every mission routes to the internal fallback forge)
@@ -191,7 +196,8 @@ steward:                    # ADR-0007: manual-only by default; periodic service
   # playbook_template: |             # operator-editable relations instructions (ADR-0035);
   #   ...                            # {mission_table} is replaced with the live mission list;
                                      # the result contract stays code-owned. Default = shipped text
-active_prompt_templates: {}          # per-Mission-Type template name; missing ⇒ "default"
+active_prompt_templates: {}          # GLOBAL per-Mission-Type template name; missing ⇒ Development
+                                     # ("default" legacy alias). Per-PMO overrides ride pmos[].
 active_devtype_prompts: {}           # per-Dev-Type identifying-prompt name; missing ⇒ "Development"
 dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts ("id:signature")
 ```

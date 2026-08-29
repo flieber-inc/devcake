@@ -184,29 +184,55 @@ def resolve_playbook(mission_type: str,
         f"corrupt — using the built-in default")
 
 
-def template_warnings(config) -> list[str]:
-    """Health surface: one warning per mission type whose active template
-    doesn't resolve, plus the ADR-0012 inertness check — an ONBOARD template
-    without {decomposition_rule} keeps whatever static depth sentence it was
-    saved with, so a configured limit above 1 silently never reaches the
-    Dev. Stateless, recomputed per call."""
-    warns = []
+def _effective_actives(config) -> dict[str, set[str]]:
+    """Mission Type → set of canonically-named templates that are effective
+    somewhere (global active ∪ each PMO override). Dedupes identical
+    override==global selections so health does not spam."""
+    from ..config import active_prompt_template_for
+
+    out: dict[str, set[str]] = {mt: set() for mt in PLAYBOOK_VARS}
     for mt in PLAYBOOK_VARS:
-        active = _canon((config.active_prompt_templates or {}).get(mt))
-        if active not in _builtins():
-            _, warn = resolve_playbook(mt, active)
-            if warn:
-                warns.append(warn)
+        out[mt].add(_canon((config.active_prompt_templates or {}).get(mt)))
+    for inst in getattr(config, "pmos", None) or []:
+        for mt in PLAYBOOK_VARS:
+            # go through the chokepoint so inherit vs override stay aligned
+            # with dispatch (CAKE-150 / ADR-0037)
+            out[mt].add(_canon(active_prompt_template_for(config, inst, mt)))
+    return out
+
+
+def template_warnings(config) -> list[str]:
+    """Health surface: one warning per (mission type, effective template)
+    whose active does not resolve, plus the ADR-0012 inertness check — an
+    ONBOARD template without {decomposition_rule} keeps whatever static
+    depth sentence it was saved with, so a configured limit above 1
+    silently never reaches the Dev. Covers the global actives and every
+    PMO override (CAKE-150). Stateless, recomputed per call."""
+    warns = []
+    seen_warn: set[str] = set()
+    actives = _effective_actives(config)
+
+    def _once(msg: str) -> None:
+        if msg not in seen_warn:
+            seen_warn.add(msg)
+            warns.append(msg)
+
+    for mt, names in actives.items():
+        for active in sorted(names):
+            if active not in _builtins():
+                _, warn = resolve_playbook(mt, active)
+                if warn:
+                    _once(warn)
     # a custom ONBOARD template saved before 2026-07-18 may still instruct
     # the removed executed_trivially outcome — every such run parks as an
     # illegal outcome, so surface it instead of failing silently
-    active = _canon((config.active_prompt_templates or {}).get("ONBOARD"))
-    text, _ = resolve_playbook("ONBOARD", active)
-    if "executed_trivially" in text:
-        warns.append(
-            f"ONBOARD template '{active}' still instructs the removed "
-            "executed_trivially outcome — its runs will park with "
-            "DEVCAKE-SKIP; re-save it from the current default")
+    for active in sorted(actives["ONBOARD"]):
+        text, _ = resolve_playbook("ONBOARD", active)
+        if "executed_trivially" in text:
+            _once(
+                f"ONBOARD template '{active}' still instructs the removed "
+                "executed_trivially outcome — its runs will park with "
+                "DEVCAKE-SKIP; re-save it from the current default")
     # ADR-0018: an EXECUTE/PLAN-family template saved before 2026-07-24 still
     # carries the unqualified binding rule "Work ONLY inside /workspace/repo/…"
     # alongside the rule ordering a write to /workspace/out/result.json. Strong
@@ -214,27 +240,27 @@ def template_warnings(config) -> list[str]:
     # cwd-relative result.json inside the clone, which fails the run as
     # DEV_BAD_OUTPUT and can be swept into the PR by commit-at-end. Built-ins
     # are re-canonicalized at boot, so only operator copies can be stale.
-    for mt in PLAYBOOK_VARS:
-        active = _canon((config.active_prompt_templates or {}).get(mt))
-        text, _ = resolve_playbook(mt, active)
-        if "Work ONLY inside" in text:
-            warns.append(
-                f"{mt} template '{active}' still carries the unqualified "
-                f"\"Work ONLY inside /workspace/repo/…\" rule, which contradicts "
-                f"the /workspace/out/result.json rule — Devs may write "
-                f"result.json into the repository and fail the run. Re-save it "
-                f"from the current default.")
+    for mt, names in actives.items():
+        for active in sorted(names):
+            text, _ = resolve_playbook(mt, active)
+            if "Work ONLY inside" in text:
+                _once(
+                    f"{mt} template '{active}' still carries the unqualified "
+                    f"\"Work ONLY inside /workspace/repo/…\" rule, which "
+                    f"contradicts the /workspace/out/result.json rule — Devs "
+                    f"may write result.json into the repository and fail the "
+                    f"run. Re-save it from the current default.")
     if getattr(config, "max_decomposition_depth", 1) != 1:
-        active = _canon((config.active_prompt_templates or {}).get("ONBOARD"))
-        text, _ = resolve_playbook("ONBOARD", active)
-        if "{decomposition_rule}" not in text:
-            shown = config.max_decomposition_depth or "unlimited"
-            warns.append(
-                f"ONBOARD: active prompt template '{active}' has no "
-                "{decomposition_rule} placeholder — the configured "
-                f"decomposition depth ({shown}) cannot reach the Dev "
-                "prompt; re-add the placeholder or switch to a built-in "
-                "template")
+        for active in sorted(actives["ONBOARD"]):
+            text, _ = resolve_playbook("ONBOARD", active)
+            if "{decomposition_rule}" not in text:
+                shown = config.max_decomposition_depth or "unlimited"
+                _once(
+                    f"ONBOARD: active prompt template '{active}' has no "
+                    "{decomposition_rule} placeholder — the configured "
+                    f"decomposition depth ({shown}) cannot reach the Dev "
+                    "prompt; re-add the placeholder or switch to a built-in "
+                    "template")
     return warns
 
 

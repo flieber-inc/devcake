@@ -16,6 +16,7 @@ export const newPmoCard = (name, system) => ({
   intake_paused: false,
   discovery_routing: true,
   assignments: {},
+  active_prompt_templates: {},
   managed: false,
 });
 

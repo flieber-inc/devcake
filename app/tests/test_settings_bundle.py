@@ -1644,3 +1644,117 @@ def test_config_put_pmo_rename_rewrites_cron_pmo(monkeypatch, tmp_path):
     by_id = {c.id: c for c in cfg.crons}
     assert by_id["nightly"].pmo == "linearb"
     assert by_id["memory-curator"].pmo is None
+
+
+def test_plan_list_renames_anchor_guards_remove_plus_rename():
+    """Removing one card and renaming a LATER card in the same Save must
+    pair the rename by identity anchor, never by shifted index — the index
+    pairing would move the removed card's secrets onto the survivor and
+    delete the survivor's own."""
+    from devcake.api.config_service import (plan_list_renames,
+                                            pmo_rename_anchor,
+                                            repo_rename_anchor)
+
+    prev = [{"name": "alpha", "url": "https://gh.example/o/alpha"},
+            {"name": "beta", "url": "https://gh.example/o/beta"}]
+    new = [{"name": "betav2", "url": "https://gh.example/o/beta"}]
+    assert plan_list_renames(prev, new, anchor=repo_rename_anchor) \
+        == [("beta", "betav2")]
+
+    # rename that ALSO changes the anchor = new identity → remove+add
+    moved = [{"name": "betav2", "url": "https://gh.example/o/elsewhere"}]
+    assert plan_list_renames([prev[1]], moved,
+                             anchor=repo_rename_anchor) == []
+
+    # pure same-index rename unchanged by the anchor guard
+    assert plan_list_renames(
+        [{"name": "linear", "system": "linear", "team_key": "ENG"}],
+        [{"name": "linearb", "system": "linear", "team_key": "ENG"}],
+        anchor=pmo_rename_anchor) == [("linear", "linearb")]
+
+
+def test_config_put_remove_and_rename_one_save_moves_right_secrets(
+        monkeypatch, tmp_path):
+    """CAKE-152 review regression: remove PMO card 0 and rename card 1 in
+    ONE Save — the survivor must keep ITS OWN api_key under the new name;
+    the removed card's key is deleted, never cross-wired."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, _tpl = _env(monkeypatch, tmp_path)
+    cfg = config_mod.AppConfig(
+        pmos=[config_mod.PMOInstance(name="linear", team_key="ENG"),
+              config_mod.PMOInstance(name="boardb", team_key="OPS")])
+    secrets.write_connection_secret("pmo", "linear", "api_key", "key_linear")
+    secrets.write_connection_secret("pmo", "boardb", "api_key", "key_boardb")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters",
+                        lambda *a, **k: None)
+
+    body = {"pmos": [{"name": "opsboard", "system": "linear",
+                      "team_key": "OPS"}]}
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [p.name for p in cfg.pmos] == ["opsboard"]
+    assert secrets.read_connection_secret("pmo", "opsboard", "api_key") \
+        == "key_boardb"
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") == ""
+    assert secrets.read_connection_secret("pmo", "boardb", "api_key") == ""
+
+
+def test_config_put_rename_refused_while_runs_active(monkeypatch, tmp_path):
+    """Renaming out from under an ACTIVE run breaks it (finalizer routes on
+    run.pmo_ref; repo resolution is sticky on run.repo_ref) — the PUT must
+    409 and leave config, secrets, and Dev Types untouched."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+    from fastapi import HTTPException
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_connection_secret("pmo", "linear", "api_key", "key_linear")
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters",
+                        lambda *a, **k: None)
+
+    store = SimpleNamespace(active=lambda: [
+        SimpleNamespace(pmo_ref="linear", repo_ref="main")])
+
+    def _put(body):
+        asyncio.new_event_loop().run_until_complete(
+            config_service.apply_config_patch(
+                body, config=cfg, dev_types=dts, managers={},
+                reload=lambda: None, run_store=store))
+
+    with pytest.raises(HTTPException) as e:
+        _put({"pmos": [{"name": "linearb", "system": "linear",
+                        "team_key": "ENG", "repos": ["main"]}]})
+    assert e.value.status_code == 409 and "linear" in str(e.value.detail)
+
+    with pytest.raises(HTTPException) as e:
+        _put({"repos": [{"name": "mainrepo",
+                         "url": "https://github.com/acme/app"}]})
+    assert e.value.status_code == 409 and "main" in str(e.value.detail)
+
+    # nothing moved: names, secrets untouched
+    assert [p.name for p in cfg.pmos] == ["linear"]
+    assert [r.name for r in cfg.repos] == ["main"]
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") \
+        == "key_linear"
+
+    # idle store → the same renames proceed
+    store.active = lambda: []
+    _put({"pmos": [{"name": "linearb", "system": "linear",
+                    "team_key": "ENG", "repos": ["main"]}]})
+    assert [p.name for p in cfg.pmos] == ["linearb"]

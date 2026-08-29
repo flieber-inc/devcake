@@ -28,16 +28,49 @@ def _item_name(item) -> str:
     return item["name"] if isinstance(item, dict) else item.name
 
 
-def plan_list_renames(prev_items, new_items) -> list[tuple[str, str]]:
+def _item_field(item, key: str) -> str:
+    v = item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+    return str(v or "").strip()
+
+
+def repo_rename_anchor(item) -> str:
+    """The identity a repo/skill-source rename never changes: its URL."""
+    return _item_field(item, "url").rstrip("/").removesuffix(".git").lower()
+
+
+def pmo_rename_anchor(item) -> str:
+    """The identity a PMO rename never changes: system + team + api_base.
+    Empty ("") for an idle card (no team) — pass-2 pairing skips those."""
+    team = _item_field(item, "team_key")
+    if not team:
+        return ""
+    return "|".join((_item_field(item, "system") or "linear", team,
+                     _item_field(item, "api_base")))
+
+
+def plan_list_renames(prev_items, new_items, *,
+                      anchor=None) -> list[tuple[str, str]]:
     """Detect in-place card renames on a replaced config list.
 
     Same list index, old name left the name set, new name is genuinely new.
     Index inequality alone is NOT a rename — SPA Remove uses filter() and
     shifts later cards up; set-difference delete handles those removals.
-    """
+
+    `anchor` (when given) is the identity a rename never changes — a repo's
+    URL, a PMO's system/team. Index pairing then also requires the anchors
+    to agree: without that guard, removing one card and renaming a LATER
+    card in the same Save pairs the removed card's name with the renamed
+    card's new name, moving the removed card's secrets onto the survivor
+    and deleting the survivor's own. A second pass pairs leftover rows by
+    unique non-empty anchor, so remove+rename in one Save still renames
+    correctly. A rename that ALSO changes the anchor in the same Save is
+    deliberately treated as remove+add (a card pointing somewhere new is a
+    new identity — its secrets do not follow)."""
     old_names = {_item_name(old) for old in prev_items}
     new_names = {_item_name(new) for new in new_items}
     renames: list[tuple[str, str]] = []
+    matched_old: set[str] = set()
+    matched_new: set[str] = set()
     for i, old in enumerate(prev_items):
         if i >= len(new_items):
             break
@@ -45,8 +78,34 @@ def plan_list_renames(prev_items, new_items) -> list[tuple[str, str]]:
         new_name = _item_name(new_items[i])
         if old_name == new_name:
             continue
-        if old_name not in new_names and new_name not in old_names:
-            renames.append((old_name, new_name))
+        if old_name in new_names or new_name in old_names:
+            continue
+        if anchor is not None and anchor(old) != anchor(new_items[i]):
+            continue
+        renames.append((old_name, new_name))
+        matched_old.add(old_name)
+        matched_new.add(new_name)
+    if anchor is not None:
+        by_anchor_old: dict[str, list[str]] = {}
+        for old in prev_items:
+            name = _item_name(old)
+            if name in new_names or name in matched_old:
+                continue
+            a = anchor(old)
+            if a:
+                by_anchor_old.setdefault(a, []).append(name)
+        by_anchor_new: dict[str, list[str]] = {}
+        for new in new_items:
+            name = _item_name(new)
+            if name in old_names or name in matched_new:
+                continue
+            a = anchor(new)
+            if a:
+                by_anchor_new.setdefault(a, []).append(name)
+        for a, olds in by_anchor_old.items():
+            news = by_anchor_new.get(a) or []
+            if len(olds) == 1 and len(news) == 1:
+                renames.append((olds[0], news[0]))
     return renames
 
 
@@ -88,20 +147,24 @@ def inherit_pmo_intake(body: dict, current: dict,
 
 async def apply_config_patch(body: dict, *, config, dev_types, managers,
                              reload, repo_cache=None, rekey_pmo=None,
+                             run_store=None,
                              cycle_lock: asyncio.Lock | None = None) -> dict:
     """Serialize the config transaction against an in-flight poll cycle."""
     if cycle_lock is None:
         return _apply_config_patch(
             body, config=config, dev_types=dev_types, managers=managers,
-            reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo)
+            reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
+            run_store=run_store)
     async with cycle_lock:
         return _apply_config_patch(
             body, config=config, dev_types=dev_types, managers=managers,
-            reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo)
+            reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
+            run_store=run_store)
 
 
 def _apply_config_patch(body: dict, *, config, dev_types, managers,
-                        reload, repo_cache=None, rekey_pmo=None) -> dict:
+                        reload, repo_cache=None, rekey_pmo=None,
+                        run_store=None) -> dict:
     """Validate + apply a config PUT in place; hot-reload adapters; restore
     the previous config if the reload fails. `reload` is the composition
     root's reload_connections."""
@@ -120,7 +183,8 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         early_pmo_renames = plan_list_renames(
             current.get("pmos") or [],
             body["pmos"] if isinstance(body.get("pmos"), list)
-            else current.get("pmos") or [])
+            else current.get("pmos") or [],
+            anchor=pmo_rename_anchor)
         body = inherit_pmo_intake(body, current, renames=early_pmo_renames)
         # ADR-0030: managed rows survive the wholesale list replace — and
         # this MUST precede the removed-instance computation below, or a PUT
@@ -139,11 +203,14 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         # refuses pmos[] / crons that still cite the pre-rename name.
         skill_renames = plan_list_renames(
             current.get("skill_sources") or [],
-            merged_dict.get("skill_sources") or [])
+            merged_dict.get("skill_sources") or [],
+            anchor=repo_rename_anchor)
         pmo_renames = plan_list_renames(
-            current.get("pmos") or [], merged_dict.get("pmos") or [])
+            current.get("pmos") or [], merged_dict.get("pmos") or [],
+            anchor=pmo_rename_anchor)
         repo_renames = plan_list_renames(
-            current.get("repos") or [], merged_dict.get("repos") or [])
+            current.get("repos") or [], merged_dict.get("repos") or [],
+            anchor=repo_rename_anchor)
         if repo_renames:
             # In-memory only until reload succeeds — same timing as secrets.
             dirty_dts = _rewrite_repo_citations(
@@ -160,6 +227,23 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         "pmo": {old for old, _ in pmo_renames},
         "repo": {old for old, _ in repo_renames},
     }
+    # Renaming out from under an ACTIVE run breaks it: the finalizer routes
+    # on run.pmo_ref (old name → fails the run), and repo resolution is
+    # sticky on run.repo_ref (old name → gates the mission). Refuse now —
+    # the dev-type-delete 409 pattern — rather than fail later, silently.
+    if run_store is not None and (renamed_from["pmo"] or renamed_from["repo"]):
+        active = list(run_store.active())
+        busy = sorted(
+            {r.pmo_ref for r in active
+             if getattr(r, "pmo_ref", None) in renamed_from["pmo"]}
+            | {r.repo_ref for r in active
+               if getattr(r, "repo_ref", None) in renamed_from["repo"]})
+        if busy:
+            _revert_devtype_memory_repos(dirty_dts)   # in-memory only so far
+            raise HTTPException(
+                409, f"cannot rename {', '.join(map(repr, busy))} while "
+                     f"runs are active on the old name — wait for them to "
+                     f"finish (or Stop runs) and save again")
     # cross-store semantics + dry-run adapter construction live in
     # settings_bundle — ONE implementation shared with bundle apply
     # (ADR-0013); the PUT resolves templates against disk.

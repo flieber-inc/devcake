@@ -21,12 +21,17 @@ log = logging.getLogger("devcake.config")
 CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "config.yaml"
 
 
-# Operator-chosen instance identity (schema v3+, docs/16 M9). Lowercase
-# alnum, ≤12 chars, NO hyphens: the name is embedded uppercased in branch
-# names and run ids ({INSTANCE}-{key}), where a hyphen would make the
-# compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
-# Body (no anchors) is shared by skill refs, repo markers, etc. (CAKE-87).
-INSTANCE_NAME_BODY = r"[a-z][a-z0-9]{0,11}"
+# Operator-chosen instance identity (schema v3+, docs/16 M9; widened
+# CAKE-151). GitHub-aligned DevCake subset — NOT full GitHub repo parity:
+# lowercase [a-z][a-z0-9_]{0,38} (underscore OK; hyphen/dot/uppercase
+# banned). The uppercased name is embedded in branch names and run ids as
+# {INSTANCE}-{key}; a hyphen would make the compound ambiguous (and Gitea
+# activity-{instance}-{key} parses on the first hyphen). Branches use the
+# full uppercased identity; make_run_id truncates the scrubbed-upper
+# segment to 12 chars and AppConfig refuses colliding prefixes across
+# pmos + repos + skill_sources. Body (no anchors) is shared by skill
+# refs, repo markers, etc. (CAKE-87).
+INSTANCE_NAME_BODY = r"[a-z][a-z0-9_]{0,38}"
 _INSTANCE_NAME_RE = rf"^{INSTANCE_NAME_BODY}$"
 
 
@@ -99,7 +104,7 @@ def _dedupe_card_names(v: list[str], *, field: str) -> list[str]:
                 or not re.fullmatch(_INSTANCE_NAME_RE, name)):
             raise ValueError(
                 f"{field} {raw!r}: must be a repo-card name "
-                f"(lowercase alnum, ≤12 chars, no slashes)")
+                f"(lowercase letters/digits/underscores, ≤39, no slashes)")
         if name not in out:
             out.append(name)
     return out
@@ -1104,6 +1109,23 @@ class AppConfig(BaseModel):
             raise ValueError(
                 f"skill_sources {sorted(overlap)} collide with repository "
                 f"card names — pick distinct names")
+        # make_run_id truncates the scrubbed-upper instance segment to 12
+        # chars — refuse any two live names (pmos + repos + skill_sources)
+        # that would mint the same prefix (CAKE-151).
+        from .domain.ids import run_id_instance_prefix
+        seen_prefixes: dict[str, str] = {}
+        for name in (
+                [p.name for p in self.pmos]
+                + [r.name for r in self.repos]
+                + list(src_names)):
+            prefix = run_id_instance_prefix(name)
+            prior = seen_prefixes.get(prefix)
+            if prior is not None:
+                raise ValueError(
+                    f"run-id instance prefix {prefix!r} collides between "
+                    f"{prior!r} and {name!r} — pick names that differ in "
+                    f"the first 12 scrubbed-upper characters")
+            seen_prefixes[prefix] = name
         for p in self.pmos:
             for field in ("repos", "reference_repos", "memory_repos"):
                 names = getattr(p, field)

@@ -317,7 +317,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
+                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
                   <Input value={inst.name} disabled={pmoNameLocked(inst.name, idx)}
                   onChange={(e) => {
                     newPmoNames.rename(inst.name, e.target.value);

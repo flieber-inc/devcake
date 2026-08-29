@@ -167,7 +167,7 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated, isNotebook }
       </p>
       <div className="space-y-3">
         <Field label="Repository name"
-          hint="Lowercase letters/digits, ≤12 — it becomes the card name too.">
+          hint="Lowercase letters/digits/underscores, ≤39 — it becomes the card name too.">
           <Input value={name} onChange={(e) => setName(e.target.value)}
             placeholder="e.g. notes" />
         </Field>
@@ -491,7 +491,7 @@ export default function ReposPage({ onHealthChange }) {
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Locked once saved — stored tokens key on it; remove and re-add to rename.">
+                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Locked once saved — stored tokens key on it; remove and re-add to rename.">
                   <Input value={repo.name} disabled={nameLocked(repo.name, idx)}
                   onChange={(e) => {
                     newNames.rename(repo.name, e.target.value);

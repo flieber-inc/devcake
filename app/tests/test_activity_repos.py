@@ -19,7 +19,7 @@ def test_activity_repo_name_prefix_and_cap():
     long = activity_repo_name("linear", "X" * 200)
     assert long == ACTIVITY_PREFIX + internal_repo_name("linear", "X" * 200)
     assert len(long) <= 69
-    # the sweeper discriminator: operator card names (^[a-z][a-z0-9]{0,11}$)
+    # the sweeper discriminator: operator card names (INSTANCE_NAME_BODY)
     # can never start with the hyphen-bearing prefix — even one literally
     # named "activity"
     assert not "activity".startswith(ACTIVITY_PREFIX)

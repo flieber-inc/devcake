@@ -292,7 +292,7 @@ function SkillSourcesCard() {
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Name"
-              help="Short identity for this source (lowercase letters/digits, up to 12). Skills from it are selected as '<name>/<skill>' on worker profiles. Locked once saved — stored tokens key on it; remove and re-add to rename.">
+              help="Short identity for this source (lowercase letters/digits/underscores, ≤39, no hyphens). Skills from it are selected as '<name>/<skill>' on worker profiles. Locked once saved — stored tokens key on it; remove and re-add to rename.">
               <Input value={src.name}
                 aria-label={`Skill source ${idx + 1} name`}
                 disabled={nameLocked(src.name, idx)}

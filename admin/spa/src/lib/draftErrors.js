@@ -7,9 +7,9 @@
 // Client-side mirror of the server's instance-name rule (config.py
 // _INSTANCE_NAME_RE): the draft validates names BEFORE Save, so a bad name
 // surfaces inline instead of as a raw 422 from the config PUT.
-export const INSTANCE_NAME_RE = /^[a-z][a-z0-9]{0,11}$/;
+export const INSTANCE_NAME_RE = /^[a-z][a-z0-9_]{0,38}$/;
 export const INSTANCE_NAME_RULE =
-  "a lowercase letter, then lowercase letters/digits, 12 max (no spaces, no hyphens)";
+  "a lowercase letter, then lowercase letters/digits/underscores, 39 max (no spaces, no hyphens, no dots)";
 
 // Client-side mirror of the server's cron-id rule (config.py _CRON_ID_RE);
 // pinned by spa-contracts cron_id_re + contracts.mjs (CAKE-88).

@@ -117,11 +117,13 @@ def test_empty_repo_set_marker_gates_not_external():
 
 def test_malformed_marker_gates_instead_of_silent_default():
     """Audit A26: a `devcake-repo:`-shaped but unparseable marker (hyphens,
-    >12 chars, bad leading char) previously fell through to the instance
+    >39 chars, bad leading char) previously fell through to the instance
     default — a typo'd routing intent silently landed on the wrong repo and
     stickiness then latched it there. Gate with a fix-the-marker reason."""
-    for bad in ("`devcake-repo:my-repo`", "`devcake-repo:thirteenchars1`",
-                "`devcake-repo:9lead`", "`devcake-repo:`"):
+    too_long = "a" * 40  # INSTANCE_NAME_BODY max is 39
+    for bad in ("`devcake-repo:my-repo`", f"`devcake-repo:{too_long}`",
+                "`devcake-repo:9lead`", "`devcake-repo:`",
+                "`devcake-repo:has.dot`"):
         name, reason = resolve_repo(_m(bad), INST_DEF, REPOS, [])
         assert name is None and "unparseable" in reason, bad
     # sticky missions gate too — the typo stays visible, nothing re-routes

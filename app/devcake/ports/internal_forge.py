@@ -25,7 +25,7 @@ def internal_repo_name(instance: str, mission_key: str) -> str:
 
 
 # ADR-0014 D4: the sweeper discriminator — includes the trailing hyphen, so
-# no operator card name (^[a-z][a-z0-9]{0,11}$, hyphen-free) can ever match
+# no operator card name (config._INSTANCE_NAME_RE, hyphen-free) can ever match
 ACTIVITY_PREFIX = "activity-"
 
 

@@ -15,7 +15,7 @@
 
 ## Identity conventions
 
-- Instance names: `^[a-z][a-z0-9]{0,11}$` — no hyphens (the uppercased name prefixes `devcake/{INSTANCE}-{key}` branches and `{INSTANCE}-{key}-{seq}-{TYPE}-{sfx}` run ids; a hyphen would make the compounds ambiguous), ≤12 chars (64-char Dagu run-id budget).
+- Instance names: `^[a-z][a-z0-9_]{0,38}$` (CAKE-151) — underscore allowed; no hyphens (the uppercased name prefixes `devcake/{INSTANCE}-{key}` branches and `{INSTANCE}-{key}-{seq}-{TYPE}-{sfx}` run ids; a hyphen would make the compounds ambiguous). Branches use the full uppercased identity; run ids truncate the scrubbed-upper segment to 12 chars (64-char Dagu budget) and config refuses colliding prefixes across `pmos`/`repos`/`skill_sources`.
 - `Mission.instance` is stamped by the adapter at normalization (adapters are instance-bound), so no fetch path can return unstamped provenance; `mission_branch("")` fails loudly.
 - HELLO/OAUTH runs use the fixed pseudo-instance `sys` and finalize inside `RunManager` — deliberately outside the router.
 - Provenance rides on `Mission.instance` + `Run.pmo_ref`; `MissionRef` stays a 2-tuple (every consumer is an instance-bound adapter — a third field would be dead weight; devil's-advocate finding M3 in the v0.1 plan).

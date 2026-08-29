@@ -62,7 +62,7 @@ def test_ensure_pmo_board_creates_mints_and_enables_deps(tmp_path, monkeypatch):
     assert info == {"team_key": f"{PMO_ORG}/{BOARD_REPO}",
                     "api_base": "http://gitea:3000",
                     "minted": True, "adopted": False}
-    # the PAT landed in the secret store under the managed instance name
+    # First-time provision (no name arg) uses the default insert name
     stored = json.loads(
         (tmp_path / "secrets" / "connections"
          / f"pmo-{MANAGED_BOARD_NAME}.json").read_text())
@@ -75,10 +75,37 @@ def test_ensure_pmo_board_creates_mints_and_enables_deps(tmp_path, monkeypatch):
                for m, p in calls)
 
 
+def test_ensure_pmo_board_uses_live_managed_instance_name(
+        tmp_path, monkeypatch):
+    """CAKE-157: after rename, PAT get/put uses pmo/<live name>, not board."""
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path))
+        if request.method == "GET" and request.url.path.endswith(
+                f"/repos/{PMO_ORG}/{BOARD_REPO}"):
+            return httpx.Response(404)
+        if request.method == "GET" and "/tokens" in request.url.path:
+            return httpx.Response(200, json=[])
+        if request.method == "POST" and request.url.path.endswith(
+                f"/users/{BOARD_USER}/tokens"):
+            return httpx.Response(201, json={"sha1": "missions-tok-12345678"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    info = run_coro(prov.ensure_pmo_board(instance_name="missions"))
+    assert info["minted"] is True
+    stored = json.loads(
+        (tmp_path / "secrets" / "connections" / "pmo-missions.json").read_text())
+    assert stored["api_key"] == "missions-tok-12345678"
+    assert not (tmp_path / "secrets" / "connections"
+                / f"pmo-{MANAGED_BOARD_NAME}.json").exists()
+
+
 def test_ensure_pmo_board_adopts_and_keeps_live_pat(tmp_path, monkeypatch):
     d = tmp_path / "secrets" / "connections"
     d.mkdir(parents=True)
-    (d / f"pmo-{MANAGED_BOARD_NAME}.json").write_text(
+    (d / "pmo-missions.json").write_text(
         json.dumps({"api_key": "live-tok-abcdefgh"}))
     calls = []
 
@@ -93,7 +120,7 @@ def test_ensure_pmo_board_adopts_and_keeps_live_pat(tmp_path, monkeypatch):
         return httpx.Response(201, json={})
 
     prov = _prov(handler, tmp_path, monkeypatch)
-    info = run_coro(prov.ensure_pmo_board())
+    info = run_coro(prov.ensure_pmo_board(instance_name="missions"))
     assert info["adopted"] is True and info["minted"] is False
     # a live PAT is never re-minted (delete-then-create would revoke it)
     assert not any(m in ("DELETE",) or p.endswith(f"/users/{BOARD_USER}/tokens")
@@ -106,13 +133,24 @@ def test_ensure_pmo_board_adopts_and_keeps_live_pat(tmp_path, monkeypatch):
 
 # ── config doctrine ──────────────────────────────────────────────────────────
 
-def test_reserved_board_name_refused_for_operator_rows():
-    with pytest.raises(ValueError, match="reserved for the auto-provisioned"):
-        AppConfig(pmos=[PMOInstance(name=MANAGED_BOARD_NAME,
-                                    system="gitea_issues", team_key="x/y")])
-    # the app-stamped (or bundle-carried) managed row validates
-    cfg = AppConfig(pmos=[PMOInstance(**_board_row())])
-    assert cfg.pmos[0].managed is True
+def test_board_name_is_ordinary_when_not_claimed_by_managed():
+    """CAKE-157: literal name `board` is no longer reserved — identity is the
+    managed flag. A non-managed row named board validates when no managed
+    row claims that name (or when managed uses another name)."""
+    cfg = AppConfig(pmos=[PMOInstance(name=MANAGED_BOARD_NAME,
+                                      system="gitea_issues", team_key="x/y")])
+    assert cfg.pmos[0].managed is False
+    assert cfg.pmos[0].name == MANAGED_BOARD_NAME
+    # managed row under any legal name still validates
+    cfg2 = AppConfig(pmos=[PMOInstance(**_board_row(name="missions"))])
+    assert cfg2.pmos[0].managed is True and cfg2.pmos[0].name == "missions"
+    # after rename-away, board can coexist as an ordinary non-managed card
+    cfg3 = AppConfig(pmos=[
+        PMOInstance(**_board_row(name="missions")),
+        PMOInstance(name=MANAGED_BOARD_NAME, system="linear", team_key="DEV"),
+    ])
+    assert [p.name for p in cfg3.pmos] == ["missions", MANAGED_BOARD_NAME]
+    assert cfg3.pmos[0].managed is True and cfg3.pmos[1].managed is False
 
 
 def test_managed_defaults_false_and_roundtrips():
@@ -122,12 +160,32 @@ def test_managed_defaults_false_and_roundtrips():
     assert AppConfig.model_validate(cfg.model_dump()).pmos[0].managed is True
 
 
+def test_reconcile_accepts_managed_rename():
+    """Live managed row renamed in incoming: keep the new name, force
+    identity fields from live, take operator tunables from incoming."""
+    current = [_board_row()]
+    incoming = [_board_row(name="missions", team_key="hacked/elsewhere",
+                           system="linear", intake_paused=True,
+                           repos=["webapp"], reference_repos=["docs1"])]
+    out = reconcile_managed_pmos(current, incoming, internal_forge_present=True)
+    assert len(out) == 1
+    assert out[0]["name"] == "missions"
+    assert out[0]["managed"] is True
+    assert out[0]["system"] == "gitea_issues"
+    assert out[0]["team_key"] == f"{PMO_ORG}/{BOARD_REPO}"
+    assert out[0]["api_base"] == "http://gitea:3000"
+    assert out[0]["intake_paused"] is True
+    assert out[0]["repos"] == ["webapp"]
+    assert out[0]["reference_repos"] == ["docs1"]
+
+
 def test_reconcile_reinjects_omitted_managed_row_when_forge_present():
-    current = [_board_row(), {"name": "linear", "system": "linear",
-                              "team_key": "DEV", "managed": False}]
+    current = [_board_row(name="missions"),
+               {"name": "linear", "system": "linear",
+                "team_key": "DEV", "managed": False}]
     incoming = [{"name": "linear", "system": "linear", "team_key": "DEV"}]
     out = reconcile_managed_pmos(current, incoming, internal_forge_present=True)
-    assert [p["name"] for p in out] == ["linear", MANAGED_BOARD_NAME]
+    assert [p["name"] for p in out] == ["linear", "missions"]
     assert out[1]["managed"] is True
     # provisioner absent → deletion allowed (torn-out-Gitea escape hatch)
     out2 = reconcile_managed_pmos(current, incoming, internal_forge_present=False)
@@ -140,26 +198,56 @@ def test_reconcile_canonicalizes_identity_keeps_operator_tunables():
                            intake_paused=True, repos=["webapp"],
                            reference_repos=["docs1"])]
     out = reconcile_managed_pmos(current, incoming, internal_forge_present=True)
-    assert out[0]["team_key"] == f"{PMO_ORG}/{BOARD_REPO}"   # identity: live
+    assert out[0]["name"] == MANAGED_BOARD_NAME                 # name unchanged
+    assert out[0]["team_key"] == f"{PMO_ORG}/{BOARD_REPO}"      # identity: live
     assert out[0]["system"] == "gitea_issues"
-    assert out[0]["intake_paused"] is True                   # tunables: incoming
+    assert out[0]["intake_paused"] is True                      # tunables: incoming
     assert out[0]["repos"] == ["webapp"]
     assert out[0]["reference_repos"] == ["docs1"]
 
 
 def test_reconcile_strips_stray_managed_flag():
+    # No live managed row → any incoming managed:true is stray
     out = reconcile_managed_pmos(
         [], [{"name": "sneaky", "system": "linear", "team_key": "T",
               "managed": True}],
         internal_forge_present=True)
     assert out[0]["managed"] is False
+    # Live managed is missions; a second managed:true on another name strips
+    out2 = reconcile_managed_pmos(
+        [_board_row(name="missions")],
+        [_board_row(name="missions"),
+         {"name": "sneaky", "system": "linear", "team_key": "T",
+          "managed": True}],
+        internal_forge_present=True)
+    assert out2[0]["managed"] is True and out2[0]["name"] == "missions"
+    assert out2[1]["managed"] is False and out2[1]["name"] == "sneaky"
+
+
+def test_reconcile_rename_leaves_old_name_as_ordinary_row():
+    """Incoming keeps old name as a second non-managed row while also
+    renaming managed — uniqueness stays honest; managed flag follows the
+    renamed identity."""
+    current = [_board_row()]
+    incoming = [
+        _board_row(name="missions"),
+        {"name": MANAGED_BOARD_NAME, "system": "linear", "team_key": "DEV",
+         "managed": False},
+    ]
+    out = reconcile_managed_pmos(current, incoming, internal_forge_present=True)
+    assert [p["name"] for p in out] == ["missions", MANAGED_BOARD_NAME]
+    assert out[0]["managed"] is True and out[0]["system"] == "gitea_issues"
+    assert out[1]["managed"] is False and out[1]["system"] == "linear"
+    rebuilt = AppConfig.model_validate(
+        {**AppConfig().model_dump(), "pmos": out})
+    assert [p.name for p in rebuilt.pmos] == ["missions", MANAGED_BOARD_NAME]
 
 
 def test_bundle_apply_would_keep_board_row():
     """The apply_bundle choke point feeds reconcile the PARSED config — an
     old profile without the row must come out with it re-added and the
     result must still validate (the exact shape apply_bundle rebuilds)."""
-    live = AppConfig(pmos=[PMOInstance(**_board_row())])
+    live = AppConfig(pmos=[PMOInstance(**_board_row(name="missions"))])
     old_profile_cfg = AppConfig(pmos=[PMOInstance(name="linear",
                                                   team_key="DEV")])
     reconciled = reconcile_managed_pmos(
@@ -168,25 +256,33 @@ def test_bundle_apply_would_keep_board_row():
         internal_forge_present=True)
     rebuilt = AppConfig.model_validate(
         {**old_profile_cfg.model_dump(), "pmos": reconciled})
-    assert {p.name for p in rebuilt.pmos} == {"linear", MANAGED_BOARD_NAME}
+    assert {p.name for p in rebuilt.pmos} == {"linear", "missions"}
+    assert next(p for p in rebuilt.pmos if p.managed).name == "missions"
 
 
 # ── instance registration helper ─────────────────────────────────────────────
 
 def _services(tmp_path, monkeypatch, *, pmos=(), board_info=None):
+    import devcake.config as config_mod
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    # CONFIG_PATH is bound at import — retarget so local runs (no /data)
+    # match the docker app-test writable data dir.
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        tmp_path / "config" / "config.yaml")
     cfg = AppConfig(pmos=list(pmos))
     reloads = []
     forge = SimpleNamespace(ensure_pmo_board=None)
+    captured = []
 
-    async def ensure_pmo_board():
+    async def ensure_pmo_board(instance_name=None):
+        captured.append(instance_name)
         return board_info or {"team_key": f"{PMO_ORG}/{BOARD_REPO}",
                               "api_base": "http://gitea:3000",
                               "minted": False, "adopted": True}
     forge.ensure_pmo_board = ensure_pmo_board
     return SimpleNamespace(config=cfg, internal_forge=forge,
                            reload_connections=lambda: reloads.append(1),
-                           _reloads=reloads)
+                           _reloads=reloads, _ensure_names=captured)
 
 
 def test_ensure_default_board_registers_row(tmp_path, monkeypatch):
@@ -198,6 +294,31 @@ def test_ensure_default_board_registers_row(tmp_path, monkeypatch):
         MANAGED_BOARD_NAME, "gitea_issues", True)
     assert row.team_key == f"{PMO_ORG}/{BOARD_REPO}"
     assert s._reloads  # managers must pick the new instance up
+    # First registration threads the default insert name into the provisioner
+    assert s._ensure_names == [MANAGED_BOARD_NAME]
+
+
+def test_ensure_default_board_threads_renamed_instance_to_provisioner(
+        tmp_path, monkeypatch):
+    from devcake.api.default_board import ensure_default_board
+    s = _services(tmp_path, monkeypatch,
+                  pmos=[PMOInstance(**_board_row(name="missions"))])
+    run_coro(ensure_default_board(s))
+    assert s._ensure_names == ["missions"]
+    assert [p.name for p in s.config.pmos] == ["missions"]
+
+
+def test_ensure_default_board_noop_preserves_renamed_managed(
+        tmp_path, monkeypatch):
+    """Existing managed row under a non-default name with matching target:
+    ensure is a noop for name (stays missions); no reload when not minted."""
+    from devcake.api.default_board import ensure_default_board
+    s = _services(tmp_path, monkeypatch,
+                  pmos=[PMOInstance(**_board_row(name="missions"))])
+    run_coro(ensure_default_board(s))
+    assert [p.name for p in s.config.pmos] == ["missions"]
+    assert s.config.pmos[0].managed is True
+    assert s._reloads == []
 
 
 def test_ensure_default_board_noop_when_healthy(tmp_path, monkeypatch):
@@ -207,13 +328,32 @@ def test_ensure_default_board_noop_when_healthy(tmp_path, monkeypatch):
     assert s._reloads == []            # nothing changed, nothing reloaded
 
 
+def test_ensure_default_board_repair_preserves_name(tmp_path, monkeypatch):
+    """Wrong team_key/api_base on a renamed managed row: repair those
+    fields, preserve the operator-chosen name."""
+    from devcake.api.default_board import ensure_default_board
+    s = _services(tmp_path, monkeypatch,
+                  pmos=[PMOInstance(**_board_row(name="missions",
+                                                 team_key="wrong/team",
+                                                 api_base="http://old:1"))])
+    run_coro(ensure_default_board(s))
+    row = s.config.pmos[0]
+    assert row.name == "missions"
+    assert row.managed is True
+    assert row.team_key == f"{PMO_ORG}/{BOARD_REPO}"
+    assert row.api_base == "http://gitea:3000"
+    assert s._reloads
+
+
 def test_ensure_default_board_reloads_on_remint(tmp_path, monkeypatch):
     from devcake.api.default_board import ensure_default_board
-    s = _services(tmp_path, monkeypatch, pmos=[PMOInstance(**_board_row())],
+    s = _services(tmp_path, monkeypatch,
+                  pmos=[PMOInstance(**_board_row(name="missions"))],
                   board_info={"team_key": f"{PMO_ORG}/{BOARD_REPO}",
                               "api_base": "http://gitea:3000",
                               "minted": True, "adopted": True})
     run_coro(ensure_default_board(s))
+    assert s.config.pmos[0].name == "missions"
     assert s._reloads  # the running adapter cached the dead PAT
 
 

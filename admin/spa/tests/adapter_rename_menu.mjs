@@ -51,6 +51,20 @@ check("adapter rename does not POST a rename endpoint", () => {
     "Repo rename must stay draft setField — no POST rename");
 });
 
+check("managed board Rename is unlocked (CAKE-157)", () => {
+  assert.doesNotMatch(pmoSrc, /if\s*\(\s*!inst\.managed\s*\)\s*\{\s*items\.push\(\s*\{\s*label:\s*"Rename adapter"/,
+    "Rename must not be gated on !inst.managed");
+  // Name Input is enabled; system/team_key/api_base stay disabled={!!inst.managed}.
+  assert.doesNotMatch(
+    pmoSrc,
+    /Instance name[\s\S]*?<Input value=\{inst\.name\} disabled=\{!!inst\.managed\}/,
+    "managed board name Input must be enabled");
+  assert.match(pmoSrc, /<Input value=\{inst\.name\}\s*\n?\s*onChange=\{/,
+    "name Input must remain a draft setField control");
+  assert.match(pmoSrc, /CAKE-157/,
+    "PmoSection must document the managed Rename unlock");
+});
+
 check("ReposPage rename still avoids draft Dev Type memory_repos cascade", () => {
   assert.doesNotMatch(
     reposSrc,

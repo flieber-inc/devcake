@@ -102,7 +102,7 @@ def test_default_board_repair_waits_for_in_flight_poll_cycle(tmp_path,
     reloads = []
     forge = SimpleNamespace(ensure_pmo_board=None)
 
-    async def ensure_pmo_board():
+    async def ensure_pmo_board(instance_name=None):
         return {"team_key": "devcake-pmo/missions",
                 "api_base": "http://gitea:3000",
                 "minted": False, "adopted": True}
@@ -111,6 +111,9 @@ def test_default_board_repair_waits_for_in_flight_poll_cycle(tmp_path,
     async def scenario():
         lock = asyncio.Lock()
         await lock.acquire()
+        import devcake.config as config_mod
+        monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                            tmp_path / "config" / "config.yaml")
         s = SimpleNamespace(
             config=AppConfig(pmos=[]), internal_forge=forge,
             reload_connections=lambda: reloads.append(1),

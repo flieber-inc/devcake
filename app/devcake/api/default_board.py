@@ -1,10 +1,11 @@
-"""ADR-0030: the auto-provisioned default PMO board.
+"""ADR-0030 / CAKE-157: the auto-provisioned default PMO board.
 
 Provisions the board on the bundled Gitea (org/repo/service user/PAT via the
 admin-credentialed GiteaProvisioner) and registers/repairs the persisted
-managed `board` PMOInstance. Idempotent and best-effort at every call site —
-boot and config reloads never crash on a Gitea outage; the board self-heals
-at the next call once Gitea is reachable.
+managed PMOInstance. Durable identity is `managed=true`; the display name is
+operator-owned (default insert name `board`). Idempotent and best-effort at
+every call site — boot and config reloads never crash on a Gitea outage; the
+board self-heals at the next call once Gitea is reachable.
 """
 
 from __future__ import annotations
@@ -28,7 +29,12 @@ async def ensure_default_board(s) -> None:
     if s.internal_forge is None:
         return
     async with _lock:
-        info = await s.internal_forge.ensure_pmo_board()
+        # Secret store key follows the live managed instance name (CAKE-157);
+        # default to MANAGED_BOARD_NAME only when no managed row exists yet.
+        managed = next((p for p in s.config.pmos if p.managed), None)
+        instance_name = managed.name if managed is not None else MANAGED_BOARD_NAME
+        info = await s.internal_forge.ensure_pmo_board(
+            instance_name=instance_name)
         # L-2 (2026-08): the config mutation + reload below must not race a
         # suspended poll cycle — same contract as config PUT and the secret
         # endpoints. Lock ordering is always _lock → poll_rt.lock and never
@@ -51,13 +57,13 @@ async def ensure_default_board(s) -> None:
                              "targets %s — adopting it, no managed row "
                              "injected", inst.name, info["team_key"])
                     return
-            desired = {"name": MANAGED_BOARD_NAME, "system": "gitea_issues",
-                       "team_key": info["team_key"],
-                       "api_base": info["api_base"], "managed": True}
-            row = next((p for p in s.config.pmos
-                        if p.managed and p.name == MANAGED_BOARD_NAME), None)
+            # Identity fields only — name is operator-owned after first insert
+            identity = {"system": "gitea_issues",
+                        "team_key": info["team_key"],
+                        "api_base": info["api_base"], "managed": True}
+            row = next((p for p in s.config.pmos if p.managed), None)
             if row is not None and all(getattr(row, k) == v
-                                       for k, v in desired.items()):
+                                       for k, v in identity.items()):
                 if info["minted"]:
                     # the running adapter cached the dead PAT at construction
                     # — rebuild so the fresh one takes (managers reconciled
@@ -65,13 +71,16 @@ async def ensure_default_board(s) -> None:
                     s.reload_connections()
                 return
             if row is None:
-                s.config.pmos = [*s.config.pmos, PMOInstance(**desired)]
+                s.config.pmos = [
+                    *s.config.pmos,
+                    PMOInstance(name=MANAGED_BOARD_NAME, **identity),
+                ]
                 log.info("default board: managed instance %r registered (%s)",
                          MANAGED_BOARD_NAME, info["team_key"])
             else:
-                for k, v in desired.items():
+                for k, v in identity.items():
                     setattr(row, k, v)
                 log.info("default board: managed instance %r repaired (%s)",
-                         MANAGED_BOARD_NAME, info["team_key"])
+                         row.name, info["team_key"])
             save_config(s.config)
             s.reload_connections()

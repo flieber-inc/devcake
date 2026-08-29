@@ -293,13 +293,12 @@ export default function ReposPage({ onHealthChange }) {
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
   const visibleSet = new Set(visibleNames);
-  // stored tokens key on the repo name — locked once saved. A card counts as
-  // saved only when the server holds its name AND it isn't the card that was
-  // (re)added this session, so a new card can never be born frozen. When a
-  // new card duplicates a saved name (blocked by validation anyway), only the
-  // LAST card with that name is the tracked one — the saved card stays locked.
+  // A card counts as saved when the server holds its name AND it isn't the
+  // card (re)added this session — secrets write only after Save; Remove
+  // warns. Names stay editable: config PUT moves tokens, rewrites PMO/Dev
+  // Type citations, and migrates the ADR-0024 mirror.
   const savedRepoNames = new Set((dr.server.cfg.repos || []).map((r) => r.name));
-  const nameLocked = (name, idx) =>
+  const repoIsSaved = (name, idx) =>
     savedRepoNames.has(name) &&
     !(newNames.has(name) && idx === cfg.repos.map((r) => r.name).lastIndexOf(name));
 
@@ -511,11 +510,27 @@ export default function ReposPage({ onHealthChange }) {
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Locked once saved — stored tokens key on it; remove and re-add to rename.">
-                  <Input value={repo.name} disabled={nameLocked(repo.name, idx)}
+                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Renaming on Save moves stored tokens, updates PMO/Dev Type citations, and migrates the local mirror; past run records and `devcake-repo:` markers already on the board keep the old name.">
+                  <Input value={repo.name}
                   onChange={(e) => {
-                    newNames.rename(repo.name, e.target.value);
-                    setField(`cfg.repos.${idx}.name`, e.target.value);
+                    const prev = repo.name;
+                    const next = e.target.value;
+                    newNames.rename(prev, next);
+                    setField(`cfg.repos.${idx}.name`, next);
+                    if (prev && next && prev !== next) {
+                      cfg.pmos.forEach((p, pi) => {
+                        for (const field of ["repos", "reference_repos", "memory_repos"]) {
+                          if ((p[field] || []).includes(prev))
+                            setField(`cfg.pmos.${pi}.${field}`,
+                              p[field].map((n) => (n === prev ? next : n)));
+                        }
+                      });
+                      Object.entries(dr.draft.devTypes || {}).forEach(([nm, dt]) => {
+                        if ((dt.memory_repos || []).includes(prev))
+                          setField(`devTypes.${nm}.memory_repos`,
+                            dt.memory_repos.map((n) => (n === prev ? next : n)));
+                      });
+                    }
                   }} />
                   {dr.errors[`cfg.repos.${idx}.name`] && (
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
@@ -563,17 +578,17 @@ export default function ReposPage({ onHealthChange }) {
                   refKey={connRef("repo", repo.name, "token")} paste
                   absentNote="not set — repo is reference-only until an Access token is stored"
                   presence={presence[connRef("repo", repo.name, "token")] || null}
-                  locked={!nameLocked(repo.name, idx)} />
+                  locked={!repoIsSaved(repo.name, idx)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push with a write-capable PAT. Leave empty to give every stage the write token (and, if the default branch is unprotected, merge capability)."
                   refKey={connRef("repo", repo.name, "token_ro")} paste optional
                   presence={presence[connRef("repo", repo.name, "token_ro")] || null}
-                  locked={!nameLocked(repo.name, idx)} />
+                  locked={!repoIsSaved(repo.name, idx)} />
                 <SecretField label="Reviewer token" hint="Recommended 2nd account → formal PR approvals"
                   help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not a supply-chain control when you staff a different Dev Type for REVIEW — that is role focus only."
                   refKey={connRef("repo", repo.name, "reviewer_token")} paste optional
                   presence={presence[connRef("repo", repo.name, "reviewer_token")] || null}
-                  locked={!nameLocked(repo.name, idx)} />
+                  locked={!repoIsSaved(repo.name, idx)} />
               </div>
               {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} presence={presence} />}
               <div className="flex flex-wrap items-center gap-3">

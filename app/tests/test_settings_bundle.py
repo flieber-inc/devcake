@@ -1207,3 +1207,238 @@ def test_config_put_removing_middle_skill_source_keeps_neighbors_tokens(
     assert secrets.read_connection_secret("skill", "charlie", "token_ro") == "SC"
     assert not (tmp_path / "secrets" / "connections" / "skill-bravo.json").exists()
     assert secrets.read_connection_secret("skill", "bravo", "token_ro") == ""
+
+
+def test_config_put_renames_pmo_moves_secrets(monkeypatch, tmp_path):
+    """In-place PMO rename (same card index, new name) moves pmo-{name}
+    secrets — tokens follow the card; no orphan under the old name."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    # _world seeds pmo "linear"; rename it in place
+    secrets.write_connection_secret("pmo", "linear", "api_key",
+                                    "lin_api_rename_0070")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "pmos": [
+            {"name": "linearb", "system": "linear", "team_key": "ENG",
+             "repos": ["main"], "reference_repos": [], "memory_repos": []},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [p.name for p in cfg.pmos] == ["linearb"]
+    assert secrets.read_connection_secret("pmo", "linearb", "api_key") \
+        == "lin_api_rename_0070"
+    assert not (tmp_path / "secrets" / "connections" / "pmo-linear.json").exists()
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") == ""
+
+
+def test_config_put_removing_non_last_pmo_keeps_survivor_token(
+        monkeypatch, tmp_path):
+    """SPA Remove shifts later PMO cards up — must delete the removed card's
+    secrets, not treat the shift as an in-place rename that clobbers the
+    survivor."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(name="alpha", team_key="A", repos=["main"]),
+        config_mod.PMOInstance(name="bravo", team_key="B", repos=["main"]),
+    ]
+    secrets.write_connection_secret("pmo", "alpha", "api_key", "SECRET_ALPHA")
+    secrets.write_connection_secret("pmo", "bravo", "api_key", "SECRET_BRAVO")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "pmos": [
+            {"name": "bravo", "system": "linear", "team_key": "B",
+             "repos": ["main"], "reference_repos": [], "memory_repos": []},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [p.name for p in cfg.pmos] == ["bravo"]
+    assert secrets.read_connection_secret("pmo", "bravo", "api_key") \
+        == "SECRET_BRAVO"
+    assert not (tmp_path / "secrets" / "connections" / "pmo-alpha.json").exists()
+    assert secrets.read_connection_secret("pmo", "alpha", "api_key") == ""
+
+
+def test_config_put_renames_repo_moves_secrets_and_rewrites_citations(
+        monkeypatch, tmp_path):
+    """In-place repo rename moves repo-* secrets and rewrites every
+    pmos[].repos / reference_repos / memory_repos plus Dev Type memory_repos
+    citation of the old card name."""
+    import asyncio
+
+    from devcake.api import config_service
+    from devcake.domain.repo_mirror import RepoCache
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(
+            name="linear", team_key="ENG",
+            repos=["main"], reference_repos=["docs"],
+            memory_repos=["notes"]),
+    ]
+    cfg.repos = [
+        config_mod.RepoInstance(name="main",
+                                url="https://github.com/acme/app"),
+        config_mod.RepoInstance(name="docs",
+                                url="https://github.com/acme/docs"),
+        config_mod.RepoInstance(name="notes",
+                                url="https://github.com/acme/notes"),
+    ]
+    dts["senior-dev"].memory_repos = ["notes"]
+    secrets.write_connection_secret("repo", "main", "token",
+                                    "ghp_rename_main_0080")
+
+    mirrors = tmp_path / "mirrors"
+    forges = type("F", (), {"instances": {}, "internal": set()})()
+    cache = RepoCache(cfg, forges=forges, root=mirrors)
+    # seed a bare mirror dir + ledger so rename_mirror has something to move
+    (mirrors / "main.git").mkdir(parents=True)
+    (mirrors / "main.git" / "HEAD").write_text("ref: refs/heads/main\n")
+    from devcake.domain.repo_mirror import MirrorStatus
+    cache.ledger["main"] = MirrorStatus(ok=True)
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr("devcake.config.save_dev_type", lambda dt: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "repos": [
+            {"name": "app", "forge": "github",
+             "url": "https://github.com/acme/app"},
+            {"name": "docs", "forge": "github",
+             "url": "https://github.com/acme/docs"},
+            {"name": "notes", "forge": "github",
+             "url": "https://github.com/acme/notes"},
+        ],
+        # SPA may still cite the old name until Save — server rewrites.
+        "pmos": [
+            {"name": "linear", "system": "linear", "team_key": "ENG",
+             "repos": ["main"], "reference_repos": ["docs"],
+             "memory_repos": ["notes"]},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types=dts, managers={},
+            reload=lambda: None, repo_cache=cache))
+    assert [r.name for r in cfg.repos] == ["app", "docs", "notes"]
+    assert secrets.read_connection_secret("repo", "app", "token") \
+        == "ghp_rename_main_0080"
+    assert not (tmp_path / "secrets" / "connections" / "repo-main.json").exists()
+    assert cfg.pmos[0].repos == ["app"]
+    assert cfg.pmos[0].reference_repos == ["docs"]
+    assert cfg.pmos[0].memory_repos == ["notes"]
+    assert dts["senior-dev"].memory_repos == ["notes"]
+    assert (mirrors / "app.git").is_dir()
+    assert not (mirrors / "main.git").exists()
+    assert "app" in cache.ledger and "main" not in cache.ledger
+
+
+def test_config_put_repo_rename_rewrites_devtype_memory_repos(
+        monkeypatch, tmp_path):
+    """Dev Type memory_repos citing the old card name must follow the rename."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(name="linear", team_key="ENG", repos=[]),
+    ]
+    cfg.repos = [
+        config_mod.RepoInstance(name="notes",
+                                url="https://github.com/acme/notes"),
+    ]
+    dts["senior-dev"].memory_repos = ["notes"]
+    secrets.write_connection_secret("repo", "notes", "token", "tok_notes")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr("devcake.config.save_dev_type", lambda dt: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "repos": [
+            {"name": "notebook", "forge": "github",
+             "url": "https://github.com/acme/notes"},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types=dts, managers={}, reload=lambda: None))
+    assert dts["senior-dev"].memory_repos == ["notebook"]
+    assert secrets.read_connection_secret("repo", "notebook", "token") \
+        == "tok_notes"
+
+
+def test_config_put_removing_non_last_repo_keeps_survivor_token(
+        monkeypatch, tmp_path):
+    """SPA Remove shifts later repo cards up — delete removed secrets only."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(name="linear", team_key="ENG", repos=["bravo"]),
+    ]
+    cfg.repos = [
+        config_mod.RepoInstance(name="alpha",
+                                url="https://github.com/acme/a"),
+        config_mod.RepoInstance(name="bravo",
+                                url="https://github.com/acme/b"),
+    ]
+    secrets.write_connection_secret("repo", "alpha", "token", "SECRET_ALPHA")
+    secrets.write_connection_secret("repo", "bravo", "token", "SECRET_BRAVO")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "repos": [
+            {"name": "bravo", "forge": "github",
+             "url": "https://github.com/acme/b"},
+        ],
+        "pmos": [
+            {"name": "linear", "system": "linear", "team_key": "ENG",
+             "repos": ["bravo"], "reference_repos": [], "memory_repos": []},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [r.name for r in cfg.repos] == ["bravo"]
+    assert secrets.read_connection_secret("repo", "bravo", "token") \
+        == "SECRET_BRAVO"
+    assert not (tmp_path / "secrets" / "connections" / "repo-alpha.json").exists()

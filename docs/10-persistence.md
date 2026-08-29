@@ -26,7 +26,9 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
                                          # · skill (token/token_ro — ADR-0016 addendum 2 sources)
                                          #   pmo-board.json is APP-MINTED (ADR-0030: the default
                                          #   board's PAT) and self-healing — re-minted at boot/reload
-                                         #   when revoked or lost; never operator-entered
+                                         #   when revoked or lost; never operator-entered.
+                                         #   In-place card rename (config PUT, same list index)
+                                         #   moves the file with the card (skill / pmo / repo).
     harness/{VAR}.json          # GUI-stored harness/model keys; 0600
     internal_forge/*.json       # bundled-Gitea service/mission tokens (ADR-0010); 0600
     profiles/{name}.json        # a profile's secret snapshot (section B); 0600, covered by the redaction glob

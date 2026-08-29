@@ -431,6 +431,22 @@ def test_delete_mirror_renames_aside_then_removes(tmp_path):
     cache.delete_mirror("alpha")                          # missing → no-op
 
 
+def test_rename_mirror_moves_dir_and_ledger(tmp_path):
+    cache, _, _ = make_cache(tmp_path, [R1])
+    src = cache.mirror_path("alpha")
+    src.mkdir(parents=True)
+    (src / "HEAD").write_text("ref: refs/heads/main\n")
+    from devcake.domain.repo_mirror import MirrorStatus
+    cache.ledger["alpha"] = MirrorStatus(ok=True)
+    cache._synced_mono["alpha"] = 1.0
+    cache.rename_mirror("alpha", "beta")
+    assert not src.exists()
+    assert cache.mirror_path("beta").is_dir()
+    assert "beta" in cache.ledger and "alpha" not in cache.ledger
+    assert "beta" in cache._synced_mono and "alpha" not in cache._synced_mono
+    cache.rename_mirror("missing", "other")               # missing → no-op
+
+
 def test_verify_writable_sets_and_clears_volume_error(tmp_path):
     cache, _, _ = make_cache(tmp_path / "mirrors", [R1])
     cache.verify_writable()

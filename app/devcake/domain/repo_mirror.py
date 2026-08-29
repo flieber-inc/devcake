@@ -485,6 +485,34 @@ class RepoCache:
             log.exception("could not remove mirror %s", name)
         self.ledger.pop(name, None)
         self._synced_mono.pop(name, None)
+        self._locks.pop(name, None)
+
+    def rename_mirror(self, old: str, new: str) -> None:
+        """Migrate on-disk mirror + ledger key with a repo card rename.
+
+        Best-effort: missing source is a no-op; an existing destination is
+        removed first so the renamed card owns that identity. In-flight
+        Dev clones keep their inode via rename (same volume).
+        """
+        if old == new:
+            return
+        src = self.mirror_path(old)
+        dst = self.mirror_path(new)
+        if dst.exists():
+            self.delete_mirror(new)
+        if src.exists():
+            try:
+                src.rename(dst)
+            except OSError:
+                log.exception("could not rename mirror %s → %s", old, new)
+                return
+        if old in self.ledger:
+            self.ledger[new] = self.ledger.pop(old)
+        if old in self._synced_mono:
+            self._synced_mono[new] = self._synced_mono.pop(old)
+        lock = self._locks.pop(old, None)
+        if lock is not None:
+            self._locks[new] = lock
 
     def health_map(self) -> dict:
         return {name: st.as_dict() for name, st in sorted(self.ledger.items())}
@@ -540,6 +568,9 @@ class NullRepoCache:
         return None
 
     def delete_mirror(self, name: str) -> None:
+        return None
+
+    def rename_mirror(self, old: str, new: str) -> None:
         return None
 
     def health_map(self) -> dict:

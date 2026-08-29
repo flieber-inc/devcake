@@ -94,6 +94,32 @@ class Services:
     # Host-side Grok OAuth refresh (OidcTokenPort); shared across managers.
     oidc_tokens: Any = None
 
+    def rekey_pmo_instance(self, old: str, new: str) -> None:
+        """Move live manager / steward / poll identity from old name → new.
+
+        Called from apply_config_patch before reload when a PMO card is
+        renamed in place. Without this, build_managers treats the event as
+        delete+add and drops advisory state (grace, anomalies, merge
+        windows) that must survive under the new identity.
+        """
+        if old == new or old not in self.managers:
+            return
+        self.managers[new] = self.managers.pop(old)
+        if old in self.stewards:
+            self.stewards[new] = self.stewards.pop(old)
+        mgr = self.managers[new]
+        mgr.instance_name = new
+        if self.poll_rt is None:
+            return
+        if old in self.poll_rt.poll_degraded:
+            self.poll_rt.poll_degraded[new] = self.poll_rt.poll_degraded.pop(old)
+        for mid, owner in list(self.poll_rt.mission_owner.items()):
+            if owner == old:
+                self.poll_rt.mission_owner[mid] = new
+        for row in self.poll_rt.missions_cache:
+            if row.get("instance") == old:
+                row["instance"] = new
+
     def build_managers(self) -> None:
         """(Re)build the manager set IN PLACE to match config.pmos: existing
         managers keep their advisory state (grace, anomalies, merge windows)

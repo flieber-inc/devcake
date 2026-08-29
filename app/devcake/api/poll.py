@@ -126,6 +126,25 @@ class PollRuntime:
             elif name in polled_ok and pmo_id not in polled_ok[name]:
                 del self.mission_owner[pmo_id]
 
+    def prune_removed_instances(self) -> None:
+        """Drop ephemeral maps keyed by instance names no longer in managers.
+
+        Called from the reload chokepoint after `build_managers` reconciles —
+        `poll_degraded` is otherwise only cleared on a later green segment,
+        so a deleted degraded instance would haunt `/health` (and Overview)
+        forever. Missions-cache rows and ownership for departed owners go
+        with them (ownership still respects the in-flight A15 guard)."""
+        live = set(self.managers)
+        for name in [n for n in self.poll_degraded if n not in live]:
+            del self.poll_degraded[name]
+        self.missions_cache[:] = [
+            row for row in self.missions_cache
+            if row.get("instance") in live]
+        owner_before = dict(self.mission_owner)
+        self.release_stale_ownership({})
+        if self.mission_owner != owner_before:
+            self.owner_store.save(self.mission_owner)
+
     async def poll_instance(self, mgr: MissionManager,
                             cache_rows: list[dict]) -> tuple[int, int, int, set]:
         """One instance's poll segment: fetch + cross-instance dedupe + derive +

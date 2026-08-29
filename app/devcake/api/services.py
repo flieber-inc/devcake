@@ -98,7 +98,7 @@ class Services:
         """(Re)build the manager set IN PLACE to match config.pmos: existing
         managers keep their advisory state (grace, anomalies, merge windows)
         and get repointed adapters; removed instances drop theirs — never
-        leaked."""
+        leaked (including PollRuntime maps keyed by instance name)."""
         live = {i.name: i for i in self.config.pmos if i.configured}
         for name in [n for n in self.managers if n not in live]:
             self.managers.pop(name)
@@ -136,6 +136,10 @@ class Services:
                 self.managers[name].discovery_notify = \
                     self.stewards[name].kick_discovery
             self.managers[name].claims = self.claims
+        # CAKE-147: poll_degraded / missions_cache / mission_owner ghosts —
+        # green poll never runs for a removed name, so prune here.
+        if self.poll_rt is not None:
+            self.poll_rt.prune_removed_instances()
 
     def managers_in_config_order(self) -> list[MissionManager]:
         return [self.managers[i.name] for i in self.config.pmos

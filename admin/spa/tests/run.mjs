@@ -25,6 +25,7 @@ const SUITES = [
   "mission_identity.mjs",
   "alerts.mjs",
   "design_tokens.mjs",
+  "list_window_helpers.mjs",
   "settings.mjs",
   "tasks.mjs",
   "hierarchy.mjs",

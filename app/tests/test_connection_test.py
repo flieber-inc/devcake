@@ -99,18 +99,46 @@ def test_skill_source_empty_url_ok_false(tmp_path, monkeypatch):
     assert "url" in out["error"].lower()
 
 
-def test_skill_source_no_token_ok_false(tmp_path, monkeypatch):
+def test_skill_source_public_no_token_ok_true(tmp_path, monkeypatch):
+    """A public skill source needs no token (the card's help says so) —
+    the probe must run and succeed with nothing stored."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     from devcake.api import connections_service as cs
     from devcake.config import SkillSource
 
     src = SkillSource(name="shelf", url="https://gh.example/o/shelf")
+
+    class Cache:
+        async def remote_head(self, name):
+            return "feedc0de1234"
+
     out = _run(cs.test_skill_source(
         "shelf",
         config=AppConfig(pmos=[], repos=[], skill_sources=[src]),
-        repo_cache=None))
+        repo_cache=Cache()))
+    assert out["ok"] is True
+    assert out["remote_head"] == "feedc0de1234"
+
+
+def test_skill_source_no_token_unreachable_hints_token(tmp_path, monkeypatch):
+    """Unreachable with no token stored: still ok:False, and the error says
+    a private repository would need a Read token."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import connections_service as cs
+    from devcake.config import SkillSource
+
+    src = SkillSource(name="shelf", url="https://gh.example/o/shelf")
+
+    class Cache:
+        async def remote_head(self, name):
+            return None
+
+    out = _run(cs.test_skill_source(
+        "shelf",
+        config=AppConfig(pmos=[], repos=[], skill_sources=[src]),
+        repo_cache=Cache()))
     assert out["ok"] is False
-    assert "token" in out["error"].lower()
+    assert "no token" in out["error"]
 
 
 def test_skill_source_probe_ok_true_with_remote_head(tmp_path, monkeypatch):

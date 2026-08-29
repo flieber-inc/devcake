@@ -115,24 +115,30 @@ async def delete_skill_endpoint(name: str, *, skill_service):
     return {"ok": True}
 
 
-async def ensure_skill_sources_fresh(*, repo_cache, config) -> None:
+async def ensure_skill_sources_fresh(*, repo_cache,
+                                     config) -> tuple[bool, dict[str, str]]:
     """ONE ensure_fresh chokepoint for skill-source mirrors (CAKE-146):
     every configured skill_sources name. Shared by Update now and
-    Restore built-ins. Best-effort — failures land in the mirror ledger,
-    never raise here."""
+    Restore built-ins. Best-effort — never raises; returns ensure_fresh's
+    (all_ok, {name: reason}) so callers can report failures honestly
+    (they also land in the mirror ledger)."""
     if repo_cache is None:
-        return
+        return True, {}
     names = [s.name for s in (getattr(config, "skill_sources", None) or [])]
-    if names:
-        await repo_cache.ensure_fresh(names)
+    if not names:
+        return True, {}
+    return await repo_cache.ensure_fresh(names)
 
 
 async def refresh_skill_sources(*, repo_cache, config):
     """Operator 'Update now': refresh every configured skill-source mirror
     without re-seeding built-ins. Catalog is a read of the mirror — SPA
-    reloads via GET /skills after this returns."""
-    await ensure_skill_sources_fresh(repo_cache=repo_cache, config=config)
-    return {"ok": True}
+    reloads via GET /skills after this returns. `failures` names each
+    source whose fetch failed (empty when all synced) — the SPA must not
+    show a green ✓ over a failed fetch."""
+    ok, failures = await ensure_skill_sources_fresh(
+        repo_cache=repo_cache, config=config)
+    return {"ok": ok, "failures": failures}
 
 
 async def sync_skills(*, internal_forge, skill_service, repo_cache=None,

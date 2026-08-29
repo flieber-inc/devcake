@@ -285,8 +285,16 @@ function SkillSourcesCard({ setPageErr, onCatalogReload }) {
 
   const updateNow = async () => {
     try {
-      await send("POST", "/skills/sources/refresh");
+      const res = await send("POST", "/skills/sources/refresh");
       await onCatalogReload();
+      const failed = Object.entries(res?.failures || {});
+      if (failed.length) {
+        // honest badge: a failed fetch must never show a green ✓
+        setRefreshMsg("");
+        setPageErr("skill source update failed for " +
+          failed.map(([n, r]) => `${n} (${r})`).join("; "));
+        return;
+      }
       setRefreshMsg("✓ skill sources updated");
       clearTimeout(refreshTimer.current);
       refreshTimer.current = setTimeout(() => setRefreshMsg(""), 4000);

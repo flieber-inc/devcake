@@ -1025,8 +1025,27 @@ def test_refresh_skill_sources_ensure_fresh_all_configured_names(tmp_path,
         SkillSource(name="toolbox", url="https://gh.example/o/toolbox"),
     ])
     out = _run(irs.refresh_skill_sources(repo_cache=cache, config=cfg))
-    assert out == {"ok": True}
+    assert out == {"ok": True, "failures": {}}
     assert cache.asked == ["shelf", "toolbox"]
+
+
+def test_refresh_skill_sources_reports_fetch_failures(tmp_path, monkeypatch):
+    """Update now must not answer ok:True when a fetch failed — the SPA
+    shows the per-source reasons instead of a green ✓."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import internal_repos_service as irs
+    from devcake.config import AppConfig, SkillSource
+
+    class FakeCache:
+        async def ensure_fresh(self, names):
+            return False, {"toolbox": "auth failed (401)"}
+
+    cfg = AppConfig(pmos=[], repos=[], skill_sources=[
+        SkillSource(name="shelf", url="https://gh.example/o/shelf"),
+        SkillSource(name="toolbox", url="https://gh.example/o/toolbox"),
+    ])
+    out = _run(irs.refresh_skill_sources(repo_cache=FakeCache(), config=cfg))
+    assert out == {"ok": False, "failures": {"toolbox": "auth failed (401)"}}
 
 
 def test_sync_skills_ensure_fresh_uses_all_configured_sources(tmp_path,

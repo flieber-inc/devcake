@@ -383,9 +383,12 @@ async def test_forge(name: str, *, config, forge_runtime):
 async def test_skill_source(name: str, *, config, repo_cache):
     """Read-only connectivity probe for a dedicated skill source (CAKE-146).
 
-    Skill sources have no live forge adapter — token present + authenticated
-    remote reachability via RepoCache.remote_head. Same SPA contract as
-    forge/PMO tests: `{ok, error?, …}` never a 500.
+    Skill sources have no live forge adapter — remote reachability via
+    RepoCache.remote_head, with the stored read token when one exists. A
+    public repository needs no token (the card's own help says so), so a
+    missing token never fails the probe up front — it only sharpens the
+    error when the remote is unreachable. Same SPA contract as forge/PMO
+    tests: `{ok, error?, …}` never a 500.
     """
     inst = next((s for s in (config.skill_sources or []) if s.name == name),
                 None)
@@ -394,22 +397,25 @@ async def test_skill_source(name: str, *, config, repo_cache):
     if not inst.configured:
         return {"ok": False, "error": "repository URL is empty — the skill "
                                       "source is idle until one is set"}
-    if not inst.token and not inst.token_ro:
-        return {"ok": False, "error": "no token stored — enter a Read token "
-                                      "(or Token fallback) on this card"}
     if repo_cache is None:
         return {"ok": False, "error": "mirror cache unavailable — save the "
                                       "config and retry"}
+    has_token = bool(inst.token or inst.token_ro)
     try:
         head = await repo_cache.remote_head(name)
         if not head:
+            detail = ("could not reach the remote — check the URL, "
+                      "token, and network")
+            if not has_token:
+                detail = ("could not reach the remote and no token is "
+                          "stored — a public repository needs none; a "
+                          "private one needs a Read token on this card")
             return _with_error({
                 "ok": False,
                 "skill_source": name,
                 "forge": inst.forge,
                 "repo": inst.url,
-                "detail": "could not reach the remote — check the URL, "
-                          "token, and network",
+                "detail": detail,
             })
         return {"ok": True, "skill_source": name, "forge": inst.forge,
                 "repo": inst.url, "remote_head": head}

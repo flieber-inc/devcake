@@ -8,7 +8,7 @@ import { Field, SecretField, Input, Select } from "../components/Field.jsx";
 import SettingRow from "../components/SettingRow.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
-import { ConfirmDialog, Modal } from "../components/Modal.jsx";
+import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import MoreMenu from "../components/MoreMenu.jsx";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "../components/ClearSecretsDialog.jsx";
@@ -216,6 +216,9 @@ export default function ReposPage({ onHealthChange }) {
   const [createFor, setCreateFor] = useState(null);       // card idx | null
   const [clearSecrets, setClearSecrets] = useState(false);
   const [secretsEpoch, setSecretsEpoch] = useState(0);
+  // CAKE-156: discoverable draft rename (PromptDialog → setField; applies on Save)
+  const [renameFor, setRenameFor] = useState(null); // { idx, name } | null
+  const [renameErr, setRenameErr] = useState("");
   // cards added/renamed this session stay name-editable even when their name
   // collides with a still-saved one (the delete-then-re-add / mid-typing trap)
   // the Set lives in the provider (2026-08-02): an internal Set was lost on
@@ -307,6 +310,80 @@ export default function ReposPage({ onHealthChange }) {
       title, body, confirmLabel: "I understand — proceed",
       action: () => { setField(path, value); setConfirm(null); },
     });
+
+  // Shared by the inline name Input and the Rename adapter PromptDialog.
+  // Cascade PMO citations only — never draft Dev Type memory_repos
+  // (CAKE-152 / DraftChrome Dev-Types-first Save hazard).
+  const applyRepoNameChange = (idx, prev, next) => {
+    newNames.rename(prev, next);
+    setField(`cfg.repos.${idx}.name`, next);
+    if (prev && next && prev !== next) {
+      cfg.pmos.forEach((p, pi) => {
+        for (const field of ["repos", "reference_repos", "memory_repos"]) {
+          if ((p[field] || []).includes(prev))
+            setField(`cfg.pmos.${pi}.${field}`,
+              p[field].map((n) => (n === prev ? next : n)));
+        }
+      });
+    }
+  };
+
+  const requestRemoveRepo = (repo, idx) => {
+    const doRemove = () => {
+      newNames.untrack(repo.name);
+      setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx));
+      cfg.pmos.forEach((p, pi) => {
+        if ((p.repos || []).includes(repo.name))
+          setField(`cfg.pmos.${pi}.repos`,
+            p.repos.filter((n) => n !== repo.name));
+        if ((p.reference_repos || []).includes(repo.name))
+          setField(`cfg.pmos.${pi}.reference_repos`,
+            p.reference_repos.filter((n) => n !== repo.name));
+        if ((p.memory_repos || []).includes(repo.name))
+          setField(`cfg.pmos.${pi}.memory_repos`,
+            p.memory_repos.filter((n) => n !== repo.name));
+      });
+      Object.entries(dr.draft.devTypes || {}).forEach(([nm, dt]) => {
+        if ((dt.memory_repos || []).includes(repo.name))
+          setField(`devTypes.${nm}.memory_repos`,
+            dt.memory_repos.filter((n) => n !== repo.name));
+      });
+    };
+    const refPmos = cfg.pmos
+      .filter((p) => (p.repos || []).includes(repo.name)
+                  || (p.reference_repos || []).includes(repo.name)
+                  || (p.memory_repos || []).includes(repo.name))
+      .map((p) => p.name);
+    if (savedRepoNames.has(repo.name)) {
+      setConfirm({
+        title: `Remove repository "${repo.name}"?`,
+        body: "Removing it and saving permanently deletes its stored tokens (write / read-only / reviewer); missions that used this repo gate until a human closes them out."
+          + (refPmos.length
+              ? ` It is also deselected from PMO connection${refPmos.length > 1 ? "s" : ""} ${refPmos.join(", ")}.`
+              : "")
+          + " Nothing changes until you Save.",
+        confirmLabel: "Remove from draft",
+        action: () => { doRemove(); setConfirm(null); },
+      });
+    } else doRemove();
+  };
+
+  const repoCardMenuItems = (repo, idx) => {
+    const items = [{
+      label: "Rename adapter",
+      desc: "Applies on Save — tokens, PMO citations, and the local mirror follow; past runs keep the old name.",
+      onClick: () => { setRenameErr(""); setRenameFor({ idx, name: repo.name }); },
+    }];
+    if (cfg.repos.length > 0) {
+      items.push({
+        label: "Remove",
+        danger: true,
+        desc: "Removes the card from the draft; saving deletes its stored tokens.",
+        onClick: () => requestRemoveRepo(repo, idx),
+      });
+    }
+    return items;
+  };
 
   // computed from the DRAFT, so unsaved PMO (de)selections count. Predicate
   // matches /health.unused_repos (work + reference + memory; no skills).
@@ -420,30 +497,40 @@ export default function ReposPage({ onHealthChange }) {
         {cfg.repos.map((repo, idx) => {
           if (!visibleSet.has(repo.name)) return null;
           const tr = testResult[`forge:${repo.name}`];
+          const cardMenu = repoCardMenuItems(repo, idx);
           if (!expandedRepos.has(idx)) {
             let host = "";
             try { host = repo.url ? new URL(repo.url).host : ""; } catch { host = ""; }
             return (
-              <button key={`${idx}-${secretsEpoch}`} type="button"
-                data-testid="repo-summary-row"
-                aria-label={`Expand repository ${repo.name}`}
-                onClick={() => toggleRepoCard(idx)}
-                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
-                <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
-                <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{repo.forge}</span>
-                {host && <span className="min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-400">{host}</span>}
-                <span className="ml-auto flex shrink-0 items-center gap-3">
-                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
-                    {repo.auto_merge ? "auto-merge" : "merge hand-off"}
-                  </span>
-                  {tr && (
-                    <span className={`text-xs ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
-                      {tr.ok ? "✓" : "✗"}
+              <div key={`${idx}-${secretsEpoch}`}
+                className="flex items-stretch rounded-card border border-neutral-200 dark:border-neutral-800">
+                <button type="button"
+                  data-testid="repo-summary-row"
+                  aria-label={`Expand repository ${repo.name}`}
+                  onClick={() => toggleRepoCard(idx)}
+                  className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-neutral-900">
+                  <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                  <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{repo.forge}</span>
+                  {host && <span className="min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-400">{host}</span>}
+                  <span className="ml-auto flex shrink-0 items-center gap-3">
+                    <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                      {repo.auto_merge ? "auto-merge" : "merge hand-off"}
                     </span>
-                  )}
-                  <span aria-hidden className="text-xs text-neutral-400">▸</span>
-                </span>
-              </button>
+                    {tr && (
+                      <span className={`text-xs ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                        {tr.ok ? "✓" : "✗"}
+                      </span>
+                    )}
+                    <span aria-hidden className="text-xs text-neutral-400">▸</span>
+                  </span>
+                </button>
+                {cardMenu.length > 0 && (
+                  <span className="flex shrink-0 items-center pr-2"
+                    onClick={(e) => e.stopPropagation()}>
+                    <MoreMenu label={`More actions for ${repo.name || "repository"}`} items={cardMenu} />
+                  </span>
+                )}
+              </div>
             );
           }
           return (
@@ -462,79 +549,15 @@ export default function ReposPage({ onHealthChange }) {
                     devTypes={dr.draft.devTypes}
                     depth={(healthInfo?.claims_depth || {})[repo.name]} />
                 </span>
-                {cfg.repos.length > 0 && (
-                  <Button kind="danger-ghost" onClick={() => {
-                    const doRemove = () => {
-                      newNames.untrack(repo.name);
-                      setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx));
-                      // cascade: the server refuses a PMO that still lists a
-                      // repo name with no card — deselect it everywhere too
-                      cfg.pmos.forEach((p, pi) => {
-                        if ((p.repos || []).includes(repo.name))
-                          setField(`cfg.pmos.${pi}.repos`,
-                            p.repos.filter((n) => n !== repo.name));
-                        if ((p.reference_repos || []).includes(repo.name))
-                          setField(`cfg.pmos.${pi}.reference_repos`,
-                            p.reference_repos.filter((n) => n !== repo.name));
-                        if ((p.memory_repos || []).includes(repo.name))
-                          setField(`cfg.pmos.${pi}.memory_repos`,
-                            p.memory_repos.filter((n) => n !== repo.name));
-                      });
-                      Object.entries(dr.draft.devTypes || {}).forEach(([nm, dt]) => {
-                        if ((dt.memory_repos || []).includes(repo.name))
-                          setField(`devTypes.${nm}.memory_repos`,
-                            dt.memory_repos.filter((n) => n !== repo.name));
-                      });
-                    };
-                    const refPmos = cfg.pmos
-                      .filter((p) => (p.repos || []).includes(repo.name)
-                                  || (p.reference_repos || []).includes(repo.name)
-                                  || (p.memory_repos || []).includes(repo.name))
-                      .map((p) => p.name);
-                    if (savedRepoNames.has(repo.name)) {
-                      setConfirm({
-                        title: `Remove repository "${repo.name}"?`,
-                        body: "Removing it and saving permanently deletes its stored tokens (write / read-only / reviewer); missions that used this repo gate until a human closes them out."
-                          + (refPmos.length
-                              ? ` It is also deselected from PMO connection${refPmos.length > 1 ? "s" : ""} ${refPmos.join(", ")}.`
-                              : "")
-                          + " Nothing changes until you Save.",
-                        confirmLabel: "Remove from draft",
-                        action: () => { doRemove(); setConfirm(null); },
-                      });
-                    } else doRemove();
-                  }}>
-                    Remove
-                  </Button>
+                {cardMenu.length > 0 && (
+                  <MoreMenu label={`More actions for ${repo.name || "repository"}`} items={cardMenu} />
                 )}
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
                   help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Renaming on Save moves stored tokens, updates PMO/Dev Type citations, and migrates the local mirror; past run records and `devcake-repo:` markers already on the board keep the old name.">
                   <Input value={repo.name}
-                  onChange={(e) => {
-                    const prev = repo.name;
-                    const next = e.target.value;
-                    newNames.rename(prev, next);
-                    setField(`cfg.repos.${idx}.name`, next);
-                    if (prev && next && prev !== next) {
-                      // Cascade PMO citations in the same config draft so
-                      // inline validation does not block Save. Do NOT touch
-                      // draft Dev Type memory_repos here: DraftChrome saves
-                      // Dev Types before PUT /config, and a successful Dev
-                      // Type PUT + failed config rename would leave disk
-                      // citing the new name while AppConfig still has the
-                      // old one. Server _rewrite_repo_citations + post-reload
-                      // persist owns Dev Type citations.
-                      cfg.pmos.forEach((p, pi) => {
-                        for (const field of ["repos", "reference_repos", "memory_repos"]) {
-                          if ((p[field] || []).includes(prev))
-                            setField(`cfg.pmos.${pi}.${field}`,
-                              p[field].map((n) => (n === prev ? next : n)));
-                        }
-                      });
-                    }
-                  }} />
+                  onChange={(e) => applyRepoNameChange(idx, repo.name, e.target.value)} />
                   {dr.errors[`cfg.repos.${idx}.name`] && (
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
                       ✗ {dr.errors[`cfg.repos.${idx}.name`]}
@@ -753,6 +776,19 @@ export default function ReposPage({ onHealthChange }) {
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />
+      <PromptDialog open={!!renameFor}
+        title={`Rename adapter "${renameFor?.name || ""}"`}
+        label="New name" initial={renameFor?.name || ""}
+        hint="Renaming applies on Save: stored tokens move, PMO citations update, and the local mirror migrates; past run records and `devcake-repo:` markers already on the board keep the old name."
+        confirmLabel="Rename" error={renameErr}
+        onConfirm={(nn) => {
+          if (!renameFor) return;
+          if (nn === renameFor.name) { setRenameFor(null); setRenameErr(""); return; }
+          setRenameErr("");
+          applyRepoNameChange(renameFor.idx, renameFor.name, nn);
+          setRenameFor(null);
+        }}
+        onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
       {clearSecrets && (
         <ClearSecretsDialog
           context="repos"

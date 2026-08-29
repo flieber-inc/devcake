@@ -42,6 +42,7 @@ const SUITES = [
   "costs.mjs",
   "error_surface.mjs",
   "honesty_leftovers.mjs",
+  "adapter_rename_ui.mjs",
 ];
 
 // pick up admin credentials from the repo-root .env when not already set

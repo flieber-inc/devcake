@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import AdapterTabs from "../components/AdapterTabs.jsx";
@@ -21,6 +21,7 @@ import { unusedRepoNames } from "../lib/unusedRepos.js";
 import { isMemoryNotebookCard } from "../lib/memoryNotebook.js";
 import { fleetSeedIndexes } from "../lib/fleetExpand.js";
 import { CONNECTION_FIELDS, connRef } from "../lib/connectionFields.js";
+import { listWindow, pageForIndex } from "../lib/listWindow.js";
 
 // Repositories page (v0.1.1 B4, founder request): the repository cards +
 // merge policy lifted out of Configuration, plus the internal-forge
@@ -223,32 +224,29 @@ export default function ReposPage({ onHealthChange }) {
   const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos,
                                repoNewNamesState);
   // bulk-scale (2026-08-02): 350 cards × (3 SecretField self-fetches + a
-  // RoOnlyNote fetch) was ~1,400 requests per page load. The page renders at
-  // most CARD_CAP filtered cards, and ONE chunked batch covers their three
-  // token fields; SecretFields receive it via the `presence` prop and skip
-  // their self-fetch. The filter is debounced so typing doesn't refetch per
+  // RoOnlyNote fetch) was ~1,400 requests per page load. The page renders one
+  // PAGE_SIZE window of filtered cards (CAKE-145 pagination — not a silent
+  // hard cap), and ONE chunked batch covers their three token fields;
+  // SecretFields receive it via the `presence` prop and skip their
+  // self-fetch. The filter is debounced so typing doesn't refetch per
   // keystroke.
-  const CARD_CAP = 30;
+  const PAGE_SIZE = 30;
   const [filter, setFilter] = useState("");
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => setQuery(filter), 300);
     return () => clearTimeout(t);
   }, [filter]);
   const [presence, setPresence] = useState({});   // "repo:name:field" → {present}
   const draftRepoNames = (dr.draft?.cfg.repos || []).map((r) => r.name);
-  // filter + cap engage only past CARD_CAP — small fleets keep every card,
-  // and a leftover filter can never hide cards while its input is hidden.
-  // 2026-08 reviewer round: the input now appears past 5 repos (it used to
-  // wait for the 30-card cap); the hard render cap stays at CARD_CAP.
+  // Filter input appears past 5 repos (2026-08 reviewer round); a leftover
+  // filter can never hide cards while its input is hidden. Pagination
+  // pages the filtered match set at PAGE_SIZE so every repo stays reachable.
   const filterActive = draftRepoNames.length > 5;
-  const fq = filterActive ? query.trim().toLowerCase() : "";
-  const matchedNames = filterActive
-    ? draftRepoNames.filter((n) => !fq || n.toLowerCase().includes(fq))
-    : draftRepoNames;
-  const visibleNames = draftRepoNames.length > CARD_CAP
-    ? matchedNames.slice(0, CARD_CAP)
-    : matchedNames;
+  const fq = filterActive ? query : "";
+  const win = listWindow(draftRepoNames, fq, PAGE_SIZE, page);
+  const visibleNames = win.pageNames;
   const visibleKey = visibleNames.join(",");
 
   // 2026-08 reviewer round: collapsed summary rows — one ~350px card per
@@ -295,8 +293,6 @@ export default function ReposPage({ onHealthChange }) {
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
   const visibleSet = new Set(visibleNames);
-  const shownRepos = cfg.repos.filter((r) => visibleSet.has(r.name));
-  const hiddenCount = cfg.repos.length - shownRepos.length;
   // stored tokens key on the repo name — locked once saved. A card counts as
   // saved only when the server holds its name AND it isn't the card that was
   // (re)added this session, so a new card can never be born frozen. When a
@@ -376,26 +372,50 @@ export default function ReposPage({ onHealthChange }) {
               onClick: () => setClearSecrets(true) },
           ]} />
         }>
-        {filterActive && (
+        {(filterActive || win.pageCount > 1) && (
           <div className="flex flex-wrap items-center gap-3">
-            <span className="relative w-64 shrink-0">
-              <Input className="pr-7" value={filter}
-                placeholder={`Filter ${cfg.repos.length} repositories…`}
-                aria-label="Filter repositories by name"
-                onChange={(e) => setFilter(e.target.value)} />
-              {filter && (
-                <button type="button" aria-label="Clear repository filter"
-                  onClick={() => setFilter("")}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
-                  ✕
-                </button>
-              )}
-            </span>
-            {hiddenCount > 0 && (
-              <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                Showing {shownRepos.length} of {cfg.repos.length} — refine the filter
+            {filterActive && (
+              <span className="relative w-64 shrink-0">
+                <Input className="pr-7" value={filter}
+                  placeholder={`Filter ${cfg.repos.length} repositories…`}
+                  aria-label="Filter repositories by name"
+                  onChange={(e) => { setFilter(e.target.value); setPage(0); }} />
+                {filter && (
+                  <button type="button" aria-label="Clear repository filter"
+                    onClick={() => { setFilter(""); setPage(0); }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                    ✕
+                  </button>
+                )}
               </span>
             )}
+            {win.pageCount > 1 ? (
+              <span className="ml-auto flex shrink-0 items-center gap-3">
+                <Button kind="ghost" size="sm" icon={ChevronLeft}
+                  disabled={win.pageIndex === 0}
+                  aria-label="Previous repository page"
+                  onClick={() => setPage(win.pageIndex - 1)}>Prev</Button>
+                <span className="whitespace-nowrap text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                  {win.totalMatched === 0
+                    ? "0"
+                    : `${win.pageIndex * PAGE_SIZE + 1}–${win.pageIndex * PAGE_SIZE + win.pageNames.length}`}
+                  {" of "}{win.totalMatched}
+                  {fq.trim() && win.totalMatched < cfg.repos.length
+                    ? ` matching (${cfg.repos.length} total)`
+                    : ""}
+                </span>
+                <Button kind="ghost" size="sm"
+                  disabled={win.pageIndex + 1 >= win.pageCount}
+                  aria-label="Next repository page"
+                  onClick={() => setPage(win.pageIndex + 1)}>
+                  Next <ChevronRight size={13} aria-hidden />
+                </Button>
+              </span>
+            ) : filterActive && fq.trim() && win.totalMatched < cfg.repos.length ? (
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                {win.totalMatched} matching ({cfg.repos.length} total)
+              </span>
+            ) : null}
           </div>
         )}
         {cfg.repos.map((repo, idx) => {
@@ -627,8 +647,14 @@ export default function ReposPage({ onHealthChange }) {
         })}
         <Button kind="ghost" onClick={() => {
           const name = nextFreeName("repo", cfg.repos, dr.server.cfg.repos);
+          const newIdx = cfg.repos.length;
           newNames.track(name);
-          setExpandedRepos((prev) => new Set(prev).add(cfg.repos.length));
+          // Clear any active filter and jump to the page that holds the new
+          // card so Add never parks a card past a silent window (CAKE-145).
+          setFilter("");
+          setQuery("");
+          setPage(pageForIndex(newIdx, PAGE_SIZE));
+          setExpandedRepos((prev) => new Set(prev).add(newIdx));
           setField("cfg.repos", [...cfg.repos, newRepoCard(name)]);
         }}>
           + Add repository

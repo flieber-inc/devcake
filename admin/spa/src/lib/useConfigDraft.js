@@ -19,12 +19,14 @@ const ignored = (path) => IGNORED.some((re) => re.test(path));
 
 function normalize(cfg, devTypesArr, assignments) {
   return {
-    // seed the ADR-0019 override map on every PMO card (server and draft
-    // snapshots alike): diffs stay per-row and removing the last override
-    // round-trips to a clean draft, even against a backend predating the
-    // field
+    // seed ADR-0019 / CAKE-150 override maps on every PMO card (server and
+    // draft snapshots alike): diffs stay per-key and removing the last
+    // override round-trips to a clean draft, even against a backend
+    // predating the field
     cfg: { ...cfg,
-           pmos: (cfg.pmos || []).map((p) => ({ assignments: {}, ...p })) },
+           pmos: (cfg.pmos || []).map((p) => ({
+             assignments: {}, active_prompt_templates: {}, ...p,
+           })) },
     devTypes: Object.fromEntries(devTypesArr.map((d) => [d.name, d])),
     assignments,
   };

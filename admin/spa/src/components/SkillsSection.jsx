@@ -6,6 +6,7 @@ import { Field, Input, Textarea } from "./Field.jsx";
 import Button from "./Button.jsx";
 import { ConfirmDialog, Modal } from "./Modal.jsx";
 import MoreMenu from "./MoreMenu.jsx";
+import ImmediateBadge from "./ImmediateBadge.jsx";
 import MarkdownBody, {
   MarkdownModeToggle,
   MarkdownSourcePre,
@@ -247,10 +248,14 @@ function ViewSkillDialog({ name, onClose }) {
 
 // Dedicated skills connections (2026-08-14 ruling): a skills repository
 // is its own connection — managed HERE, never on the Repositories page.
-function SkillSourcesCard() {
+function SkillSourcesCard({ setPageErr, onCatalogReload }) {
   const { dr, skillSourceNewNamesState } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
+  const [testResult, setTestResult] = useState({});
+  const [refreshMsg, setRefreshMsg] = useState("");
+  const refreshTimer = useRef(null);
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
+  useEffect(() => () => clearTimeout(refreshTimer.current), []);
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
   const sources = cfg.skill_sources || [];
@@ -263,17 +268,64 @@ function SkillSourcesCard() {
   const nameLocked = (name, idx) =>
     savedNames.has(name) &&
     !(newNames.has(name) && idx === sources.map((s) => s.name).lastIndexOf(name));
+
+  const testSkill = async (name) => {
+    const key = `skill:${name}`;
+    try {
+      const result = await send(
+        "POST", `/connections/skill/${encodeURIComponent(name)}/test`);
+      setTestResult((prev) => ({ ...prev, [key]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [key]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
+
+  const updateNow = async () => {
+    try {
+      const res = await send("POST", "/skills/sources/refresh");
+      await onCatalogReload();
+      const failed = Object.entries(res?.failures || {});
+      if (failed.length) {
+        // honest badge: a failed fetch must never show a green ✓
+        setRefreshMsg("");
+        setPageErr("skill source update failed for " +
+          failed.map(([n, r]) => `${n} (${r})`).join("; "));
+        return;
+      }
+      setRefreshMsg("✓ skill sources updated");
+      clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => setRefreshMsg(""), 4000);
+    } catch (e) {
+      setPageErr(`skill source update failed: ${String(e.message || e)}`);
+    }
+  };
+
   return (
     <Section id="skills-sources" title="Skill sources"
       description="Repositories that hold skills — connected here, separate from your code repositories."
-      help="A skill source is a git repository whose folders each hold one skill (a SKILL.md plus supporting files). Connect one here and every skill inside it appears in the catalog above as <source>/<skill>, ready to attach to worker profiles. Sources are read-only: DevCake fetches them through its mirror before every run and never writes to them. They are deliberately NOT repository cards — nothing here can become a work target.">
+      help="A skill source is a git repository whose folders each hold one skill (a SKILL.md plus supporting files). Connect one here and every skill inside it appears in the catalog above as <source>/<skill>, ready to attach to worker profiles. Sources are read-only: DevCake fetches them through its mirror before every run and never writes to them. They are deliberately NOT repository cards — nothing here can become a work target."
+      actions={
+        <>
+          <Button onClick={updateNow}>Update now</Button>
+          <ImmediateBadge text="refreshes mirrors now" />
+        </>
+      }>
+      {refreshMsg && (
+        <p className="mb-3 text-sm text-green-700 dark:text-green-400">{refreshMsg}</p>
+      )}
       {sources.length === 0 && (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           No skill sources yet — the catalog above lists the bundled
           skill store only.
         </p>
       )}
-      {sources.map((src, idx) => (
+      {sources.map((src, idx) => {
+        const locked = nameLocked(src.name, idx);
+        const tr = testResult[`skill:${src.name}`];
+        return (
         <div key={idx}
           className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -295,7 +347,7 @@ function SkillSourcesCard() {
               help="Short identity for this source (lowercase letters/digits/underscores, ≤39, no hyphens). Skills from it are selected as '<name>/<skill>' on worker profiles. Locked once saved — stored tokens key on it; remove and re-add to rename.">
               <Input value={src.name}
                 aria-label={`Skill source ${idx + 1} name`}
-                disabled={nameLocked(src.name, idx)}
+                disabled={locked}
                 onChange={(e) => {
                   newNames.rename(src.name, e.target.value);
                   setField(`cfg.skill_sources.${idx}.name`, e.target.value);
@@ -342,19 +394,37 @@ function SkillSourcesCard() {
             <SecretField label="Read token"
               help="Token with read access to the repository (private sources). Stored as plaintext mode 0600 on the app volume — never echoed back."
               refKey={connRef("skill", src.name, "token_ro")} paste
-              locked={!nameLocked(src.name, idx)} />
+              locked={!locked} />
             <SecretField label="Token (fallback)"
               help="Used only when no read token is stored. A read-scoped token is all a skills source ever needs."
               refKey={connRef("skill", src.name, "token")} paste
-              locked={!nameLocked(src.name, idx)} />
+              locked={!locked} />
           </div>
-          {!nameLocked(src.name, idx) && (
+          {!locked && (
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Save first — tokens can be pasted once the source exists.
             </p>
           )}
+          {locked && (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button kind="ghost" onClick={() => testSkill(src.name)}>
+                Test connection
+              </Button>
+              <ImmediateBadge text="tests saved values" />
+              {tr && (
+                <span className={`text-sm ${tr.ok
+                  ? "text-green-700 dark:text-green-400"
+                  : "text-red-600 dark:text-red-400"}`}>
+                  {tr.ok
+                    ? `✓ reachable (${tr.forge}): ${(tr.remote_head || "").slice(0, 12) || "ok"}`
+                    : `✗ ${tr.error || tr.detail || "connection test failed"}`}
+                </span>
+              )}
+            </div>
+          )}
         </div>
-      ))}
+        );
+      })}
       <button type="button"
         onClick={() => {
           newNames.track("");
@@ -553,7 +623,7 @@ export default function SkillsSection({ setPageErr }) {
         )}
       </Section>
 
-      <SkillSourcesCard />
+      <SkillSourcesCard setPageErr={setPageErr} onCatalogReload={loadSkills} />
 
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}

@@ -161,11 +161,17 @@ class PMOInstance(BaseModel):
     # override's. An absent key inherits the global row. Empty dict (the
     # default) = this instance staffs exactly like the deployment default.
     assignments: dict[str, Assignment] = Field(default_factory=dict)
+    # Per-instance Mission Type → playbook template overrides (CAKE-150 /
+    # ADR-0037): a present key replaces AppConfig.active_prompt_templates for
+    # that type on this instance only; absent key inherits the global name
+    # live. Empty dict = this instance uses the deployment-wide actives.
+    active_prompt_templates: dict[str, str] = Field(default_factory=dict)
     # ADR-0030: app-managed instance (the auto-provisioned default board).
     # Identity fields are canonicalized and the row is re-injected across
     # config PUTs / bundle applies by reconcile_managed_pmos while the
     # bundled provisioner is present; operator-tunable fields (repos,
-    # reference_repos, assignments, intake_paused) stay operator-owned.
+    # reference_repos, assignments, active_prompt_templates, intake_paused)
+    # stay operator-owned.
     managed: bool = False
 
     @field_validator("memory_repos")
@@ -182,6 +188,12 @@ class PMOInstance(BaseModel):
                                 context="assignments")
         return v
 
+    @field_validator("active_prompt_templates")
+    @classmethod
+    def _prompt_template_overrides_valid(cls, v):
+        validate_active_prompt_template_map(
+            v, context="active_prompt_templates")
+        return v
     @field_validator("system")
     @classmethod
     def _known_system(cls, v):
@@ -848,6 +860,42 @@ def assignment_for(config: "AppConfig", instance: PMOInstance,
     override = instance.assignments.get(mission_type)
     return override if override is not None else config.assignments[mission_type]
 
+
+def validate_active_prompt_template_map(rows: dict[str, str] | None, *,
+                                        context: str = "active_prompt_templates"
+                                        ) -> None:
+    """Refuse unknown Mission Types and blank template names on a per-PMO
+    (or global) active-prompt map. Presence = override; remove the key to
+    inherit. Template-name existence vs disk is checked at PUT/bundle time
+    (no disk I/O in validators) — same split as AppConfig.active_prompt_templates.
+    """
+    from .prompts import PLAYBOOK_VARS
+    rows = rows or {}
+    unknown = sorted(set(rows) - set(PLAYBOOK_VARS))
+    if unknown:
+        raise ValueError(
+            f"{context}: unknown mission type(s) {unknown} — valid keys: "
+            f"{sorted(PLAYBOOK_VARS)}")
+    blank = sorted(mt for mt, name in rows.items()
+                   if not isinstance(name, str) or not name.strip())
+    if blank:
+        raise ValueError(
+            f"{context}[{', '.join(blank)}]: template name must be "
+            f"non-empty — remove the key to inherit the global active")
+
+
+def active_prompt_template_for(config: "AppConfig", instance: PMOInstance,
+                               mission_type: str) -> str | None:
+    """ONLY read path for which named playbook template a PMO uses for a
+    Mission Type (CAKE-150 / ADR-0037). Present key on
+    instance.active_prompt_templates → that name; else
+    AppConfig.active_prompt_templates.get(mission_type). Caller passes the
+    result into resolve_playbook (which already falls back to built-in)."""
+    override = instance.active_prompt_templates.get(mission_type)
+    if override is not None:
+        return override
+    return (config.active_prompt_templates or {}).get(mission_type)
+
 # docs/03 §7 — canonical identifying prompts (seed data; admin-editable)
 JUDGMENT_PROMPT = (
     "You are **Judgment**, DevCake's judgment-heavy engineer. You assess, plan, and "
@@ -1007,11 +1055,13 @@ class AppConfig(BaseModel):
     # operator rate card + display-override switch for app-side cost
     # estimates (ADR-0021); edited via the Runs page "Cost inputs" modal
     cost_inputs: CostInputs = Field(default_factory=CostInputs)
-    # per-Mission-Type ACTIVE prompt template (v0.1.1): missing key ⇒ the
-    # built-in "default". A dict map (deep_merge-safe: a patch touching one
-    # type preserves siblings; reset = PUT the value "default"). Name
-    # existence is validated in the PUT endpoint, not here (no disk I/O in
-    # validators).
+    # GLOBAL per-Mission-Type ACTIVE prompt template (v0.1.1): missing key ⇒
+    # the built-in Development ("default" legacy alias). Per-PMO overrides
+    # live on PMOInstance.active_prompt_templates (ADR-0037); resolution is
+    # active_prompt_template_for — the only read path. A dict map
+    # (deep_merge-safe: a patch touching one type preserves siblings; reset
+    # = PUT the value "default"). Name existence is validated in the PUT /
+    # bundle path, not here (no disk I/O in validators).
     active_prompt_templates: dict[str, str] = Field(default_factory=dict)
     # per-Dev-Type ACTIVE identifying-prompt template (2026-07-15): missing
     # key ⇒ "Development" (the dev type's original prompt, seeded once)
@@ -1345,7 +1395,8 @@ def reconcile_managed_pmos(current: list[dict], incoming: list[dict], *,
     - a live managed row PRESENT in the incoming list keeps its identity
       fields canonical (name/system/team_key/api_base/managed come from the
       live row) while operator-tunable fields (repos, reference_repos,
-      assignments, intake_paused) stay the incoming row's;
+      assignments, active_prompt_templates, intake_paused) stay the
+      incoming row's;
     - a stray `managed: true` on any OTHER incoming row is stripped (logged)
       — fake managed rows would otherwise gain delete-protection; stripping
       instead of refusing keeps cross-stack bundle imports applyable.

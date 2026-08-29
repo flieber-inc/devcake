@@ -15,7 +15,7 @@ from ...house_pins import effective_cli_version
 from ...staffing import HarnessNotStaffed, app_digest, require_staffed
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
-from ...config import DevType, assignment_for
+from ...config import DevType, active_prompt_template_for, assignment_for
 
 MEMORY_MOUNT_SENTENCE = (
     "Memory notebooks are mounted read-only under /workspace/memory/.\n"
@@ -532,11 +532,14 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         from ...prompts import templates as prompt_templates
 
         def _pb(mt_name: str) -> str:
-            # the ACTIVE template for this mission type (v0.1.1); a missing/
-            # corrupt file falls back to the built-in default — dispatch
-            # never fails on template trouble (warning also in /health)
-            text, warn = prompt_templates.resolve_playbook(
-                mt_name, mgr.config.active_prompt_templates.get(mt_name))
+            # ONLY read path for playbook selection (CAKE-150 / ADR-0037):
+            # per-PMO override when present, else the global active. A
+            # missing/corrupt file falls back to the built-in default —
+            # dispatch never fails on template trouble (warning also in
+            # /health).
+            active = active_prompt_template_for(
+                mgr.config, mgr.instance, mt_name)
+            text, warn = prompt_templates.resolve_playbook(mt_name, active)
             if warn:
                 log.warning("prompt template fallback: %s", warn)
             return text

@@ -57,6 +57,15 @@ async def delete_prompt_template(mission_type: str, name: str, *, config):
         raise HTTPException(
             409, f"template {name!r} is the ACTIVE template for "
                  f"{mission_type} — switch back to 'default' first")
+    # CAKE-150: also refuse while any PMO override still selects it
+    holders = [
+        inst.name for inst in (config.pmos or [])
+        if (inst.active_prompt_templates or {}).get(mission_type) == name
+    ]
+    if holders:
+        raise HTTPException(
+            409, f"template {name!r} is ACTIVE for {mission_type} on "
+                 f"PMO instance(s) {holders} — clear the override first")
     try:
         prompt_templates.delete_template(mission_type, name)
     except FileNotFoundError as e:

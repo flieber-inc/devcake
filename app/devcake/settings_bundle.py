@@ -645,6 +645,16 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
         if not template_exists(mt, name):
             raise BundleError(422, f"active_prompt_templates: no stored "
                                    f"template {mt}/{name}")
+    for inst in cfg.pmos:                     # CAKE-150 / ADR-0037 overrides
+        for mt, name in (inst.active_prompt_templates or {}).items():
+            if mt not in PLAYBOOK_VARS:
+                raise BundleError(
+                    422, f"pmos[{inst.name}].active_prompt_templates: "
+                         f"unknown mission type {mt!r}")
+            if not template_exists(mt, name):
+                raise BundleError(
+                    422, f"pmos[{inst.name}].active_prompt_templates: "
+                         f"no stored template {mt}/{name}")
     dropped = prune_stale_active_devtype_prompts(cfg, dev_type_names)
     if warnings is not None:
         warnings.extend(dropped)

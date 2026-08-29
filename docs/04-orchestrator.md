@@ -36,7 +36,7 @@ It runs three cooperating loops on one asyncio event loop:
 
 ## 1. Poll cycle
 
-Every `poll_interval_seconds` (default 30). **Multi-PMO:** the poll runtime walks **one `MissionManager` per configured PMO instance** (composition root builds the set from `config.pmos`); each segment uses that instance's adapter/team. A permanent failure on one instance is recorded in `poll_degraded` without stopping the others.
+Every `poll_interval_seconds` (default 30). **Multi-PMO:** the poll runtime walks **one `MissionManager` per configured PMO instance** (composition root builds the set from `config.pmos`); each segment uses that instance's adapter/team. A permanent failure on one instance is recorded in `poll_degraded` without stopping the others; removing the instance from config prunes that key (and its missions-cache / ownership rows) at `build_managers` so Overview does not keep a ghost alert.
 
 1. Fetch all non-terminal Projects and Issues in the instance's team via `PMOPort.list_all(team_ref)` and normalize to `Mission` DTOs.
 2. Derive each Mission's type per the table in `02-domain-model.md` §2.

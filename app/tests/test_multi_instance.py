@@ -637,3 +637,218 @@ def test_build_managers_prunes_poll_state_for_removed_instance(
     assert "gone" not in poll_rt.poll_degraded
     assert poll_rt.poll_degraded["stay"] == "RuntimeError: stay"
     assert all(row["instance"] != "gone" for row in poll_rt.missions_cache)
+
+
+def test_rekey_pmo_instance_preserves_manager_and_poll_maps(tmp_path, monkeypatch):
+    """PMO card rename must rekey managers/stewards/poll maps so reload is
+    not delete+add — advisory state rides the same MissionManager object."""
+    from types import SimpleNamespace
+
+    from devcake.api.poll import PollRuntime
+    from devcake.api.services import Services
+    from devcake.adapters.files.owner_store import OwnerStore
+    from fakes import make_services
+
+    old_inst = PMOInstance(name="alpha", team_key="A", intake_paused=True,
+                           assignments={"EXECUTE": __import__(
+                               "devcake.config", fromlist=["Assignment"]
+                           ).Assignment(dev_type="senior-dev")})
+    mgr = _mgr("alpha")
+    # stamp a sentinel the rename must preserve (same object under new key)
+    mgr._rename_sentinel = "keep-me"
+    managers = {"alpha": mgr}
+    stewards = {"alpha": SimpleNamespace(kick_discovery=lambda: None)}
+
+    async def _noop():
+        return {}
+
+    poll_rt = PollRuntime(
+        config=AppConfig(pmos=[old_inst]),
+        managers=managers, stewards=stewards,
+        store=SimpleNamespace(active=lambda: [], all=lambda: []),
+        forge_runtime=SimpleNamespace(breakers={},
+                                      last_full_probe_at=None),
+        refresh_forge_health=_noop,
+        managers_in_config_order=lambda: list(managers.values()),
+        owner_store=OwnerStore(tmp_path / "state" / "mission_owner.json"))
+    poll_rt.poll_degraded["alpha"] = "RuntimeError: blip"
+    poll_rt.missions_cache[:] = [{"instance": "alpha", "key": "A-1"}]
+    poll_rt.mission_owner["mid-1"] = "alpha"
+
+    monkeypatch.setattr(
+        "devcake.api.services.make_pmo", lambda inst: SimpleNamespace())
+
+    s = make_services(
+        config=AppConfig(pmos=[old_inst]),
+        managers=managers, stewards=stewards, poll_rt=poll_rt,
+        forge_runtime=SimpleNamespace(),
+        shared_breakers={}, shared_backend_degraded={},
+        manager=SimpleNamespace(), messaging=SimpleNamespace(),
+        internal_forge=None, skill_service=None, repo_cache=None,
+        receipt_store=None, oidc_tokens=None, claims=None,
+        blocker_locator=None, dev_types={})
+    assert type(s).rekey_pmo_instance is Services.rekey_pmo_instance
+    s.rekey_pmo_instance("alpha", "bravo")
+
+    assert "alpha" not in s.managers
+    assert s.managers["bravo"] is mgr
+    assert mgr._rename_sentinel == "keep-me"
+    assert "alpha" not in s.stewards and "bravo" in s.stewards
+    assert poll_rt.poll_degraded.get("bravo") == "RuntimeError: blip"
+    assert "alpha" not in poll_rt.poll_degraded
+    assert poll_rt.mission_owner["mid-1"] == "bravo"
+    assert poll_rt.missions_cache[0]["instance"] == "bravo"
+
+
+def test_config_put_pmo_rename_rekeys_and_keeps_intake(
+        tmp_path, monkeypatch):
+    """apply_config_patch + rekey + build_managers: renamed PMO stays on the
+    same manager object; intake_paused / assignments ride the new name."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from devcake.api import config_service
+    from devcake.api.services import Services
+    from fakes import make_services
+    from devcake.config import Assignment
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_mod
+
+    inst = PMOInstance(
+        name="alpha", team_key="A", intake_paused=True,
+        assignments={"EXECUTE": Assignment(dev_type="senior-dev")},
+        repos=[])
+    cfg = AppConfig(pmos=[inst], repos=[])
+    mgr = _mgr("alpha")
+    mgr._rename_sentinel = "alive"
+    managers = {"alpha": mgr}
+    stewards = {"alpha": SimpleNamespace(kick_discovery=lambda: None)}
+
+    monkeypatch.setattr(
+        "devcake.api.services.make_pmo", lambda i: SimpleNamespace())
+    s = make_services(
+        config=cfg, managers=managers, stewards=stewards, poll_rt=None,
+        forge_runtime=SimpleNamespace(rebuild=lambda *a, **k: None),
+        shared_breakers={}, shared_backend_degraded={},
+        manager=SimpleNamespace(), messaging=SimpleNamespace(),
+        internal_forge=None, skill_service=None, repo_cache=None,
+        receipt_store=None, oidc_tokens=None, claims=None,
+        blocker_locator=None, dev_types={"senior-dev": SimpleNamespace()})
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "devcake.api.services.reset_health_caches", lambda: None)
+    monkeypatch.setattr(
+        "devcake.api.services.security.invalidate_secret_scan", lambda: None)
+
+    # body omits intake_paused (SPA draft Save strips it) — must inherit True
+    body = {
+        "pmos": [
+            {"name": "bravo", "system": "linear", "team_key": "A",
+             "repos": [], "reference_repos": [], "memory_repos": [],
+             "assignments": {
+                 "EXECUTE": {"dev_type": "senior-dev", "extra_cli_args": ""},
+             }},
+        ],
+    }
+
+    def _reload():
+        s.config = cfg
+        s.build_managers()
+
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types=s.dev_types, managers=s.managers,
+            reload=_reload, rekey_pmo=s.rekey_pmo_instance))
+
+    assert [p.name for p in cfg.pmos] == ["bravo"]
+    assert cfg.pmos[0].intake_paused is True
+    assert "EXECUTE" in cfg.pmos[0].assignments
+    assert "alpha" not in s.managers
+    assert s.managers["bravo"] is mgr
+    assert mgr._rename_sentinel == "alive"
+    assert mgr.instance_name == "bravo"
+
+
+def test_config_put_pmo_rename_reload_failure_keeps_original_manager(
+        tmp_path, monkeypatch):
+    """If the first reload after a PMO rename fails, rollback must reverse
+    the manager rekey so the original MissionManager stays under the old
+    name — not a freshly constructed one."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+    from fastapi import HTTPException
+
+    from devcake.api import config_service
+    from fakes import make_services
+    from devcake.config import Assignment
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+
+    inst = PMOInstance(
+        name="alpha", team_key="A", intake_paused=True,
+        assignments={"EXECUTE": Assignment(dev_type="senior-dev")},
+        repos=[])
+    cfg = AppConfig(pmos=[inst], repos=[])
+    mgr = _mgr("alpha")
+    mgr._rename_sentinel = "original"
+    managers = {"alpha": mgr}
+    stewards = {"alpha": SimpleNamespace(kick_discovery=lambda: None)}
+
+    monkeypatch.setattr(
+        "devcake.api.services.make_pmo", lambda i: SimpleNamespace())
+    s = make_services(
+        config=cfg, managers=managers, stewards=stewards, poll_rt=None,
+        forge_runtime=SimpleNamespace(rebuild=lambda *a, **k: None),
+        shared_breakers={}, shared_backend_degraded={},
+        manager=SimpleNamespace(), messaging=SimpleNamespace(),
+        internal_forge=None, skill_service=None, repo_cache=None,
+        receipt_store=None, oidc_tokens=None, claims=None,
+        blocker_locator=None, dev_types={"senior-dev": SimpleNamespace()})
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "devcake.api.services.reset_health_caches", lambda: None)
+    monkeypatch.setattr(
+        "devcake.api.services.security.invalidate_secret_scan", lambda: None)
+
+    body = {
+        "pmos": [
+            {"name": "bravo", "system": "linear", "team_key": "A",
+             "repos": [], "reference_repos": [], "memory_repos": [],
+             "assignments": {
+                 "EXECUTE": {"dev_type": "senior-dev", "extra_cli_args": ""},
+             }},
+        ],
+    }
+
+    calls = {"n": 0}
+
+    def _reload():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("adapter exploded")
+        # restore reload — build_managers must see the reversed key
+        s.config = cfg
+        s.build_managers()
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.new_event_loop().run_until_complete(
+            config_service.apply_config_patch(
+                body, config=cfg, dev_types=s.dev_types, managers=s.managers,
+                reload=_reload, rekey_pmo=s.rekey_pmo_instance))
+    assert ei.value.status_code == 500
+    assert [p.name for p in cfg.pmos] == ["alpha"]
+    assert "bravo" not in s.managers
+    assert s.managers["alpha"] is mgr
+    assert mgr._rename_sentinel == "original"
+    assert mgr.instance_name == "alpha"

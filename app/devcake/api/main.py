@@ -487,6 +487,8 @@ async def put_config(body: dict):
                                     managers=s.managers,
                                     reload=s.reload_connections,
                                     repo_cache=s.repo_cache,
+                                    rekey_pmo=s.rekey_pmo_instance,
+                                    run_store=s.store,
                                     cycle_lock=s.poll_rt.lock)
 
 

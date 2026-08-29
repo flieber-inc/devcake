@@ -87,15 +87,14 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
-  // stored secrets are keyed by instance name — renaming a saved instance
-  // would orphan them, so the name locks once saved (remove + re-add to
-  // rename; removal also deletes the instance's stored secrets). A card
-  // counts as saved only when the server holds its name AND it wasn't
-  // (re)added this session, so a new card can never be born frozen.
+  // A card counts as saved when the server holds its name AND it wasn't
+  // (re)added this session — secrets write only after Save; Remove warns.
+  // Names themselves stay editable (config PUT moves secrets + rekeys
+  // managers); the managed default board keeps its name locked (ADR-0030).
   const savedPmoNames = new Set((dr.server.cfg.pmos || []).map((p) => p.name));
   // only the LAST card carrying a name counts as the session-added one — a
   // new card duplicating a saved name never unlocks the saved card itself
-  const pmoNameLocked = (name, idx) =>
+  const pmoIsSaved = (name, idx) =>
     savedPmoNames.has(name) &&
     !(newPmoNames.has(name) && idx === cfg.pmos.map((p) => p.name).lastIndexOf(name));
 
@@ -317,11 +316,19 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
-                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
-                  <Input value={inst.name} disabled={pmoNameLocked(inst.name, idx)}
+                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Renaming on Save moves stored secrets with the card and updates scheduled-task board targets; past run records and board markers keep the old name.">
+                  <Input value={inst.name} disabled={!!inst.managed}
                   onChange={(e) => {
-                    newPmoNames.rename(inst.name, e.target.value);
-                    setField(`cfg.pmos.${idx}.name`, e.target.value);
+                    const prev = inst.name;
+                    const next = e.target.value;
+                    newPmoNames.rename(prev, next);
+                    setField(`cfg.pmos.${idx}.name`, next);
+                    if (prev && next && prev !== next) {
+                      (cfg.crons || []).forEach((c, ci) => {
+                        if (!c.reserved && c.pmo === prev)
+                          setField(`cfg.crons.${ci}.pmo`, next);
+                      });
+                    }
                   }} />
                   {dr.errors[`cfg.pmos.${idx}.name`] && (
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
@@ -390,7 +397,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                   <SecretField label="API key"
                     help="This instance's PMO API key. Stored as plaintext mode 0600 on the app volume — never echoed back, never in .env."
                     refKey={connRef("pmo", inst.name, "api_key")} paste
-                    locked={!pmoNameLocked(inst.name, idx)} />
+                    locked={!pmoIsSaved(inst.name, idx)} />
                 )}
               </div>
               {/* repo pickers: their OWN grid with fixed slots, so the

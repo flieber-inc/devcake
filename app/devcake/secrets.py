@@ -236,12 +236,13 @@ def delete_connection_instance(scope: str, instance: str) -> None:
 def rename_connection_instance(scope: str, old: str, new: str) -> None:
     """Move `connections/{scope}-{old}.json` → `{scope}-{new}.json`.
 
-    Used when a config PUT renames a card in place (same list index, new
-    name) so tokens follow the card instead of orphaning under the old
-    name. Missing source is a no-op; if the destination already exists it
-    is replaced (the renamed card owns that identity). Old redaction
-    registrations are kept until restart (safe direction); values are
-    re-registered under the new instance name.
+    Used when a config PUT renames a skill / pmo / repo card in place
+    (same list index, new name) so tokens follow the card instead of
+    orphaning under the old name. Missing source is a no-op; if the
+    destination already exists it is replaced (the renamed card owns
+    that identity). Old redaction registrations are kept until restart
+    (safe direction); values are re-registered under the new instance
+    name.
     """
     if old == new:
         return

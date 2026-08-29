@@ -12,6 +12,7 @@ import MoreMenu from "./MoreMenu.jsx";
 import RepoChips from "./RepoChips.jsx";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "./ClearSecretsDialog.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
+import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "../lib/draftErrors.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
@@ -556,6 +557,16 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
         onConfirm={(nn) => {
           if (!renameFor) return;
           if (nn === renameFor.name) { setRenameFor(null); setRenameErr(""); return; }
+          // draft rename has no server round-trip to reject a bad name —
+          // validate HERE so the dialog never closes over a doomed Save
+          if (!INSTANCE_NAME_RE.test(nn)) {
+            setRenameErr(`Not a valid instance name: ${INSTANCE_NAME_RULE}.`);
+            return;
+          }
+          if (cfg.pmos.some((p, i) => i !== renameFor.idx && p.name === nn)) {
+            setRenameErr(`A PMO instance named "${nn}" already exists.`);
+            return;
+          }
           setRenameErr("");
           applyPmoNameChange(renameFor.idx, renameFor.name, nn);
           setRenameFor(null);

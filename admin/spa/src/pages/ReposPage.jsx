@@ -21,6 +21,7 @@ import { unusedRepoNames } from "../lib/unusedRepos.js";
 import { isMemoryNotebookCard } from "../lib/memoryNotebook.js";
 import { fleetSeedIndexes } from "../lib/fleetExpand.js";
 import { CONNECTION_FIELDS, connRef } from "../lib/connectionFields.js";
+import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "../lib/draftErrors.js";
 import { listWindow, pageForIndex } from "../lib/listWindow.js";
 
 // Repositories page (v0.1.1 B4, founder request): the repository cards +
@@ -784,6 +785,16 @@ export default function ReposPage({ onHealthChange }) {
         onConfirm={(nn) => {
           if (!renameFor) return;
           if (nn === renameFor.name) { setRenameFor(null); setRenameErr(""); return; }
+          // draft rename has no server round-trip to reject a bad name —
+          // validate HERE so the dialog never closes over a doomed Save
+          if (!INSTANCE_NAME_RE.test(nn)) {
+            setRenameErr(`Not a valid repo name: ${INSTANCE_NAME_RULE}.`);
+            return;
+          }
+          if (cfg.repos.some((r, i) => i !== renameFor.idx && r.name === nn)) {
+            setRenameErr(`A repository card named "${nn}" already exists.`);
+            return;
+          }
           setRenameErr("");
           applyRepoNameChange(renameFor.idx, renameFor.name, nn);
           setRenameFor(null);

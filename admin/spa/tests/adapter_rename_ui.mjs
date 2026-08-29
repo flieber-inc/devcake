@@ -159,6 +159,24 @@ await withPage(async (page) => {
   if (await collapse.count()) await collapse.first().click();
   await page.waitForSelector('[data-testid="repo-summary-row"]');
 
+  // Dialog-side validation (review round): a draft rename has no server
+  // round-trip to reject a bad name — the dialog itself must refuse and
+  // stay open, never close over a doomed Save.
+  await page.locator('button[aria-label="More actions for notes"]').first().click();
+  await page.locator('[role="menuitem"]:has-text("Rename adapter")').click();
+  const vDialog = page.locator('[role="dialog"]:has-text("Rename adapter")');
+  await vDialog.waitFor({ timeout: 8000 });
+  await vDialog.locator("input").fill("Not-Valid");
+  await vDialog.locator('button:has-text("Rename")').click();
+  await checked("invalid name keeps dialog open with the name rule", async () => {
+    await page.waitForTimeout(200);
+    const open = (await vDialog.count()) >= 1;
+    const err = await vDialog.innerText();
+    return open && /lowercase letter/.test(err);
+  });
+  await vDialog.locator('button:has-text("Cancel")').click();
+  await vDialog.waitFor({ state: "detached", timeout: 8000 }).catch(() => {});
+
   const hint = await renameViaCardMenu(page, "notes", "notebook");
   check("repo PromptDialog hint says applies on Save (not immediately)",
     /applies on Save/i.test(hint) && !/Renames immediately/i.test(hint));

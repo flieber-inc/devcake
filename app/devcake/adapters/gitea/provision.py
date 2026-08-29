@@ -284,18 +284,22 @@ class GiteaProvisioner:
         log.info("internal repo provisioned: %s (user %s)", repo, svc_user)
         return creds
 
-    async def ensure_pmo_board(self) -> dict:
-        """ADR-0030: idempotent default-board provisioning — org + repo
-        (adopt-don't-refuse), issue dependencies enabled UNDER ADMIN (the
+    async def ensure_pmo_board(self, instance_name: str | None = None) -> dict:
+        """ADR-0030 / CAKE-157: idempotent default-board provisioning — org +
+        repo (adopt-don't-refuse), issue dependencies enabled UNDER ADMIN (the
         board PAT is a write collaborator and cannot PATCH the repo), the
         devcake-board service user, and its repo-scoped PAT written to the
-        secret store as the `board` instance's api_key. PAT liveness rides
+        secret store under the live managed instance name (default insert
+        name `board` when none is supplied). PAT liveness rides
         token_last_eight (the recreated-volume self-heal, review finding #6);
         re-mint happens only on definitive death. The PMO side stays an
         ORDINARY gitea_issues instance through make_pmo — this method never
-        constructs or wraps a PMO adapter (docs/05 §9)."""
+        constructs or wraps a PMO adapter (docs/05 §9). Gitea org/repo/user
+        constants are unchanged; only the secret-store instance key moves
+        with the card name."""
         from ... import secrets as secrets_store
         from ...config import MANAGED_BOARD_NAME
+        name = instance_name or MANAGED_BOARD_NAME
         await self._req("POST", "/orgs", tolerate=(409, 422),
                         json={"username": PMO_ORG, "visibility": "private"})
         repo = await self._req("GET", f"/repos/{PMO_ORG}/{BOARD_REPO}",
@@ -327,18 +331,18 @@ class GiteaProvisioner:
                         f"/repos/{PMO_ORG}/{BOARD_REPO}/collaborators/{BOARD_USER}",
                         json={"permission": "write"})
         stored = secrets_store.read_connection_secret(
-            "pmo", MANAGED_BOARD_NAME, "api_key")
+            "pmo", name, "api_key")
         minted = False
         if not await self._service_token_live(BOARD_USER, "devcake-board",
                                               stored or None):
             token = await self._mint(BOARD_USER, "devcake-board",
                                      ["write:issue", "write:repository"])
             secrets_store.write_connection_secret(
-                "pmo", MANAGED_BOARD_NAME, "api_key", token)
+                "pmo", name, "api_key", token)
             minted = True
-        log.info("pmo board %s: %s/%s (user %s; PAT %s)",
+        log.info("pmo board %s: %s/%s (user %s; PAT %s; secret pmo/%s)",
                  "adopted" if adopted else "created", PMO_ORG, BOARD_REPO,
-                 BOARD_USER, "minted" if minted else "live")
+                 BOARD_USER, "minted" if minted else "live", name)
         return {"team_key": f"{PMO_ORG}/{BOARD_REPO}", "api_base": self.url,
                 "minted": minted, "adopted": adopted}
 

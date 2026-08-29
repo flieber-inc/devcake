@@ -62,9 +62,11 @@ MEMORY_CURATOR_TEMPLATE = (
     "open a PR against any inherited extra clone."
 )
 
-# ADR-0030: the app-managed default-board PMO instance (auto-provisioned
-# gitea_issues board on the bundled Gitea). Reserved in _pmos_valid; the name
-# prefixes branches and run ids like any instance name (ADR-0009).
+# ADR-0030 / CAKE-157: default *insert* name for the app-managed PMO row
+# (auto-provisioned gitea_issues board on the bundled Gitea). Durable identity
+# is `managed=true`, not this literal — operators may rename after first
+# registration. The name still prefixes branches and run ids like any
+# instance (ADR-0009).
 MANAGED_BOARD_NAME = "board"
 
 # Shared shape for GUI-stored harness/secret-env var names —
@@ -166,12 +168,13 @@ class PMOInstance(BaseModel):
     # that type on this instance only; absent key inherits the global name
     # live. Empty dict = this instance uses the deployment-wide actives.
     active_prompt_templates: dict[str, str] = Field(default_factory=dict)
-    # ADR-0030: app-managed instance (the auto-provisioned default board).
-    # Identity fields are canonicalized and the row is re-injected across
-    # config PUTs / bundle applies by reconcile_managed_pmos while the
-    # bundled provisioner is present; operator-tunable fields (repos,
-    # reference_repos, assignments, active_prompt_templates, intake_paused)
-    # stay operator-owned.
+    # ADR-0030 / CAKE-157: app-managed instance (the auto-provisioned default
+    # board). The flag is the durable identity — display name is operator-
+    # owned. system/team_key/api_base/managed are canonicalized and the row
+    # is re-injected across config PUTs / bundle applies by
+    # reconcile_managed_pmos while the bundled provisioner is present;
+    # operator-tunable fields (name, repos, reference_repos, assignments,
+    # active_prompt_templates, intake_paused) stay operator-owned.
     managed: bool = False
 
     @field_validator("memory_repos")
@@ -1102,16 +1105,9 @@ class AppConfig(BaseModel):
                 f"pmos: reserved instance name(s) {sorted(reserved)} — "
                 f"'main' marks legacy run records, 'sys' the HELLO/OAUTH "
                 f"pseudo-instance; pick another name")
-        # ADR-0030: 'board' is the app-managed default-board instance —
-        # operators cannot claim the name with an ordinary row (the managed
-        # row itself, stamped by the app or carried by a bundle, validates)
-        for e in v:
-            if e.name == MANAGED_BOARD_NAME and not (
-                    e.managed and e.system == "gitea_issues"):
-                raise ValueError(
-                    f"pmos: {MANAGED_BOARD_NAME!r} is reserved for the "
-                    f"auto-provisioned default board (ADR-0030) — pick "
-                    f"another name")
+        # CAKE-157: literal name `board` is no longer reserved — durable
+        # identity is managed=true. Ordinary uniqueness / prefix rules above
+        # and the duplicate-target check below stay honest after rename-away.
         # two instances polling the same underlying team would double-
         # dispatch every mission under two identity prefixes — refuse
         targets = [(e.system, e.api_base, e.team_key) for e in v if e.configured]
@@ -1382,50 +1378,56 @@ def reconcile_reserved_crons(current: list[dict],
 
 def reconcile_managed_pmos(current: list[dict], incoming: list[dict], *,
                            internal_forge_present: bool) -> list[dict]:
-    """ADR-0030: keep app-managed PMO rows coherent across the two world-swap
-    write paths (config PUT, bundle/profile apply — `pmos` is replaced
-    WHOLESALE by both, and profiles saved before the feature simply don't
-    contain the row; without this, applying one silently deletes the board
-    instance AND its stored PAT via the removed-instance cleanup).
+    """ADR-0030 / CAKE-157: keep the app-managed PMO row coherent across the
+    two world-swap write paths (config PUT, bundle/profile apply — `pmos` is
+    replaced WHOLESALE by both, and profiles saved before the feature simply
+    don't contain the row; without this, applying one silently deletes the
+    board instance AND its stored PAT via the removed-instance cleanup).
 
-    Pure list[dict] → list[dict]:
-    - a live managed row OMITTED by the incoming list is re-injected — while
-      the bundled provisioner is present; with it absent, deletion is allowed
+    Durable identity is `managed=true`, not the display name. Pure
+    list[dict] → list[dict]:
+    - find the single live managed row by flag (not by name);
+    - when that row is PRESENT under a new name, accept the incoming name
+      while forcing system/team_key/api_base/managed from live; operator
+      tunables (repos, reference_repos, assignments,
+      active_prompt_templates, intake_paused, …) stay the incoming row's;
+    - when OMITTED, re-inject under the current live name — while the
+      bundled provisioner is present; with it absent, deletion is allowed
       (an undeletable red card on a torn-out Gitea would be worse doctrine);
-    - a live managed row PRESENT in the incoming list keeps its identity
-      fields canonical (name/system/team_key/api_base/managed come from the
-      live row) while operator-tunable fields (repos, reference_repos,
-      assignments, active_prompt_templates, intake_paused) stay the
-      incoming row's;
     - a stray `managed: true` on any OTHER incoming row is stripped (logged)
       — fake managed rows would otherwise gain delete-protection; stripping
       instead of refusing keeps cross-stack bundle imports applyable.
     """
-    managed_live = {p["name"]: p for p in (current or [])
-                    if isinstance(p, dict) and p.get("managed")}
+    live: dict | None = None
+    for p in (current or []):
+        if isinstance(p, dict) and p.get("managed"):
+            live = p
+            break
     out: list[dict] = []
-    seen: set[str] = set()
+    seen_live = False
     for p in (incoming or []):
         if not isinstance(p, dict):
             out.append(p)
             continue
         row = dict(p)
         name = row.get("name")
-        live = managed_live.get(name)
-        if live is not None:
-            for field in ("name", "system", "team_key", "api_base", "managed"):
+        if live is not None and row.get("managed") and not seen_live:
+            # First incoming managed:true is the live managed identity
+            # (possibly renamed). Canonicalize role fields from live; keep
+            # the operator-chosen name.
+            for field in ("system", "team_key", "api_base", "managed"):
                 row[field] = live.get(field)
-            seen.add(name)
-        elif row.get("managed") and name != MANAGED_BOARD_NAME:
+            row["managed"] = True
+            seen_live = True
+        elif row.get("managed"):
             log.warning("pmos[%r]: stripping stray managed flag — managed "
                         "rows are stamped by the app (ADR-0030)", name)
             row["managed"] = False
         out.append(row)
-    for name, live in managed_live.items():
-        if name not in seen and internal_forge_present:
-            log.info("re-injecting managed PMO instance %r omitted by the "
-                     "incoming list (ADR-0030)", name)
-            out.append(dict(live))
+    if live is not None and not seen_live and internal_forge_present:
+        log.info("re-injecting managed PMO instance %r omitted by the "
+                 "incoming list (ADR-0030)", live.get("name"))
+        out.append(dict(live))
     return out
 
 

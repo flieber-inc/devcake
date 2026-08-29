@@ -318,6 +318,20 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
                 except Exception:  # noqa: BLE001 — best-effort; config applied
                     log.exception("could not rename mirror %r → %r",
                                   old_name, new_name)
+    if pmo_renames or repo_renames:
+        # Adapters capture their credential VALUE at construction (make_pmo /
+        # make_forge pass inst.api_key/token in), and the reload above ran
+        # BEFORE the secret files moved — so every renamed instance's adapter
+        # was built with an empty key and would poll dead until the next
+        # unrelated reload. Rebuild once now that the files are under the new
+        # names. Best-effort: the config change is APPLIED either way, and
+        # the ordinary rollback contract stayed with the first reload.
+        try:
+            reload()
+        except Exception:  # noqa: BLE001 — heal-only rebuild; failure logged, healed at next reload/boot
+            log.exception("post-rename adapter rebuild failed — renamed "
+                          "instances may stay degraded until the next "
+                          "config save or boot")
     for scope, name in removed:                  # only once the new config took
         try:
             secrets_store.delete_connection_instance(scope, name)

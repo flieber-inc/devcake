@@ -93,8 +93,8 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   const setField = dr.setField;
   // A card counts as saved when the server holds its name AND it wasn't
   // (re)added this session — secrets write only after Save; Remove warns.
-  // Names themselves stay editable (config PUT moves secrets + rekeys
-  // managers); the managed default board keeps its name locked (ADR-0030).
+  // Names themselves stay editable including the managed board (CAKE-157 —
+  // config PUT moves secrets + rekeys managers; identity is managed=true).
   const savedPmoNames = new Set((dr.server.cfg.pmos || []).map((p) => p.name));
   // only the LAST card carrying a name counts as the session-added one — a
   // new card duplicating a saved name never unlocks the saved card itself
@@ -138,18 +138,19 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
     } else doRemove();
   };
 
-  // Per-card ⋯: Rename (non-managed) + Remove. Empty when managed board is
-  // also non-removable — never a one-item menu for a lone visible action
-  // that isn't secondary to something else; here both are secondary.
+  // Per-card ⋯: Rename + Remove. CAKE-157 unlocks Rename for the managed
+  // board (identity is managed=true, not the display name). Bundled
+  // non-removable cards therefore get a Rename-only ⋯ — intentional
+  // discoverability exception to DESIGN.md §3 rule 3 (mission acceptance
+  // names the card … menu; inline name field is also enabled). Never leave
+  // a Remove-only ⋯.
   const pmoCardMenuItems = (inst, idx) => {
     const items = [];
-    if (!inst.managed) {
-      items.push({
-        label: "Rename adapter",
-        desc: "Applies on Save — secrets and cron board targets follow; past runs keep the old name.",
-        onClick: () => { setRenameErr(""); setRenameFor({ idx, name: inst.name }); },
-      });
-    }
+    items.push({
+      label: "Rename adapter",
+      desc: "Applies on Save — secrets and cron board targets follow; past runs keep the old name.",
+      onClick: () => { setRenameErr(""); setRenameFor({ idx, name: inst.name }); },
+    });
     if (cfg.pmos.length > 1 && !(inst.managed && health.internal_forge)) {
       items.push({
         label: "Remove",
@@ -323,13 +324,13 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                   {inst.managed && (
                     <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
                       Bundled board
-                      <Help text="The auto-provisioned issues board on the bundled Gitea (ADR-0030). Its identity and API key are app-managed and self-healing — a config save that omits it puts it back. Intake, repositories, and staffing stay yours." />
+                      <Help text="The auto-provisioned issues board on the bundled Gitea (ADR-0030). The managed role and API key are app-managed and self-healing — a config save that omits the row puts it back. The display name is yours (rename like any other PMO card). Intake, repositories, and staffing stay yours." />
                     </span>
                   )}
                 </span>
                 {/* Rename + Remove share the card ⋯ (DESIGN.md §3). Managed
-                    board stays name-locked and non-removable while the
-                    bundled provisioner exists (ADR-0030 / CAKE-157). */}
+                    board is renameable (CAKE-157); Remove stays hidden while
+                    the bundled provisioner exists (ADR-0030). */}
                 {cardMenu.length > 0 && (
                   <MoreMenu label={`More actions for ${inst.name || "PMO"}`} items={cardMenu} />
                 )}
@@ -363,8 +364,8 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
-                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Renaming on Save moves stored secrets with the card and updates scheduled-task board targets; past run records and board markers keep the old name.">
-                  <Input value={inst.name} disabled={!!inst.managed}
+                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Renaming on Save moves stored secrets with the card and updates scheduled-task board targets; past run records and board markers keep the old name. The bundled board's managed role stays app-owned — only the display name moves.">
+                  <Input value={inst.name}
                   onChange={(e) => applyPmoNameChange(idx, inst.name, e.target.value)} />
                   {dr.errors[`cfg.pmos.${idx}.name`] && (
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">

@@ -202,7 +202,7 @@ await withPage(async (page) => {
   check("config PUT carried renamed repo", liveCfg.repos?.[0]?.name === "notebook");
 });
 
-// ── 2. Non-managed PMO rename; managed board has no Rename item ────────────
+// ── 2. Non-managed PMO rename; managed board Rename unlocked (CAKE-157) ───
 await withPage(async (page) => {
   liveCfg = {
     pmos: [
@@ -220,9 +220,16 @@ await withPage(async (page) => {
   await gotoFresh(page, "#/pmo");
   await page.waitForSelector("#pmo");
 
-  // Managed board: no Rename (and no Remove while internal_forge) → no empty ⋯.
-  check("managed board has no per-card MoreMenu",
-    (await page.locator('button[aria-label="More actions for board"]').count()) === 0);
+  // Managed + internal_forge: Rename-only ⋯ (no Remove) — discoverability
+  // exception documented in PmoSection (CAKE-157 / DESIGN.md §3).
+  check("managed board has Rename MoreMenu",
+    (await page.locator('button[aria-label="More actions for board"]').count()) === 1);
+  await page.locator('button[aria-label="More actions for board"]').click();
+  const managedItems = await page.locator('[role="menuitem"]').allTextContents();
+  check("managed board menu offers Rename and not Remove",
+    managedItems.some((t) => /Rename adapter/.test(t))
+    && !managedItems.some((t) => /^Remove/.test(t.trim()) || t.trim() === "Remove"));
+  await page.keyboard.press("Escape");
 
   // Prefer expanded-card menu (≤3 PMOs start expanded); still covers the seam.
   const hint = await renameViaCardMenu(page, "linear1", "team_a");
@@ -254,6 +261,46 @@ await withPage(async (page) => {
     (liveCfg.pmos || []).some((p) => p.name === "team_a"));
   check("cron pmo citation cascaded on Save payload",
     (liveCfg.crons || []).some((c) => c.pmo === "team_a"));
+});
+
+// ── 2b. Managed board rename sticks in the PUT body (CAKE-157) ─────────────
+await withPage(async (page) => {
+  liveCfg = {
+    pmos: [
+      { ...PMO, name: "linear1", repos: [] },
+      { ...MANAGED },
+    ],
+    repos: [{ ...REPO, name: "notes" }],
+    crons: [],
+    dismissed_alerts: [],
+    poll_interval_seconds: 30,
+    adoption_mode: "opt_in",
+  };
+  await mockApis(page);
+  await gotoFresh(page, "#/pmo");
+  await page.waitForSelector("#pmo");
+
+  const mHint = await renameViaCardMenu(page, "board", "missions");
+  check("managed PromptDialog hint says applies on Save",
+    /applies on Save/i.test(mHint) && !/Renames immediately/i.test(mHint));
+
+  await checked("managed rename dirties the draft", async () => {
+    await page.waitForSelector(':text("Unsaved changes")', { timeout: 8000 });
+    return (await page.locator(':text("Unsaved changes")').count()) >= 1;
+  });
+
+  await page.locator('button:has-text("Save changes…")').click();
+  await page.waitForSelector('[role="dialog"]:has-text("Review")', { timeout: 8000 });
+  await page.locator('[role="dialog"] button:has-text("Save")').click();
+  await checked("managed rename Save completes", async () => {
+    await page.waitForTimeout(500);
+    const saved = (await page.locator(':text("All changes saved")').count()) >= 1;
+    const dirty = (await page.locator(':text("Unsaved changes")').count()) >= 1;
+    return saved || !dirty;
+  });
+  const managed = (liveCfg.pmos || []).find((p) => p.managed);
+  check("config PUT carried renamed managed board",
+    managed?.name === "missions" && managed?.managed === true);
 });
 
 // ── 3. Collapsed PMO summary ⋯ opens rename without expand-only dead-end ───

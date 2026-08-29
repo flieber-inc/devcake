@@ -5,13 +5,14 @@ import { Field, Help, SecretField, Input } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Button from "./Button.jsx";
 import Toggle from "./Toggle.jsx";
-import { ConfirmDialog } from "./Modal.jsx";
+import { ConfirmDialog, PromptDialog } from "./Modal.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import InstantZone from "./InstantZone.jsx";
 import MoreMenu from "./MoreMenu.jsx";
 import RepoChips from "./RepoChips.jsx";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "./ClearSecretsDialog.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
+import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "../lib/draftErrors.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
@@ -28,6 +29,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   const [clearSecrets, setClearSecrets] = useState(false);
   const [secretsEpoch, setSecretsEpoch] = useState(0);
   const [clearReloadErr, setClearReloadErr] = useState("");
+  // CAKE-156: discoverable draft rename (PromptDialog → setField; applies on Save)
+  const [renameFor, setRenameFor] = useState(null); // { idx, name } | null
+  const [renameErr, setRenameErr] = useState("");
   // per-PMO intake: App-owned /health (like the sidebar master), never the
   // config draft — Discard must not desync a safety switch from the server.
   const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
@@ -106,6 +110,56 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       title, body, confirmLabel: "I understand — proceed",
       action: () => { setField(path, value); setConfirm(null); },
     });
+
+  // Shared by the inline name Input and the Rename adapter PromptDialog.
+  const applyPmoNameChange = (idx, prev, next) => {
+    newPmoNames.rename(prev, next);
+    setField(`cfg.pmos.${idx}.name`, next);
+    if (prev && next && prev !== next) {
+      (cfg.crons || []).forEach((c, ci) => {
+        if (!c.reserved && c.pmo === prev)
+          setField(`cfg.crons.${ci}.pmo`, next);
+      });
+    }
+  };
+
+  const requestRemovePmo = (inst, idx) => {
+    const doRemove = () => {
+      newPmoNames.untrack(inst.name);
+      setField("cfg.pmos", cfg.pmos.filter((_, i) => i !== idx));
+    };
+    if (savedPmoNames.has(inst.name)) {
+      setConfirm({
+        title: `Remove PMO instance "${inst.name}"?`,
+        body: "Removing it and saving permanently deletes its stored API key; in-flight runs of this instance fail cleanly. Nothing changes until you Save.",
+        confirmLabel: "Remove from draft",
+        action: () => { doRemove(); setConfirm(null); },
+      });
+    } else doRemove();
+  };
+
+  // Per-card ⋯: Rename (non-managed) + Remove. Empty when managed board is
+  // also non-removable — never a one-item menu for a lone visible action
+  // that isn't secondary to something else; here both are secondary.
+  const pmoCardMenuItems = (inst, idx) => {
+    const items = [];
+    if (!inst.managed) {
+      items.push({
+        label: "Rename adapter",
+        desc: "Applies on Save — secrets and cron board targets follow; past runs keep the old name.",
+        onClick: () => { setRenameErr(""); setRenameFor({ idx, name: inst.name }); },
+      });
+    }
+    if (cfg.pmos.length > 1 && !(inst.managed && health.internal_forge)) {
+      items.push({
+        label: "Remove",
+        danger: true,
+        desc: "Removes the card from the draft; saving deletes its stored API key.",
+        onClick: () => requestRemovePmo(inst, idx),
+      });
+    }
+    return items;
+  };
 
   // per-instance tests (schema v3 / M10): keyed pmo:{name} / forge:{name}
   const testPmo = async (name) => {
@@ -202,33 +256,43 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           const fq = cfg.pmos.length > 5 ? pmoFilter.trim().toLowerCase() : "";
           if (fq && !(inst.name || "").toLowerCase().includes(fq)) return null;
           const tr = testResult[`pmo:${inst.name}`];
+          const cardMenu = pmoCardMenuItems(inst, idx);
           if (!expandedPmos.has(idx)) {
             return (
-              <button key={`${idx}-${secretsEpoch}`} type="button"
-                data-testid="pmo-summary-row"
-                aria-label={`Expand PMO instance ${inst.name}`}
-                onClick={() => togglePmoCard(idx)}
-                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
-                <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
-                <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{inst.system}</span>
-                {inst.managed && (
-                  <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
-                    Bundled board
-                  </span>
-                )}
-                {inst.team_key && (
-                  <span className="text-xs text-neutral-500 dark:text-neutral-400">{inst.team_key}</span>
-                )}
-                <span className="ml-auto flex shrink-0 items-center gap-3">
-                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
-                    {(inst.repos || []).length} repo{(inst.repos || []).length === 1 ? "" : "s"}
-                  </span>
-                  {(health.pmo_instances || {})[inst.name]?.intake_paused && (
-                    <span className="text-[11px] text-amber-600 dark:text-amber-400">intake paused</span>
+              <div key={`${idx}-${secretsEpoch}`}
+                className="flex items-stretch rounded-card border border-neutral-200 dark:border-neutral-800">
+                <button type="button"
+                  data-testid="pmo-summary-row"
+                  aria-label={`Expand PMO instance ${inst.name}`}
+                  onClick={() => togglePmoCard(idx)}
+                  className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-neutral-900">
+                  <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                  <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{inst.system}</span>
+                  {inst.managed && (
+                    <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                      Bundled board
+                    </span>
                   )}
-                  <span aria-hidden className="text-xs text-neutral-400">▸</span>
-                </span>
-              </button>
+                  {inst.team_key && (
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">{inst.team_key}</span>
+                  )}
+                  <span className="ml-auto flex shrink-0 items-center gap-3">
+                    <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                      {(inst.repos || []).length} repo{(inst.repos || []).length === 1 ? "" : "s"}
+                    </span>
+                    {(health.pmo_instances || {})[inst.name]?.intake_paused && (
+                      <span className="text-[11px] text-amber-600 dark:text-amber-400">intake paused</span>
+                    )}
+                    <span aria-hidden className="text-xs text-neutral-400">▸</span>
+                  </span>
+                </button>
+                {cardMenu.length > 0 && (
+                  <span className="flex shrink-0 items-center pr-2"
+                    onClick={(e) => e.stopPropagation()}>
+                    <MoreMenu label={`More actions for ${inst.name || "PMO"}`} items={cardMenu} />
+                  </span>
+                )}
+              </div>
             );
           }
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
@@ -263,28 +327,11 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     </span>
                   )}
                 </span>
-                {/* the managed board is not removable while the bundled
-                    provisioner exists — the next boot would resurrect it and
-                    deleting would orphan its app-minted PAT (ADR-0030) */}
-                {cfg.pmos.length > 1 && !(inst.managed && health.internal_forge) && (
-                  <Button kind="danger-ghost" onClick={() => {
-                    const doRemove = () => {
-                      newPmoNames.untrack(inst.name);
-                      setField("cfg.pmos", cfg.pmos.filter((_, i) => i !== idx));
-                    };
-                    if (savedPmoNames.has(inst.name)) {
-                      // saving the removal permanently deletes the stored
-                      // secret — worth an explicit confirm (audit A21)
-                      setConfirm({
-                        title: `Remove PMO instance "${inst.name}"?`,
-                        body: "Removing it and saving permanently deletes its stored API key; in-flight runs of this instance fail cleanly. Nothing changes until you Save.",
-                        confirmLabel: "Remove from draft",
-                        action: () => { doRemove(); setConfirm(null); },
-                      });
-                    } else doRemove();
-                  }}>
-                    Remove
-                  </Button>
+                {/* Rename + Remove share the card ⋯ (DESIGN.md §3). Managed
+                    board stays name-locked and non-removable while the
+                    bundled provisioner exists (ADR-0030 / CAKE-157). */}
+                {cardMenu.length > 0 && (
+                  <MoreMenu label={`More actions for ${inst.name || "PMO"}`} items={cardMenu} />
                 )}
               </div>
               {saved ? (
@@ -318,18 +365,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 <Field label="Instance name"
                   help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Renaming on Save moves stored secrets with the card and updates scheduled-task board targets; past run records and board markers keep the old name.">
                   <Input value={inst.name} disabled={!!inst.managed}
-                  onChange={(e) => {
-                    const prev = inst.name;
-                    const next = e.target.value;
-                    newPmoNames.rename(prev, next);
-                    setField(`cfg.pmos.${idx}.name`, next);
-                    if (prev && next && prev !== next) {
-                      (cfg.crons || []).forEach((c, ci) => {
-                        if (!c.reserved && c.pmo === prev)
-                          setField(`cfg.crons.${ci}.pmo`, next);
-                      });
-                    }
-                  }} />
+                  onChange={(e) => applyPmoNameChange(idx, inst.name, e.target.value)} />
                   {dr.errors[`cfg.pmos.${idx}.name`] && (
                     <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
                       ✗ {dr.errors[`cfg.pmos.${idx}.name`]}
@@ -513,6 +549,29 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />
+      <PromptDialog open={!!renameFor}
+        title={`Rename adapter "${renameFor?.name || ""}"`}
+        label="New name" initial={renameFor?.name || ""}
+        hint="Renaming applies on Save: stored secrets move with the card and scheduled-task board targets update; past run records and board markers keep the old name."
+        confirmLabel="Rename" error={renameErr}
+        onConfirm={(nn) => {
+          if (!renameFor) return;
+          if (nn === renameFor.name) { setRenameFor(null); setRenameErr(""); return; }
+          // draft rename has no server round-trip to reject a bad name —
+          // validate HERE so the dialog never closes over a doomed Save
+          if (!INSTANCE_NAME_RE.test(nn)) {
+            setRenameErr(`Not a valid instance name: ${INSTANCE_NAME_RULE}.`);
+            return;
+          }
+          if (cfg.pmos.some((p, i) => i !== renameFor.idx && p.name === nn)) {
+            setRenameErr(`A PMO instance named "${nn}" already exists.`);
+            return;
+          }
+          setRenameErr("");
+          applyPmoNameChange(renameFor.idx, renameFor.name, nn);
+          setRenameFor(null);
+        }}
+        onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
       {clearSecrets && (
         <ClearSecretsDialog
           context="pmo"

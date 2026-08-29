@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "check:ui": "node tests/run.mjs",
-    "test:helpers": "node tests/markdown_helpers.mjs && node tests/format_helpers.mjs && node tests/deps_helpers.mjs && node tests/board_helpers.mjs && node tests/config_draft.mjs && node tests/contracts.mjs && node tests/req_seq.mjs && node tests/mission_identity.mjs && node tests/alerts.mjs && node tests/design_tokens.mjs && node tests/unused_repos.mjs && node tests/fleet_expand.mjs && node tests/services_helpers.mjs && node tests/memory_notebook.mjs && node tests/banner_copy.mjs && node tests/list_window_helpers.mjs"
+    "test:helpers": "node tests/markdown_helpers.mjs && node tests/format_helpers.mjs && node tests/deps_helpers.mjs && node tests/board_helpers.mjs && node tests/config_draft.mjs && node tests/contracts.mjs && node tests/req_seq.mjs && node tests/mission_identity.mjs && node tests/alerts.mjs && node tests/design_tokens.mjs && node tests/unused_repos.mjs && node tests/fleet_expand.mjs && node tests/services_helpers.mjs && node tests/memory_notebook.mjs && node tests/banner_copy.mjs && node tests/list_window_helpers.mjs && node tests/repo_rename_cascade.mjs && node tests/adapter_rename_menu.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.2.10",

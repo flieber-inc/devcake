@@ -1758,3 +1758,48 @@ def test_config_put_rename_refused_while_runs_active(monkeypatch, tmp_path):
     _put({"pmos": [{"name": "linearb", "system": "linear",
                     "team_key": "ENG", "repos": ["main"]}]})
     assert [p.name for p in cfg.pmos] == ["linearb"]
+
+
+def test_config_put_rename_rebuilds_adapters_after_secret_move(
+        monkeypatch, tmp_path):
+    """Adapters capture their credential VALUE at construction, and the
+    apply-path reload runs BEFORE the secret files move — so a renamed
+    instance's adapter is born with an empty key. The PUT must reload a
+    second time once the files sit under the new name, or the renamed
+    board/PMO polls dead until an unrelated reload (CAKE-157 review)."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    secrets.write_connection_secret("pmo", "linear", "api_key",
+                                    "lin_api_rebuild_77")
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters",
+                        lambda *a, **k: None)
+
+    key_at_reload: list[str] = []
+
+    def reload():
+        key_at_reload.append(
+            secrets.read_connection_secret("pmo", "linearb", "api_key"))
+
+    body = {"pmos": [{"name": "linearb", "system": "linear",
+                      "team_key": "ENG", "repos": ["main"]}]}
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=reload))
+    # first reload: files not yet moved (empty under the new name);
+    # second reload: rebuilt AFTER the move — the adapter gets the key
+    assert key_at_reload == ["", "lin_api_rebuild_77"]
+
+    # a PUT without renames keeps the single-reload contract
+    key_at_reload.clear()
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            {"poll_interval_seconds": 50}, config=cfg, dev_types={},
+            managers={}, reload=reload))
+    assert len(key_at_reload) == 1

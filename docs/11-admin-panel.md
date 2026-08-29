@@ -200,7 +200,7 @@ Connection tests fail clearly when a required secret is absent.
 ### PMO connection (own page: `#/pmo`, Adapters item — `#/config/pmo` redirects)
 Fields edit configured PMO instances (`02-domain-model.md` §9); section copy
 renders from `GET /connections/registry` and stays **PMO-neutral**.
-- System selector, instance name, team/workspace key.
+- System selector, instance name (`^[a-z][a-z0-9_]{0,38}$` — underscore OK, ≤39, no hyphens; draft + server validate in lockstep), team/workspace key.
 - **API key VALUE** via secret field (`/data/secrets/connections/pmo-{name}.json`) — Set / clear; ✓ from `secrets-check`.
 - Validated by **Test connection** (`POST /api/v1/connections/pmo/{name}/test`).
 - **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* Remember: the whole team is in the agent trust boundary (`14` §0). The confirm writes the draft; Save applies it.

@@ -53,7 +53,7 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
             # there) is the exact hazard the marker exists to avoid (A26)
             return None, (f"unparseable `devcake-repo:` marker "
                           f"{raw.group(1)[:40]!r} — repo names are lowercase "
-                          f"alnum, ≤12 chars; fix the marker")
+                          f"letters/digits/underscores, ≤39; fix the marker")
 
     sticky = next((r.repo_ref for r in run_history if r.repo_ref), None)
     if sticky is not None:

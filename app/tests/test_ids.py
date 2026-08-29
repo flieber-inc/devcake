@@ -40,3 +40,24 @@ def test_instance_prefix_separates_colliding_missions():
     b = make_run_id("linteamb", "DEV-17", 1, "EXECUTE")
     assert a.startswith("LINTEAMA-DEV-17-1-EXECUTE-")
     assert b.startswith("LINTEAMB-DEV-17-1-EXECUTE-")
+
+
+def test_long_underscored_instance_keeps_branch_full_and_run_id_budget():
+    """Widened instance names (CAKE-151): branches use the full uppercased
+    identity; run ids keep a 12-char scrubbed prefix and stay ≤64."""
+    from devcake.ports.forge import mission_branch
+
+    name = "acme_engineering_board"  # 22 chars, underscore
+    assert mission_branch(name, "DEV-1") == "devcake/ACME_ENGINEERING_BOARD-DEV-1"
+    rid = make_run_id(name, "DEV-1", 1, "EXECUTE")
+    assert rid.startswith("ACME_ENGINEE-DEV-1-1-EXECUTE-")
+    assert len(rid) <= 64
+    assert re.fullmatch(r"[-a-zA-Z0-9_]+", rid)
+    # Max-length identity (39): prefix is still first 12 scrubbed upper
+    long39 = "a" + ("b" * 38)
+    rid39 = make_run_id(long39, "DEV-1", 1, "PLAN")
+    assert rid39.startswith("A" + ("B" * 11) + "-DEV-1-1-PLAN-")
+    assert len(rid39) <= 64
+    # Legacy short names unchanged
+    assert make_run_id("linear", "DEV-1", 1, "EXECUTE").startswith(
+        "LINEAR-DEV-1-1-EXECUTE-")

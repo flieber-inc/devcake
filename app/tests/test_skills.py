@@ -31,8 +31,9 @@ def test_devtype_skills_accepts_valid_names_and_dedupes():
 @pytest.mark.parametrize("bad", [
     "", "UPPER", "has space", "-leading-hyphen", "a" * 65, "dot.name",
     # external `<source>/<skill>` shape violations (ADR-0016 addendum 2):
-    # one slash max, prefix instance-shaped (starts alpha, no hyphens, ≤12)
-    "a/b/c", "SL/ash", "1x/skill", "has-hyphen/skill", "toolongcardxx/skill",
+    # one slash max, prefix instance-shaped (starts alpha, no hyphens, ≤39)
+    "a/b/c", "SL/ash", "1x/skill", "has-hyphen/skill",
+    f"{'a' * 40}/skill",
     "/ash", "sl/",
 ])
 def test_devtype_skills_rejects_bad_names(bad):

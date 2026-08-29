@@ -25,14 +25,25 @@ def _suffix(n: int = 6) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 
 
+def run_id_instance_prefix(instance: str) -> str:
+    """Scrubbed uppercased instance segment embedded in make_run_id (≤12).
+
+    Instance identities may be longer (config: ≤39, underscore allowed);
+    run ids keep a 12-char prefix so the 64-char Dagu budget holds.
+    AppConfig refuses two live names whose prefixes collide.
+    """
+    return _SAFE.sub("", instance.upper())[:12]
+
+
 def make_run_id(instance: str, mission_key: str, seq: int, mission_type: str) -> str:
     """{INSTANCE}-{key}-{seq}-{TYPE}-{suffix}. The uppercased PMO-instance
     prefix (schema v3) keeps run ids — and therefore ACL users, container
-    names, and reply streams — collision-free across instances. Instance
-    names are ≤12 lowercase alnum chars (config validator), so the 64-char
-    Dagu budget holds. HELLO/OAUTH runs pass the fixed pseudo-instance "sys"
-    (instance-less by design; they finalize inside RunManager)."""
-    inst = _SAFE.sub("", instance.upper())[:12]
+    names, and reply streams — collision-free across instances. The
+    instance segment is scrubbed-upper truncated to 12 chars (full identity
+    may be longer; config enforces prefix uniqueness). HELLO/OAUTH runs
+    pass the fixed pseudo-instance "sys" (instance-less by design; they
+    finalize inside RunManager)."""
+    inst = run_id_instance_prefix(instance)
     key = _SAFE.sub("-", mission_key).strip("-")[:24]
     mtype = _SAFE.sub("", mission_type.upper())[:12]
     run_id = f"{inst}-{key}-{seq}-{mtype}-{_suffix()}"

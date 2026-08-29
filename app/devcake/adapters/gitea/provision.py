@@ -46,8 +46,8 @@ ACTIVITY_RO_USER = "devcake-activity-ro"  # shared RO clone account for
 # OPERATOR_ORG holding Claude Code skills. Deliberately NO branch protection,
 # NO machine user, NO tokens — operators push skills straight to main via the
 # Gitea UI; the app reads it with the admin credential. `skill-store` cannot
-# collide with a repo card: card names must match ^[a-z][a-z0-9]{0,11}$
-# (no hyphen — config._INSTANCE_NAME_RE).
+# collide with a repo card: card names must match config._INSTANCE_NAME_RE
+# (lowercase [a-z][a-z0-9_]{0,38} — underscore OK, no hyphen).
 SKILL_REPO = "skill-store"
 
 # ADR-0030: the default PMO board. A THIRD org, deliberately: the mission
@@ -581,7 +581,9 @@ class GiteaProvisioner:
             if not name.startswith(ACTIVITY_PREFIX):
                 continue
             # activity-{instance}-{key}: mission key = after the first
-            # hyphen past the instance (the admin-surface idiom)
+            # hyphen past the instance (instance may contain '_'; never
+            # '-' — config._INSTANCE_NAME_RE — so the first '-' is the
+            # compound separator).
             stem = name[len(ACTIVITY_PREFIX):]
             repos.append(InternalRepo(
                 name=name, mission_key=stem.split("-", 1)[-1],

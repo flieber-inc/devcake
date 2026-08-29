@@ -1,8 +1,8 @@
 """Dev Types / prompt templates / assignments application service
 (ADR-0015 Decision 3): per-Mission-Type and per-Dev-Type prompt template
-CRUD, the harness registry, Dev Type CRUD + rename + credential upload, and
-mission-type assignments. main.py keeps thin forwards that pass the
-composition root's singletons at call time."""
+CRUD, the harness registry, Dev Type CRUD + rename + clone + credential
+upload, and mission-type assignments. main.py keeps thin forwards that pass
+the composition root's singletons at call time."""
 
 from __future__ import annotations
 
@@ -205,6 +205,83 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
         shared_breakers[new] = shared_breakers.pop(name)
     publish_keep_set(dev_types)
     return {"renamed": True, "name": new}
+
+
+def _rewrite_copied_devtype_prompt_labels(templates_dir, new_name: str) -> None:
+    """After copytree, rewrite embedded ``dev_type:`` to the clone name.
+
+    Seed/save write ``dev_type`` into each YAML; leaving the source name is
+    cosmetic for resolve (which reads ``template``) but wrong on disk.
+    """
+    import yaml
+    from ..config import _atomic_yaml
+
+    if not templates_dir.is_dir():
+        return
+    for path in templates_dir.glob("*.yaml"):
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("dev_type") == new_name:
+            continue
+        data = dict(data)
+        data["dev_type"] = new_name
+        _atomic_yaml(path, data)
+
+
+async def clone_dev_type(name: str, body: dict, *, config, dev_types,
+                         shared_breakers=None):
+    """Clone a Dev Type (CAKE-149): copy YAML fields + prompt templates under
+    a new name. Credentials, assignments, steward, and breakers are untouched
+    — the clone starts like a hand-created type on those surfaces."""
+    import shutil
+    from pathlib import Path as _P
+
+    new = str(body.get("new_name") or "")
+    if name not in dev_types:
+        raise HTTPException(404, f"no Dev Type named {name!r}")
+    if not DEV_TYPE_NAME_RE.fullmatch(name or ""):
+        raise HTTPException(422, "name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    if not DEV_TYPE_NAME_RE.fullmatch(new) or ":" in new:
+        raise HTTPException(422, "new_name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    if new in dev_types:
+        raise HTTPException(409, f"a Dev Type named {new!r} already exists")
+
+    dt = dev_types[name].model_copy(update={"name": new})
+    if config is not None:
+        try:
+            validate_memory_bindings(config, dev_types={**dev_types, new: dt})
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    data = _P(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
+    templates_root = data / "config" / "devtype_prompt_templates"
+    try:
+        src = confined(templates_root, name)
+        dst = confined(templates_root, new)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+    # Persist the new type only after path confinement succeeds so a bad
+    # new_name cannot leave a half-created row.
+    dev_types[new] = dt
+    save_dev_type(dt)
+
+    if src.is_dir():
+        shutil.copytree(str(src), str(dst))
+        _rewrite_copied_devtype_prompt_labels(dst, new)
+    else:
+        prompt_templates.seed_devtype_prompts({new: dt})
+
+    if name in config.active_devtype_prompts:
+        config.active_devtype_prompts[new] = config.active_devtype_prompts[name]
+        save_config(config)
+
+    publish_keep_set(dev_types)
+    return {"cloned": True, "name": new}
 
 
 async def remove_dev_type(name: str, *, config, dev_types):

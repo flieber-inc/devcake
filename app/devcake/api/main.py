@@ -640,6 +640,14 @@ async def rename_dev_type(name: str, body: dict):
         shared_breakers=s.shared_breakers)
 
 
+@app.post("/api/v1/dev-types/{name}/clone")
+async def clone_dev_type(name: str, body: dict):
+    s = svc()
+    return await devtypes_service.clone_dev_type(
+        name, body, config=s.config, dev_types=s.dev_types,
+        shared_breakers=s.shared_breakers)
+
+
 @app.delete("/api/v1/dev-types/{name}")
 async def remove_dev_type(name: str):
     s = svc()

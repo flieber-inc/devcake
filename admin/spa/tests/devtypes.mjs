@@ -75,6 +75,29 @@ await withPage(async (page) => {
       '[role="dialog"]:has-text("New Dev Type")').count()) === 1;
   });
   await page.click('[role="dialog"] button:has-text("Cancel")');
+
+  // 5: row ⋯ Clone opens PromptDialog (cancelled — no server write)
+  const more = page.locator('#dev-types button[aria-label^="More actions for"]').first();
+  if (!(await more.count())) {
+    skip("Clone MoreMenu", "no Dev Type rows on this stack");
+  } else {
+    await more.click();
+    await checked("row MoreMenu lists Clone", async () => {
+      await page.waitForSelector('[role="menuitem"]:has-text("Clone"), button:has-text("Clone")',
+        { timeout: 5000 });
+      return (await page.locator(':text-is("Clone")').count()) >= 1;
+    });
+    await page.locator(':text-is("Clone")').first().click();
+    await checked("Clone opens PromptDialog", async () => {
+      await page.waitForSelector('[role="dialog"]:has-text("Clone Dev Type")',
+        { timeout: 8000 });
+      return (await page.locator(
+        '[role="dialog"]:has-text("Clone Dev Type")').count()) === 1;
+    });
+    check("Clone dialog mentions credentials are not copied",
+      (await page.locator('[role="dialog"]:has-text("Credentials are not copied")').count()) >= 1);
+    await page.click('[role="dialog"] button:has-text("Cancel")');
+  }
 });
 
 summary("devtypes");

@@ -78,11 +78,11 @@ function OAuthWizard({ devType, onClose }) {
 // ── Roster table ─────────────────────────────────────────────────────────────
 // Re-decision of DESIGN.md §2's roster grid (founder-directed 2026-08-02,
 // bulk-scale: 12+ Dev Types made tile cards unwieldy). The invariants
-// survive the form change: the whole row opens the editor, Rename/Delete
-// stay behind the ⋯, the dashed "New Dev Type" row is the SOLE create
+// survive the form change: the whole row opens the editor, Rename/Clone/Delete
+// stay behind the ⋯, the dashed "New Dev Type" row is the SOLE blank create
 // affordance, and credential readiness is never hidden.
 
-function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRename, onDelete }) {
+function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRename, onClone, onDelete }) {
   const d = draftDt;
   const h = harnesses[d.harness_template] || {};
   const ready = useCredsReady(d, serverDt, h);
@@ -131,6 +131,9 @@ function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRena
           { label: "Rename",
             desc: "Config, credentials and prompt templates follow the new name.",
             onClick: () => onRename(name) },
+          { label: "Clone",
+            desc: "Creates a new Dev Type with the same config and prompts; credentials are not copied — reconnect on the clone.",
+            onClick: () => onClone(name) },
           { label: "Delete Dev Type", danger: true,
             desc: "Removes its config and this Dev Type's credential files; shared model keys and connection secrets stay.",
             onClick: () => onDelete(name) },
@@ -154,6 +157,9 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
   const [renameFor, setRenameFor] = useState(null);
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameErr, setRenameErr] = useState("");
+  const [cloneFor, setCloneFor] = useState(null);
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneErr, setCloneErr] = useState("");
   // skill store catalog — read here only for the editor's skill chips;
   // authoring (add/delete/restore) lives in the Skills section. On a fetch
   // failure `catalogErr` is set so the editor can render selected skills as
@@ -186,6 +192,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
     });
   };
   const onRename = (nm) => { setRenameErr(""); setRenameFor(nm); };
+  const onClone = (nm) => { setCloneErr(""); setCloneFor(nm); };
   // render-time guard, not state cleanup: rename/delete/reload can invalidate
   // editFor at any moment — the editor only mounts while the name exists
   const editing = editFor && dr.draft.devTypes[editFor] && dr.server.devTypes[editFor]
@@ -197,7 +204,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
         description="Your agent roster — open a row to configure harness, model, skills and credentials."
         actions={
           <>
-            <ImmediateBadge text="create/delete apply immediately" />
+            <ImmediateBadge text="create/clone/delete apply immediately" />
             {/* creation lives on the table's dashed row — no header twin */}
             <MoreMenu label="More Dev Types actions" items={[
               { label: "Prune unused Dev images",
@@ -232,6 +239,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
                   edited={dr.diff.some((x) => x.path.startsWith(`devTypes.${name}.`))}
                   onEdit={setEditFor}
                   onRename={onRename}
+                  onClone={onClone}
                   onDelete={onDelete} />
               ))}
               <tr className="border-t border-neutral-100 dark:border-neutral-800">
@@ -349,6 +357,24 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
           finally { setRenameBusy(false); }
         }}
         onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
+      <PromptDialog open={!!cloneFor}
+        title={`Clone Dev Type "${cloneFor}"`}
+        label="New name" initial=""
+        hint="Creates immediately with the same config and prompts. Credentials are not copied — reconnect on the clone."
+        confirmLabel="Clone" busy={cloneBusy} error={cloneErr}
+        onConfirm={async (nn) => {
+          const name = (nn || "").trim();
+          if (!name) { setCloneErr("name is required"); return; }
+          setCloneBusy(true); setCloneErr("");
+          try {
+            await send("POST", `/dev-types/${cloneFor}/clone`, { new_name: name });
+            setCloneFor(null);
+            await reload();
+            setEditFor(name);
+          } catch (e) { setCloneErr(String(e.message || e).replace(/^\d+ /, "")); }
+          finally { setCloneBusy(false); }
+        }}
+        onCancel={() => { setCloneFor(null); setCloneErr(""); }} />
     </>
   );
 }

@@ -636,6 +636,21 @@ def test_list_activity_repos_prefix_filter_paginated(tmp_path, monkeypatch):
     assert repos[0].mission_key == "t-1"
 
 
+def test_list_activity_repos_underscored_instance_key_parse(tmp_path, monkeypatch):
+    """CAKE-151: underscore in the instance segment must not become a hyphen,
+    or the first-hyphen split returns the wrong mission_key."""
+    from devcake.ports.internal_forge import activity_repo_name
+    name = activity_repo_name("acme_eng", "DEV-1")
+    assert name == "activity-acme_eng-dev-1"
+    rec = _ActivityRecorder(org_pages=[[{"name": name, "size": 1,
+                                         "updated_at": "2026-08-29"}]])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    repos = run_coro(prov.list_activity_repos())
+    assert len(repos) == 1
+    assert repos[0].name == name
+    assert repos[0].mission_key == "dev-1"
+
+
 def test_list_repos_walks_past_first_page(tmp_path, monkeypatch):
     """Mission-org list_repos must not stop at limit=50 — page 2+ repos
     remain visible to the admin Repositories surface."""

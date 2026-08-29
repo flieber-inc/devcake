@@ -26,6 +26,21 @@ def test_activity_repo_name_prefix_and_cap():
     assert long.startswith(ACTIVITY_PREFIX)
 
 
+def test_internal_repo_name_preserves_underscore_in_instance():
+    """CAKE-151: INSTANCE_NAME_BODY allows '_'; the compound scrubber must
+    keep it so {instance}-{key} stays unambiguous ('_' ≠ '-' separator)."""
+    assert internal_repo_name("acme_eng", "DEV-1") == "acme_eng-dev-1"
+    assert internal_repo_name("acme", "ENG-DEV-1") == "acme-eng-dev-1"
+    assert internal_repo_name("acme_eng", "DEV-1") != internal_repo_name(
+        "acme", "ENG-DEV-1")
+    # activity wrapper + first-hyphen-after-prefix parse (same idiom as
+    # adapters/gitea/provision.py::list_activity_repos) recovers the key
+    name = activity_repo_name("acme_eng", "DEV-1")
+    assert name == "activity-acme_eng-dev-1"
+    stem = name[len(ACTIVITY_PREFIX):]
+    assert stem.split("-", 1)[-1] == "dev-1"
+
+
 # ── dispatch pre-push hook (slice 3.8) ───────────────────────────────────────
 
 from devcake.domain.model import MissionType

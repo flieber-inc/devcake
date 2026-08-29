@@ -320,6 +320,10 @@ def test_internal_repo_naming_and_port_helper():
     assert internal_repo_name("linteama", "PRJ-Big Report!") == "linteama-prj-big-report"
     # bounded for the run-id / repo-name budget
     assert len(internal_repo_name("linear", "X" * 80)) <= 60
+    # CAKE-151: underscore in the instance identity must survive scrubbing
+    assert internal_repo_name("acme_eng", "DEV-1") == "acme_eng-dev-1"
+    assert internal_repo_name("acme_eng", "DEV-1") != internal_repo_name(
+        "acme", "ENG-DEV-1")
 
 
 def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):

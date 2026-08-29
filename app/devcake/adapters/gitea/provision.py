@@ -581,7 +581,9 @@ class GiteaProvisioner:
             if not name.startswith(ACTIVITY_PREFIX):
                 continue
             # activity-{instance}-{key}: mission key = after the first
-            # hyphen past the instance (the admin-surface idiom)
+            # hyphen past the instance (instance may contain '_'; never
+            # '-' — config._INSTANCE_NAME_RE — so the first '-' is the
+            # compound separator).
             stem = name[len(ACTIVITY_PREFIX):]
             repos.append(InternalRepo(
                 name=name, mission_key=stem.split("-", 1)[-1],

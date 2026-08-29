@@ -890,7 +890,9 @@ def test_get_skill_external_reads_the_mirror_and_stays_read_only(tmp_path):
         _run(svc.delete_skill("myrepo/tdd"))
 
 
-def test_external_infos_lists_every_skill_in_referenced_sources(tmp_path):
+def test_external_infos_lists_every_skill_in_named_sources(tmp_path):
+    """Catalog rows are driven by skill SOURCE names (CAKE-146) — every
+    skill in those trees, not only Dev Type–referenced prefixes."""
     svc, mirror = _ext_svc(tmp_path)
     mirror.trees[("myrepo", "")] = {
         "tdd": {"SKILL.md": 5}, "review": {"SKILL.md": 5, "extra.md": 3}}
@@ -898,11 +900,12 @@ def test_external_infos_lists_every_skill_in_referenced_sources(tmp_path):
         b"---\ndescription: A\n---\n")
     mirror.files[("myrepo", "review", "SKILL.md")] = (
         b"---\ndescription: B\n---\n")
-    infos = _run(svc.external_infos(["myrepo/tdd"]))
+    infos = _run(svc.external_infos(["myrepo"]))
     assert [(i.name, i.source, i.origin, i.files) for i in infos] == [
         ("myrepo/review", "external", "myrepo", 2),
         ("myrepo/tdd", "external", "myrepo", 1)]
-    assert _run(svc.external_infos(["flat-name"])) == []
+    # unknown / unconfigured source name contributes nothing
+    assert _run(svc.external_infos(["flatname"])) == []
 
 
 def test_get_skill_external_caps_ride_the_one_collect_pipe(tmp_path):
@@ -924,14 +927,135 @@ def test_get_skill_external_caps_ride_the_one_collect_pipe(tmp_path):
 
 def test_external_infos_skips_oversized_manifests_without_reading(tmp_path):
     """Same audit class for the catalog: an oversized SKILL.md on a
-    referenced skill source gets a placeholder description, never a fetch."""
+    skill source gets a placeholder description, never a fetch."""
     from devcake.domain import skills as skills_mod
     svc, mirror = _ext_svc(tmp_path)
     mirror.trees[("myrepo", "")] = {
         "big": {"SKILL.md": skills_mod.MAX_FILE_BYTES + 1},
         "ok": {"SKILL.md": 5}}
     mirror.files[("myrepo", "ok", "SKILL.md")] = b"---\ndescription: A\n---\n"
-    infos = _run(svc.external_infos(["myrepo/ok"]))
+    infos = _run(svc.external_infos(["myrepo"]))
     assert [(i.name, i.description.startswith("(SKILL.md exceeds"))
             for i in infos] == [("myrepo/big", True), ("myrepo/ok", False)]
     assert ("myrepo", "big", "SKILL.md") not in mirror.reads
+
+
+def test_list_skills_catalog_includes_all_configured_sources_without_devtype_refs(
+        tmp_path, monkeypatch):
+    """CAKE-146: GET /skills external rows come from every configured
+    skill_sources entry — zero Dev Type refs must not hide a synced source."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import internal_repos_service as irs
+    from devcake.config import AppConfig, SkillSource
+    from devcake.domain.skills import SkillInfo
+
+    class FakeSkillService:
+        def __init__(self):
+            self.asked = None
+
+        async def list_skills(self):
+            return [], {"enabled": False, "ok": False,
+                        "detail": "disabled", "html_url": ""}
+
+        async def external_infos(self, sources):
+            self.asked = list(sources)
+            return [
+                SkillInfo(name="alpha/tdd", description="A",
+                          source="external", files=1, builtin=False,
+                          origin="alpha"),
+                SkillInfo(name="beta/review", description="B",
+                          source="external", files=1, builtin=False,
+                          origin="beta"),
+            ]
+
+    svc = FakeSkillService()
+    cfg = AppConfig(pmos=[], repos=[], skill_sources=[
+        SkillSource(name="alpha", url="https://gh.example/o/a"),
+        SkillSource(name="beta", url="https://gh.example/o/b"),
+    ])
+    out = _run(irs.list_skills(skill_service=svc, config=cfg, dev_types={}))
+    assert svc.asked == ["alpha", "beta"]
+    assert [s["name"] for s in out["skills"]] == ["alpha/tdd", "beta/review"]
+
+
+def test_list_skills_catalog_skips_external_when_no_skill_sources(tmp_path,
+                                                                  monkeypatch):
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import internal_repos_service as irs
+    from devcake.config import AppConfig
+    from types import SimpleNamespace
+
+    class FakeSkillService:
+        async def list_skills(self):
+            return [], {"enabled": False, "ok": False,
+                        "detail": "disabled", "html_url": ""}
+
+        async def external_infos(self, sources):
+            raise AssertionError(
+                f"external_infos must not run with empty sources: {sources!r}")
+
+    # Dev Type still references an external name — catalog must NOT use that
+    # gate anymore (configured sources only)
+    dts = {"senior-dev": SimpleNamespace(skills=["ghost/tdd"])}
+    out = _run(irs.list_skills(
+        skill_service=FakeSkillService(), config=AppConfig(pmos=[], repos=[]),
+        dev_types=dts))
+    assert out["skills"] == []
+
+
+def test_refresh_skill_sources_ensure_fresh_all_configured_names(tmp_path,
+                                                                  monkeypatch):
+    """CAKE-146 Update now: ensure_fresh every configured skill source,
+    independent of Dev Type selections / Restore built-ins."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import internal_repos_service as irs
+    from devcake.config import AppConfig, SkillSource
+
+    class FakeCache:
+        def __init__(self):
+            self.asked = None
+
+        async def ensure_fresh(self, names):
+            self.asked = list(names)
+            return True, {}
+
+    cache = FakeCache()
+    cfg = AppConfig(pmos=[], repos=[], skill_sources=[
+        SkillSource(name="shelf", url="https://gh.example/o/shelf"),
+        SkillSource(name="toolbox", url="https://gh.example/o/toolbox"),
+    ])
+    out = _run(irs.refresh_skill_sources(repo_cache=cache, config=cfg))
+    assert out == {"ok": True}
+    assert cache.asked == ["shelf", "toolbox"]
+
+
+def test_sync_skills_ensure_fresh_uses_all_configured_sources(tmp_path,
+                                                               monkeypatch):
+    """Restore built-ins shares the same ensure_fresh helper over ALL
+    configured skill sources (not Dev Type–referenced only)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from fastapi import HTTPException
+    from devcake.api import internal_repos_service as irs
+    from devcake.config import AppConfig, SkillSource
+    from types import SimpleNamespace
+
+    class FakeCache:
+        def __init__(self):
+            self.asked = None
+
+        async def ensure_fresh(self, names):
+            self.asked = list(names)
+            return True, {}
+
+    cache = FakeCache()
+    cfg = AppConfig(pmos=[], repos=[], skill_sources=[
+        SkillSource(name="shelf", url="https://gh.example/o/shelf"),
+    ])
+    # no internal forge → 503 after refresh; we still assert the chokepoint
+    with pytest.raises(HTTPException) as e:
+        _run(irs.sync_skills(
+            internal_forge=None, skill_service=SimpleNamespace(),
+            repo_cache=cache, config=cfg,
+            dev_types={"x": SimpleNamespace(skills=[])}))
+    assert e.value.status_code == 503
+    assert cache.asked == ["shelf"]

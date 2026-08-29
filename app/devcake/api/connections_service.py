@@ -378,3 +378,40 @@ async def test_forge(name: str, *, config, forge_runtime):
                 "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": _probe_client_error(e)}
+
+
+async def test_skill_source(name: str, *, config, repo_cache):
+    """Read-only connectivity probe for a dedicated skill source (CAKE-146).
+
+    Skill sources have no live forge adapter — token present + authenticated
+    remote reachability via RepoCache.remote_head. Same SPA contract as
+    forge/PMO tests: `{ok, error?, …}` never a 500.
+    """
+    inst = next((s for s in (config.skill_sources or []) if s.name == name),
+                None)
+    if inst is None:
+        raise HTTPException(404, f"no skill source named {name!r}")
+    if not inst.configured:
+        return {"ok": False, "error": "repository URL is empty — the skill "
+                                      "source is idle until one is set"}
+    if not inst.token and not inst.token_ro:
+        return {"ok": False, "error": "no token stored — enter a Read token "
+                                      "(or Token fallback) on this card"}
+    if repo_cache is None:
+        return {"ok": False, "error": "mirror cache unavailable — save the "
+                                      "config and retry"}
+    try:
+        head = await repo_cache.remote_head(name)
+        if not head:
+            return _with_error({
+                "ok": False,
+                "skill_source": name,
+                "forge": inst.forge,
+                "repo": inst.url,
+                "detail": "could not reach the remote — check the URL, "
+                          "token, and network",
+            })
+        return {"ok": True, "skill_source": name, "forge": inst.forge,
+                "repo": inst.url, "remote_head": head}
+    except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
+        return {"ok": False, "error": _probe_client_error(e)}

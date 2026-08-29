@@ -739,6 +739,13 @@ async def test_forge(name: str):
                                                 forge_runtime=s.forge_runtime)
 
 
+@app.post("/api/v1/connections/skill/{name}/test")
+async def test_skill_source(name: str):
+    s = svc()
+    return await connections_service.test_skill_source(
+        name, config=s.config, repo_cache=s.repo_cache)
+
+
 @app.post("/api/v1/harness/prune")
 async def request_harness_prune():
     return bake_status_mod.request_prune(dev_types=svc().dev_types)
@@ -763,7 +770,8 @@ async def create_internal_repo(body: dict):
 async def list_skills():
     s = svc()
     return await internal_repos_service.list_skills(
-        skill_service=s.skill_service, dev_types=s.dev_types)
+        skill_service=s.skill_service, config=s.config,
+        dev_types=s.dev_types)
 
 
 @app.get("/api/v1/skills/{name:path}")
@@ -790,12 +798,19 @@ async def delete_skill_endpoint(name: str):
         name, skill_service=svc().skill_service)
 
 
+@app.post("/api/v1/skills/sources/refresh")
+async def refresh_skill_sources():
+    s = svc()
+    return await internal_repos_service.refresh_skill_sources(
+        repo_cache=s.repo_cache, config=s.config)
+
+
 @app.post("/api/v1/skills/sync")
 async def sync_skills():
     s = svc()
     return await internal_repos_service.sync_skills(
         internal_forge=s.internal_forge, skill_service=s.skill_service,
-        repo_cache=s.repo_cache, dev_types=s.dev_types)
+        repo_cache=s.repo_cache, config=s.config, dev_types=s.dev_types)
 
 
 @app.delete("/api/v1/internal-repos/{name}")

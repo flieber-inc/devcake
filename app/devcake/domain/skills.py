@@ -322,15 +322,19 @@ class SkillService:
                 "source": "external", "builtin": False, "origin": source,
                 "warnings": warns, "files": files}
 
-    async def external_infos(self, referenced: list[str]) -> list[SkillInfo]:
-        """Catalog rows for the skill sources that Dev Types reference via
-        `<source>/<skill>` names — EVERY skill in those sources' trees (so
-        the operator can discover what else a source offers), best-effort:
-        an unsynced or unreadable mirror contributes nothing (the Dev-Type
-        chips still render unknown names with the stale chip)."""
+    async def external_infos(self, sources: list[str]) -> list[SkillInfo]:
+        """Catalog rows for the named skill sources — EVERY skill in those
+        sources' trees (so the operator can discover what a source offers
+        without first selecting it on a Dev Type), best-effort: an unsynced
+        or unreadable mirror contributes nothing (Dev-Type chips still
+        render unknown names with the stale chip). Accepts source names
+        (`shelf`) or legacy `<source>/<skill>` refs (prefix used)."""
         out: list[SkillInfo] = []
-        sources = sorted({n.split("/", 1)[0] for n in referenced if "/" in n})
-        for source in sources:
+        names = sorted({
+            (n.split("/", 1)[0] if "/" in n else n)
+            for n in sources if n
+        })
+        for source in names:
             inst = self._skill_source(source)
             if inst is None or self.repo_cache is None:
                 continue

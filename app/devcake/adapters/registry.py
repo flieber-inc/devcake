@@ -36,11 +36,10 @@ class PMOSystemInfo(BaseModel):
     operator_note: str = ""
     attachments_supported: bool = True
     relations_supported: bool = True
-    # Launch vs experimental honesty (docs/05 §9.7–9.8, docs/16). False =
-    # launch-supported (Linear, Gitea Issues). True = in-tree but not
-    # launch-supported (GitHub/GitLab Issues). SPA select + help copy read
-    # this; it is NOT a second code path — adapters still implement full
-    # PMOPort.
+    # Launch vs experimental honesty (docs/05 §9.6–9.8, docs/16). False =
+    # launch-supported (all four current systems). True = in-tree but not
+    # launch-supported (future opt-ins). SPA select + help copy read this;
+    # it is NOT a second code path — adapters still implement full PMOPort.
     experimental: bool = False
     # Forge-issues family (board is owner/repo on a forge). Drives INV-4
     # mono-repo overlap detection in security.security_warnings (CAKE-113)
@@ -106,17 +105,17 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         supports_priority=False,
         attachments_supported=False,
         relations_supported=True,
-        experimental=True,
+        experimental=False,
         forge_issue=True,
         # API origin vs clone URL (CAKE-113 mono-repo host match).
         host_aliases=[["api.github.com", "github.com"]],
         default_host="github.com",
         operator_note=(
-            "Experimental (not launch-supported). GitHub's public API cannot "
-            "attach files to issues. Transcripts, plans, and other "
-            "deliverables still land in the mission's activity repo; the "
-            "ticket comment carries a short reference. Attachment limit is "
-            "a GitHub API gap, not a DevCake setting."
+            "GitHub's public API cannot attach files to issues. "
+            "Transcripts, plans, and other deliverables still land in the "
+            "mission's activity repo; the ticket comment carries a short "
+            "reference. Attachment limit is a GitHub API gap, not a "
+            "DevCake setting."
         ),
     ),
     "gitlab_issues": PMOSystemInfo(
@@ -138,15 +137,15 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         supports_priority=False,
         attachments_supported=True,
         relations_supported=False,
-        experimental=True,
+        experimental=False,
         forge_issue=True,
         operator_note=(
-            "Experimental (not launch-supported). Blocked-by issue links "
-            "need GitLab Premium (or self-hosted EE). DevCake probes the "
-            "live token — Free boards will not write decomposition "
-            "traffic-control edges, and child missions will not block each "
-            "other. File attachments work. Relations limit is a GitLab "
-            "license gap, not a DevCake setting."
+            "Blocked-by issue links need GitLab Premium (or self-hosted "
+            "EE). DevCake probes the live token — Free boards will not "
+            "write decomposition traffic-control edges, and child "
+            "missions will not block each other. File attachments work. "
+            "Relations limit is a GitLab license gap, not a DevCake "
+            "setting."
         ),
     ),
 }

@@ -113,10 +113,12 @@ def test_pmo_experimental_flags_match_launch_roster():
     """Launch-supported vs experimental PMO roster is encoded once on PMOSystemInfo.
 
     Docs (00, 05, 16) and GET /connections/registry must match this pin —
-    do not invent SPA chips; metadata honesty is required.
+    do not invent SPA chips; metadata honesty is required. All four current
+    systems are launch-supported; the experimental set stays empty until a
+    future genuinely-experimental system opts in.
     """
-    launch = {"linear", "gitea_issues"}
-    experimental = {"github_issues", "gitlab_issues"}
+    launch = {"linear", "gitea_issues", "github_issues", "gitlab_issues"}
+    experimental: set[str] = set()
     assert set(PMO_SYSTEMS) == launch | experimental
 
     for sid in launch:

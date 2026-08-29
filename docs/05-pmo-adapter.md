@@ -3,7 +3,7 @@
 > **Audience:** implementers of PMO adapters (Linear, Gitea Issues, GitLab Issues, GitHub Issues).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
-The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** and **Gitea Issues** (launch-supported); **GitLab Issues** and **GitHub Issues** (**experimental** — in-tree, not launch-supported). All are pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
+The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters — all launch-supported: **Linear**, **Gitea Issues**, **GitLab Issues**, and **GitHub Issues**. All are pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
 ## 0. The PMO capability contract (normative — any candidate system)
 
@@ -111,7 +111,7 @@ class PMOCapabilities(BaseModel):
 
 `app/devcake/adapters/registry.py` is the single place that knows which PMO systems exist and how to construct them. The domain never imports it — `api/main.py` builds adapters here and injects them (`01-architecture.md` §3).
 
-- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`, capability flags (`supports_priority`, `attachments_supported`, `relations_supported`), `operator_note`, and **`experimental`** (launch-supported vs in-tree-but-not-launch-supported — same roster as docs/00 / docs/16: `linear` + `gitea_issues` launch-supported; `github_issues` + `gitlab_issues` experimental). (There is no `api_key_env_default` field — schema v4 stores secret VALUES in the GUI store.) The secret fields feed `security.redact` (`14-security.md` §7) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env names for redaction `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
+- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`, capability flags (`supports_priority`, `attachments_supported`, `relations_supported`), `operator_note`, and **`experimental`** (launch-supported vs in-tree-but-not-launch-supported — same roster as docs/00 / docs/16: all four current systems `linear`, `gitea_issues`, `github_issues`, `gitlab_issues` are launch-supported; `experimental=True` is reserved for future opt-ins). (There is no `api_key_env_default` field — schema v4 stores secret VALUES in the GUI store.) The secret fields feed `security.redact` (`14-security.md` §7) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env names for redaction `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
 - **`make_pmo(inst) -> PMOPort`** constructs one adapter for a single `PMOInstance` (`inst`); the composition root builds **one manager/adapter per** configured entry in `config.pmos` (0..N). An unregistered `inst.system` raises. `make_pmo` registers the GUI-stored API key via `register_runtime_secret` for **every** system (Linear included), so exact-match redaction covers pasted tokens without a shape pattern.
 - **`PMOInstance.system` is validated against `PMO_SYSTEMS`** at config-load/PUT time (pydantic field validator), so a typo'd system name is a 422, not a boot crash.
 - **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, help copy, operator notes, capability flags including `experimental`, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin PMO page's selectors, experimental suffix, and paste guard are driven from it at runtime. The SPA cold-start path keeps a **pinned mirror** of that payload in `admin/spa/src/lib/registry_fallback.json` (ADR-0034); `app/tests/test_spa_registry_fallback.py` fails on drift — so adding a system still means one registry entry plus regenerating the pin, not a free-hand SPA table (`11-admin-panel.md`).
@@ -316,13 +316,13 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 
 **GHA `ci.yml` note:** PR CI (`.github/workflows/ci.yml`) exports `CI_COMPOSE_WITH_GITEA=1` on the compose stack (bundled Gitea) and runs **both** live batteries in the same job — `scripts/contract_tests_forge.py` then `scripts/contract_tests_pmo.py` (step **Forge + PMO contract batteries**). Local `scripts/ci_suite.sh` remains a valid full-suite path; it is **not** the only place those batteries run.
 
-### 9.6 GitHub / GitLab Issues — experimental in-tree
+### 9.6 GitHub / GitLab Issues — launch-supported forge-issue adapters
 
-GitHub Issues and GitLab Issues ship as **experimental** forge-issue adapters (same profile: issue-only, label stages, open→backlog, markdown comments, dependency/links). They are **not** launch-supported until the live `scripts/contract_tests_pmo.py` battery graduates them (docs/16). Registry `PMOSystemInfo.experimental=True` and `operator_note` keep the admin SPA honest; do not present them as equal to Linear / Gitea Issues. Shared cancel footer lives in `adapters/forge_issue.py` (not a second Issues Port).
+GitHub Issues and GitLab Issues ship as **launch-supported** forge-issue adapters (same profile: issue-only, label stages, open→backlog, markdown comments, dependency/links). Registry `PMOSystemInfo.experimental=False`; `operator_note` still surfaces vendor API gaps (GitHub attachments; GitLab Premium/EE blocked-by links). Live `scripts/contract_tests_pmo.py` batteries remain useful ops proof but are not a blocker for the admin `experimental` flag. Shared cancel footer lives in `adapters/forge_issue.py` (not a second Issues Port).
 
-### 9.7 GitLab Issues (`gitlab_issues`) — experimental
+### 9.7 GitLab Issues (`gitlab_issues`)
 
-**Experimental** (in-tree, not launch-supported) as of 2026-08-15 — registry `experimental=True`. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
+Launch-supported forge-issue adapter — registry `experimental=False`. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
 
 | Need | Measured |
 |---|---|
@@ -334,9 +334,9 @@ GitHub Issues and GitLab Issues ship as **experimental** forge-issue adapters (s
 
 `pmo_id` is the issue **iid**. `global_ids=False`. Separate PMO PAT from any GitLab *forge* repo-card token. The admin PMO card and New Mission dialog show `operator_note` from the registry when this system is selected.
 
-### 9.8 GitHub Issues (`github_issues`) — experimental
+### 9.8 GitHub Issues (`github_issues`)
 
-**Experimental** (in-tree, not launch-supported) as of 2026-08-15 — registry `experimental=True`. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
+Launch-supported forge-issue adapter — registry `experimental=False`. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
 
 | Need | Measured |
 |---|---|

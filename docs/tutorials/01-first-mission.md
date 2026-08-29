@@ -62,7 +62,7 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 
 1. **PMO** (`#/pmo`, under Adapters) — Add PMO instance → team key → **Set** Linear API key → Test.
 2. **Repositories** (`#/repos`) — Add repository → choose a short card **name**
-   (lowercase alnum, ≤12 chars — this is the `devcake-repo:<name>` marker) →
+   (lowercase letters/digits/underscores, ≤39 — this is the `devcake-repo:<name>` marker) →
    URL → **Set** write token; prefer **RO** for non-EXECUTE and a **reviewer**
    token (app-only, different account) for formal forge approval → Test.
    Repositories and PMO both live under the sidebar's **Adapters** group.
@@ -127,7 +127,7 @@ In your sandbox Linear team, create an issue:
 - **Title:** small and real — e.g. *"Add input validation to the parser, with tests"*.
 - **Description:** brief a competent contractor, and include a backticked
   work-repo marker matching the card name from step 1b, e.g.
-  `` `devcake-repo:sandbox` `` (lowercase alnum, ≤12). Resolution order is
+  `` `devcake-repo:sandbox` `` (lowercase letters/digits/underscores, ≤39). Resolution order is
   marker → instance default (first chip) → zero-repo; this tutorial needs the
   external card, so put the marker (or rely on the chip default from step 1b).
 - **Label:** **`DEVCAKE`** (opt-in adoption).

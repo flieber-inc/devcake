@@ -168,7 +168,7 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated, isNotebook }
       </p>
       <div className="space-y-3">
         <Field label="Repository name"
-          hint="Lowercase letters/digits, ≤12 — it becomes the card name too.">
+          hint="Lowercase letters/digits/underscores, ≤39 — it becomes the card name too.">
           <Input value={name} onChange={(e) => setName(e.target.value)}
             placeholder="e.g. notes" />
         </Field>
@@ -510,7 +510,7 @@ export default function ReposPage({ onHealthChange }) {
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Renaming on Save moves stored tokens, updates PMO/Dev Type citations, and migrates the local mirror; past run records and `devcake-repo:` markers already on the board keep the old name.">
+                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Renaming on Save moves stored tokens, updates PMO/Dev Type citations, and migrates the local mirror; past run records and `devcake-repo:` markers already on the board keep the old name.">
                   <Input value={repo.name}
                   onChange={(e) => {
                     const prev = repo.name;
@@ -518,17 +518,20 @@ export default function ReposPage({ onHealthChange }) {
                     newNames.rename(prev, next);
                     setField(`cfg.repos.${idx}.name`, next);
                     if (prev && next && prev !== next) {
+                      // Cascade PMO citations in the same config draft so
+                      // inline validation does not block Save. Do NOT touch
+                      // draft Dev Type memory_repos here: DraftChrome saves
+                      // Dev Types before PUT /config, and a successful Dev
+                      // Type PUT + failed config rename would leave disk
+                      // citing the new name while AppConfig still has the
+                      // old one. Server _rewrite_repo_citations + post-reload
+                      // persist owns Dev Type citations.
                       cfg.pmos.forEach((p, pi) => {
                         for (const field of ["repos", "reference_repos", "memory_repos"]) {
                           if ((p[field] || []).includes(prev))
                             setField(`cfg.pmos.${pi}.${field}`,
                               p[field].map((n) => (n === prev ? next : n)));
                         }
-                      });
-                      Object.entries(dr.draft.devTypes || {}).forEach(([nm, dt]) => {
-                        if ((dt.memory_repos || []).includes(prev))
-                          setField(`devTypes.${nm}.memory_repos`,
-                            dt.memory_repos.map((n) => (n === prev ? next : n)));
                       });
                     }
                   }} />

@@ -200,14 +200,14 @@ Connection tests fail clearly when a required secret is absent.
 ### PMO connection (own page: `#/pmo`, Adapters item — `#/config/pmo` redirects)
 Fields edit configured PMO instances (`02-domain-model.md` §9); section copy
 renders from `GET /connections/registry` and stays **PMO-neutral**.
-- System selector, instance name, team/workspace key. **Instance name** stays editable after Save (draft field → config PUT); renaming moves the stored API key with the card and updates scheduled-task board targets. The managed default board (`board`, ADR-0030) keeps its name locked. Past run `pmo_ref` values and external bookmarks of the old name are **not** rewritten.
+- System selector, instance name (`^[a-z][a-z0-9_]{0,38}$` — underscore OK, ≤39, no hyphens; draft + server validate in lockstep), team/workspace key. **Instance name** stays editable after Save (draft field → config PUT); renaming moves the stored API key with the card and updates scheduled-task board targets. The managed default board (`board`, ADR-0030) keeps its name locked. Past run `pmo_ref` values and external bookmarks of the old name are **not** rewritten.
 - **API key VALUE** via secret field (`/data/secrets/connections/pmo-{name}.json`) — Set / clear; ✓ from `secrets-check`.
 - Validated by **Test connection** (`POST /api/v1/connections/pmo/{name}/test`).
 - **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* Remember: the whole team is in the agent trust boundary (`14` §0). The confirm writes the draft; Save applies it.
 - Poll interval (seconds).
 
 ### Repositories (own page: `#/repos`, Adapters item — `#/config/repository` redirects)
-- **Repo name** stays editable after Save. Renaming on Save moves stored tokens, rewrites every PMO / Dev Type citation of the old card name, and migrates the ADR-0024 on-disk mirror. Historical run `repo_ref` values and `devcake-repo:` markers already posted on the board keep the old name.
+- **Repo name** (`^[a-z][a-z0-9_]{0,38}$` — same rule as PMO; draft + server validate in lockstep) stays editable after Save. Renaming on Save moves stored tokens, rewrites every PMO / Dev Type citation of the old card name, and migrates the ADR-0024 on-disk mirror. Historical run `repo_ref` values and `devcake-repo:` markers already posted on the board keep the old name.
 
 ### Dev Types
 Roster table + editor (the harness combobox is **authoritative**, `08-harness-templates.md` §2). Row ⋯ offers **Rename**, **Clone** (copies config + prompt templates under a new name; credentials are **not** copied — reconnect on the clone), and **Delete**; the dashed **New Dev Type** row remains the blank create path.

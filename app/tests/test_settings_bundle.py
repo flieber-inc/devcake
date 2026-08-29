@@ -1549,6 +1549,68 @@ def test_config_put_repo_rename_reload_failure_leaves_devtype_disk_unchanged(
     assert config_mod.load_dev_types()["senior-dev"].memory_repos == ["notes"]
 
 
+def test_spa_save_order_repo_rename_failure_keeps_prior_devtype_citations(
+        monkeypatch, tmp_path):
+    """DraftChrome saves Dev Types before PUT /config. With no ReposPage
+    Dev Type cascade on rename, that preceding PUT leaves memory_repos at
+    the pre-Save (old) card name. A failed config rename must then leave
+    disk + live Dev Types on that old name — the SPA-order failure mode
+    operators hit, not only an in-process apply_config_patch without the
+    Dev Type PUT."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from devcake.api import config_service, devtypes_service
+    from devcake.settings_bundle import BundleError
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.pmos = [
+        config_mod.PMOInstance(name="linear", team_key="ENG", repos=[]),
+    ]
+    cfg.repos = [
+        config_mod.RepoInstance(name="notes",
+                                url="https://github.com/acme/notes"),
+    ]
+    dts["senior-dev"].memory_repos = ["notes"]
+    config_mod.save_dev_type(dts["senior-dev"])
+
+    # SPA Save step 1: PUT /dev-types/{name} for dirty types. Without the
+    # rename cascade, Dev Type citations are unchanged — still "notes".
+    asyncio.new_event_loop().run_until_complete(
+        devtypes_service.upsert_dev_type(
+            dts["senior-dev"].model_dump(), "senior-dev",
+            dev_types=dts, config=cfg))
+    assert config_mod.load_dev_types()["senior-dev"].memory_repos == ["notes"]
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+
+    def _boom(*_a, **_k):
+        raise BundleError(422, "adapter boom")
+
+    monkeypatch.setattr(config_service, "dry_run_adapters", _boom)
+
+    # SPA Save step 2: PUT /config with the renamed repo card — fails.
+    body = {
+        "repos": [
+            {"name": "notebook", "forge": "github",
+             "url": "https://github.com/acme/notes"},
+        ],
+    }
+    with pytest.raises(HTTPException) as ei:
+        asyncio.new_event_loop().run_until_complete(
+            config_service.apply_config_patch(
+                body, config=cfg, dev_types=dts, managers={},
+                reload=lambda: None))
+    assert ei.value.status_code == 422
+    assert [r.name for r in cfg.repos] == ["notes"]
+    assert dts["senior-dev"].memory_repos == ["notes"]
+    assert config_mod.load_dev_types()["senior-dev"].memory_repos == ["notes"]
+
+
 def test_config_put_pmo_rename_rewrites_cron_pmo(monkeypatch, tmp_path):
     """In-place PMO rename must rewrite non-reserved crons[].pmo citations."""
     import asyncio

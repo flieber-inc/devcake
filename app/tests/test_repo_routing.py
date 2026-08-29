@@ -117,11 +117,13 @@ def test_empty_repo_set_marker_gates_not_external():
 
 def test_malformed_marker_gates_instead_of_silent_default():
     """Audit A26: a `devcake-repo:`-shaped but unparseable marker (hyphens,
-    >12 chars, bad leading char) previously fell through to the instance
+    >39 chars, bad leading char) previously fell through to the instance
     default — a typo'd routing intent silently landed on the wrong repo and
     stickiness then latched it there. Gate with a fix-the-marker reason."""
-    for bad in ("`devcake-repo:my-repo`", "`devcake-repo:thirteenchars1`",
-                "`devcake-repo:9lead`", "`devcake-repo:`"):
+    too_long = "a" * 40  # INSTANCE_NAME_BODY max is 39
+    for bad in ("`devcake-repo:my-repo`", f"`devcake-repo:{too_long}`",
+                "`devcake-repo:9lead`", "`devcake-repo:`",
+                "`devcake-repo:has.dot`"):
         name, reason = resolve_repo(_m(bad), INST_DEF, REPOS, [])
         assert name is None and "unparseable" in reason, bad
     # sticky missions gate too — the typo stays visible, nothing re-routes
@@ -318,6 +320,10 @@ def test_internal_repo_naming_and_port_helper():
     assert internal_repo_name("linteama", "PRJ-Big Report!") == "linteama-prj-big-report"
     # bounded for the run-id / repo-name budget
     assert len(internal_repo_name("linear", "X" * 80)) <= 60
+    # CAKE-151: underscore in the instance identity must survive scrubbing
+    assert internal_repo_name("acme_eng", "DEV-1") == "acme_eng-dev-1"
+    assert internal_repo_name("acme_eng", "DEV-1") != internal_repo_name(
+        "acme", "ENG-DEV-1")
 
 
 def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):

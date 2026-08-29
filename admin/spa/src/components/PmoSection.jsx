@@ -316,7 +316,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Renaming on Save moves stored secrets with the card and updates scheduled-task board targets; past run records and board markers keep the old name.">
+                  help="Operator-chosen identity (lowercase letters/digits/underscores, ≤39, no hyphens). Uppercased, it prefixes this instance's branches and run ids (run ids truncate the prefix to 12 chars). Renaming on Save moves stored secrets with the card and updates scheduled-task board targets; past run records and board markers keep the old name.">
                   <Input value={inst.name} disabled={!!inst.managed}
                   onChange={(e) => {
                     const prev = inst.name;

@@ -5,11 +5,14 @@ unlimited). Depth is read from the mission's own record only: the app-managed
 `DEVCAKE-CREATED` label gates it, so a forged marker in an untrusted
 description is inert."""
 
-from devcake.config import AppConfig
+from devcake.config import AppConfig, PMOInstance
 from devcake.domain.orchestrator import decomposition
 from devcake.domain.orchestrator.markers import (DECOMPOSITION_MARKER_RE,
+                                                 RAW_REPO_MARKER,
+                                                 REPO_MARKER,
                                                  at_decomposition_limit,
                                                  decomposition_depth)
+from devcake.domain.repo_routing import resolve_repo
 
 from fakes import make_mission_manager
 from test_transitions import FakePMO, NullMessaging, _run, mission, run_coro
@@ -153,6 +156,26 @@ def test_child_bodies_are_defanged_against_marker_injection(tmp_path):
     decompose(mgr, [{"title": "a", "description": poison}, {"title": "b"}])
     assert len(fake.created) == 2
     assert "DEVCAKE-NEEDS-HUMAN" not in m.labels
+
+
+def test_child_bodies_quoting_repo_marker_do_not_gate(tmp_path):
+    """CAKE-152 / CAKE-153: a draft that quotes a repo-routing token in
+    backticks must be neutralized before create — otherwise RAW_REPO_MARKER
+    treats the empty/malformed shape as an unparseable routing intent and
+    gates the child forever. Tokens are written here as live board syntax
+    because this is the input under test; do not paste that form into PR
+    copy or comments."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake = make_depth_mgr(tmp_path, m)
+    # empty-name shape that RAW_REPO_MARKER matches and resolve_repo gates
+    poison = "docs mention " + "`devcake-repo:`" + " as the override syntax"
+    decompose(mgr, [{"title": "a", "description": poison}, {"title": "b"}])
+    child = fake.all_missions[1]
+    assert REPO_MARKER.search(child.description) is None
+    assert RAW_REPO_MARKER.search(child.description) is None
+    instance = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
+    name, reason = resolve_repo(child, instance, {"alpha"}, [])
+    assert name == "alpha" and reason is None
 
 
 def test_at_decomposition_limit_predicate():

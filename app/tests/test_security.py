@@ -386,7 +386,9 @@ def test_security_warnings_mono_repo_overlap_fires(tmp_path, monkeypatch):
     from devcake.config import AppConfig, PMOInstance, RepoInstance
     cfg = AppConfig(
         repos=[RepoInstance(
-            name="missions",
+            # Distinct card name from the PMO (CAKE-151 prefix uniqueness
+            # spans pmos+repos); mono-repo warning keys off URL overlap.
+            name="missions_work",
             forge="gitea",
             url="https://git.example/acme/missions.git",
         )],
@@ -450,7 +452,7 @@ def test_security_warnings_mono_repo_body_honest(tmp_path, monkeypatch):
     from devcake.config import AppConfig, PMOInstance, RepoInstance
     cfg = AppConfig(
         repos=[RepoInstance(
-            name="missions",
+            name="missions_work",
             forge="gitea",
             url="https://git.example/acme/missions.git",
         )],
@@ -583,7 +585,7 @@ def test_make_pmo_registers_api_key_for_every_system(tmp_path, monkeypatch):
     secret = "short-pmo-k1"
     assert 8 <= len(secret) < 16
     for system in sorted(PMO_SYSTEMS):
-        # instance names: ^[a-z][a-z0-9]{0,11}$
+        # instance names: config._INSTANCE_NAME_RE (≤39; keep short here)
         inst_name = ("linear" if system == "linear"
                      else system.replace("_", "")[:12])
         # direct disk write — skip secrets.write_* so conn: keys are absent

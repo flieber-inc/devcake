@@ -13,19 +13,24 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-_SAFE = re.compile(r"[^a-z0-9-]+")
+# Keep '_' (INSTANCE_NAME_BODY allows it). Mapping '_' → '-' would collide
+# distinct pairs (acme_eng+DEV-1 vs acme+ENG-DEV-1 → both acme-eng-dev-1) and
+# break first-hyphen instance|key splits in list_activity_repos / list_repos.
+_SAFE = re.compile(r"[^a-z0-9_-]+")
 
 
 def internal_repo_name(instance: str, mission_key: str) -> str:
     """The deterministic name of a mission's internal repo — {instance}-{key}
-    lowercased/sanitized. Domain knowledge (the resolver derives it to detect
-    a prior internal routing across restarts), so it lives on the port, not
-    in the adapter (F1 import boundary)."""
+    lowercased/sanitized. Underscores in the instance identity are preserved
+    so they never collide with the '-' compound separator. Domain knowledge
+    (the resolver derives it to detect a prior internal routing across
+    restarts), so it lives on the port, not in the adapter (F1 import
+    boundary)."""
     return _SAFE.sub("-", f"{instance}-{mission_key}".lower()).strip("-")[:60]
 
 
 # ADR-0014 D4: the sweeper discriminator — includes the trailing hyphen, so
-# no operator card name (^[a-z][a-z0-9]{0,11}$, hyphen-free) can ever match
+# no operator card name (config._INSTANCE_NAME_RE, hyphen-free) can ever match
 ACTIVITY_PREFIX = "activity-"
 
 

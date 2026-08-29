@@ -57,12 +57,62 @@ def test_instance_validators_v3():
 
 
 def test_instance_name_format_enforced():
-    """Names embed uppercased in branch/run-id compounds ({INSTANCE}-{key}) —
-    lowercase alnum only, no hyphens (ambiguity), ≤12 chars (run-id budget)."""
-    for bad in ("linear-a", "Linear", "9lead", "x" * 13, ""):
+    """Names embed uppercased in branch/run-id compounds ({INSTANCE}-{key}).
+    GitHub-aligned DevCake subset: lowercase [a-z][a-z0-9_]{0,38} — underscore
+    allowed; hyphen/dot/uppercase banned (hyphen = compound ambiguity)."""
+    for bad in ("linear-a", "Linear", "9lead", "x" * 40, "", "acme.eng",
+                "_lead", "has space"):
         with pytest.raises(Exception):
             PMOInstance(name=bad)
     PMOInstance(name="linearb")
+    PMOInstance(name="acme_eng")
+    PMOInstance(name="a" + "b" * 38)  # 39 chars total
+
+
+def test_run_id_instance_prefix_collision_refused():
+    """Long names truncate to 12 scrubbed-upper chars in make_run_id — two
+    PMO instances that share that prefix must fail config validation rather
+    than mint colliding run ids. PMOs ONLY: repos and skill sources never
+    prefix run ids or pmo_refs (same doctrine as the reserved-names test)."""
+    base = _base()
+    # Same first-12 scrubbed upper: acme_engineering_board vs acme_engineering_x
+    # → ACME_ENGINEER
+    colliding = dict(base, pmos=[
+        dict(base["pmos"][0], name="acme_engineering_board", team_key="A"),
+        dict(base["pmos"][0], name="acme_engineering_labs", team_key="B"),
+    ])
+    with pytest.raises(Exception, match="run-id instance prefix"):
+        AppConfig.model_validate(colliding)
+    # Cross-list: PMO + repo sharing the truncated prefix is FINE — repos
+    # mint no run ids, and refusing here would refuse existing configs
+    cross = dict(
+        base,
+        pmos=[dict(base["pmos"][0], name="acme_engineering_board")],
+        repos=[dict(base["repos"][0], name="acme_engineering_labs",
+                    url="https://github.com/o/other")],
+    )
+    AppConfig.model_validate(cross)
+    # Distinct before char 12 — both accepted
+    ok = dict(base, pmos=[
+        dict(base["pmos"][0], name="acme_eng_board", team_key="A"),
+        dict(base["pmos"][0], name="acme_ops_board", team_key="B"),
+    ])
+    AppConfig.model_validate(ok)
+    # Legacy short names still validate
+    AppConfig.model_validate(base)
+
+
+def test_pmo_and_repo_may_share_a_name_curator_convention():
+    """A Curator board is named after its notebook card (I2: a memory-bound
+    card may be a work repo only on a board whose repos == [that card]) —
+    identical PMO and repo names are live in real deployments and must keep
+    validating, or the upgrade refuses the existing config.yaml at boot."""
+    AppConfig.model_validate({
+        "pmos": [{"name": "devcakemem", "system": "github_issues",
+                  "team_key": "o/memory", "repos": ["devcakemem"]}],
+        "repos": [{"name": "devcakemem",
+                   "url": "https://github.com/o/memory"}],
+    })
 
 
 def test_reserved_pmo_instance_names_rejected():

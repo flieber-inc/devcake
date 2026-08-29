@@ -62,6 +62,45 @@ def test_rebuild_still_drops_removed_external_repos():
     assert rt.get("alpha") is not None
 
 
+def test_removed_repo_card_leaves_no_forge_or_mirror_ghost(tmp_path):
+    """CAKE-147: operator deletion of a config repo card — ForgeRuntime.rebuild
+    drops health/breakers, and delete_mirror pops the ledger — so /health
+    circuit_breakers `repo:` rows and repo_mirror.mirrors name nothing."""
+    from devcake.config import AppConfig
+    from devcake.domain.repo_mirror import MirrorStatus, RepoCache
+
+    alpha = RepoInstance(name="alpha", url="https://github.com/o/alpha")
+    beta = RepoInstance(name="beta", url="https://github.com/o/beta")
+    rt = ForgeRuntime()
+    rt.rebuild([alpha, beta], lambda inst: object())
+    rt.health["beta"] = {"ok": False, "transient": False, "detail": "401"}
+    rt.latch("beta", "401")
+
+    mirrors = tmp_path / "mirrors"
+    mirrors.mkdir()
+    cfg = AppConfig(repos=[alpha, beta])
+    cache = RepoCache(cfg, rt, root=mirrors, clone_user_of=lambda _fid: "")
+    beta_path = cache.mirror_path("beta")
+    beta_path.mkdir(parents=True)
+    (beta_path / "config").write_text("x")
+    cache.ledger["beta"] = MirrorStatus(ok=False, detail="stale")
+    cache.ledger["alpha"] = MirrorStatus(ok=True, detail="")
+
+    # same order as config PUT remove: reload rebuilds forges, then removed
+    # repo scope best-effort delete_mirror
+    live_repos = [alpha]
+    cfg.repos = live_repos
+    rt.rebuild(live_repos, lambda inst: object())
+    cache.delete_mirror("beta")
+
+    assert rt.get("beta") is None
+    assert "beta" not in rt.health and "beta" not in rt.breakers
+    assert "beta" not in cache.ledger
+    assert "beta" not in cache.health_map()
+    assert not beta_path.exists()
+    assert "alpha" in rt.forges and "alpha" in cache.ledger
+
+
 def test_deleted_internal_repo_stays_deleted_across_rebuild():
     """Admin Clear (unregister) drops all five maps; a later rebuild must not
     resurrect the entry from a stale carry-over (audit A3 carry-over only

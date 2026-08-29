@@ -535,3 +535,105 @@ def test_merged_cache_resolves_foreign_blocker_keys(tmp_path):
     run_coro(rt.run_cycle(1))
     row = next(r for r in rt.missions_cache if r["key"] == "ENG-1")
     assert row["blocked_by"] == ["CS-1", "uuid-gone"]
+
+
+# ── CAKE-147: removed PMO instance drops poll/health ghosts ──────────────────
+
+def test_prune_removed_instances_drops_poll_degraded_ghost(tmp_path):
+    """After an instance leaves managers (config remove + build_managers),
+    poll_degraded must not keep its key — /health publishes that map raw and
+    Overview alerts "PMO instance '…' is not polling" forever otherwise."""
+    gone, stay = _mgr("gone"), _mgr("stay")
+    managers = {"gone": gone, "stay": stay}
+    rt = _rt(tmp_path, managers=managers)
+    rt.poll_degraded["gone"] = "RuntimeError: authentication failed"
+    rt.poll_degraded["stay"] = "RuntimeError: team not found"
+
+    managers.pop("gone")
+    rt.prune_removed_instances()
+
+    assert "gone" not in rt.poll_degraded
+    assert rt.poll_degraded["stay"] == "RuntimeError: team not found"
+
+
+def test_prune_removed_instances_drops_missions_cache_and_owner(tmp_path):
+    """Missions board and durable ownership must not keep rows for an
+    instance that left config — otherwise Missions briefly shows ghosts
+    until the next poll, and ownership stays claimed by a dead name."""
+    from devcake.adapters.files.owner_store import OwnerStore
+
+    gone, stay = _mgr("gone"), _mgr("stay")
+    managers = {"gone": gone, "stay": stay}
+    rt = _rt(tmp_path, managers=managers)
+    rt.missions_cache[:] = [
+        {"instance": "gone", "key": "G-1", "pmo_id": "id-gone"},
+        {"instance": "stay", "key": "S-1", "pmo_id": "id-stay"},
+    ]
+    rt.mission_owner = {"id-gone": "gone", "id-stay": "stay"}
+
+    managers.pop("gone")
+    rt.prune_removed_instances()
+
+    assert rt.missions_cache == [
+        {"instance": "stay", "key": "S-1", "pmo_id": "id-stay"}]
+    assert rt.mission_owner == {"id-stay": "stay"}
+    store_path = tmp_path / "state" / "mission_owner.json"
+    assert OwnerStore(store_path).load() == {"id-stay": "stay"}
+
+
+def test_build_managers_prunes_poll_state_for_removed_instance(
+        tmp_path, monkeypatch):
+    """Public reload seam: Services.build_managers drops the manager AND
+    prunes PollRuntime maps for the removed name (CAKE-147)."""
+    from types import SimpleNamespace
+
+    from devcake.api.poll import PollRuntime
+    from devcake.api.services import Services
+    from devcake.adapters.files.owner_store import OwnerStore
+    from fakes import make_services
+
+    stay_inst = PMOInstance(name="stay", team_key="STAY")
+    gone = _mgr("gone")
+    stay = _mgr("stay")
+    managers = {"gone": gone, "stay": stay}
+    stewards = {"gone": object(), "stay": object()}
+
+    async def _noop():
+        return {}
+
+    poll_rt = PollRuntime(
+        config=AppConfig(pmos=[stay_inst]),
+        managers=managers, stewards=stewards,
+        store=SimpleNamespace(active=lambda: [], all=lambda: []),
+        forge_runtime=SimpleNamespace(breakers={},
+                                      last_full_probe_at=None),
+        refresh_forge_health=_noop,
+        managers_in_config_order=lambda: list(managers.values()),
+        owner_store=OwnerStore(tmp_path / "state" / "mission_owner.json"))
+    poll_rt.poll_degraded["gone"] = "RuntimeError: gone"
+    poll_rt.poll_degraded["stay"] = "RuntimeError: stay"
+    poll_rt.missions_cache[:] = [
+        {"instance": "gone", "key": "G-1"},
+        {"instance": "stay", "key": "S-1"},
+    ]
+
+    monkeypatch.setattr(
+        "devcake.api.services.make_pmo", lambda inst: SimpleNamespace())
+
+    s = make_services(
+        config=AppConfig(pmos=[stay_inst]),
+        managers=managers, stewards=stewards, poll_rt=poll_rt,
+        forge_runtime=SimpleNamespace(),
+        shared_breakers={}, shared_backend_degraded={},
+        manager=SimpleNamespace(), messaging=SimpleNamespace(),
+        internal_forge=None, skill_service=None, repo_cache=None,
+        receipt_store=None, oidc_tokens=None, claims=None,
+        blocker_locator=None, dev_types={})
+    # real method — make_services did not stub build_managers
+    assert type(s).build_managers is Services.build_managers
+    s.build_managers()
+
+    assert "gone" not in s.managers
+    assert "gone" not in poll_rt.poll_degraded
+    assert poll_rt.poll_degraded["stay"] == "RuntimeError: stay"
+    assert all(row["instance"] != "gone" for row in poll_rt.missions_cache)

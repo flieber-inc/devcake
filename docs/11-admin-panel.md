@@ -91,7 +91,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `intake_paused` | the master switch state |
 | `last_poll_at` | ISO-8601 UTC of the last poll cycle that finished (periodic OR manual); `null` before the first cycle. Powers the Missions board's "Last polled Ns ago · next in ~Ns" honesty line |
 | `poll_interval_seconds` | current `config.poll_interval_seconds`, echoed here so the SPA doesn't need a separate `/config` read to compute the cadence line |
-| `poll_degraded` | instance → reason when that instance's poll segment hit a permanent error (other instances keep polling) |
+| `poll_degraded` | instance → reason when that instance's poll segment hit a permanent error (other instances keep polling). Cleared on a later green segment for that instance, and pruned immediately when the instance leaves config (`build_managers` → `PollRuntime.prune_removed_instances`) so Overview never alerts on a deleted adapter |
 | `internal_forge` | bundled Gitea health (`{ok, detail, ui_url}`) or `null` when `GITEA_ADMIN_PASSWORD` is unset |
 | `active_runs` | count of dispatched/running/finalizing runs |
 | `forge_protection` | default-branch protection probe per repo (cached ~5 min; `null` when unknown) — **not** part of `security_warnings` |

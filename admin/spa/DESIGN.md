@@ -225,8 +225,10 @@ anchor mirrors `primary` because it's an `<a>` — copy that pattern for links).
 - Anything longer lives in the click-popover `Help` (`src/components/Field.jsx`)
   — a "?" that toggles on click with Esc/outside close. No hover-only tooltips
   for essential info.
-- Long optional lists (template managers, advanced blocks) collapse behind a
-  `<details>` disclosure with a count: `Manage templates (3)…`.
+- Long optional lists and advanced blocks collapse behind a `<details>`
+  disclosure with a count when they stay on the page. Template create/edit
+  lives in the page-level **Manage templates** modal (CAKE-166) — not a
+  per-row `<details>` list.
 - Section-level background/context goes on the `Section` `help` prop
   (`src/components/Card.jsx`), not a paragraph in the card body.
 

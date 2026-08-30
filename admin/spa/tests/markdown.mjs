@@ -61,56 +61,54 @@ await withPage(async (page) => {
       (await page.locator('[role="dialog"]').count()) === 0);
   }
 
-  // ── Prompts View ─────────────────────────────────────────────────────────
+  // ── Prompts Manage templates modal (CAKE-166) ────────────────────────────
   await gotoFresh(page, "#/fleet/prompts");
   await page.waitForSelector("#prompts");
-  // wait for templates to load (section shell is always present)
   try {
-    await page.waitForSelector("text=Manage templates", { timeout: 12000 });
+    await page.waitForSelector('[data-testid="manage-templates"]', { timeout: 12000 });
   } catch {
     skip("Prompts Markdown View", "prompt templates did not load on this stack");
     summary("markdown");
     return;
   }
 
-  // open the first template manager and View the first entry
-  await page.locator("summary").filter({ hasText: "Manage templates" }).first().click();
-  const promptView = page.locator('button:text-is("View")').first();
-  if (!(await promptView.count())) {
-    skip("Prompts Markdown View", "no View controls after expanding templates");
-  } else {
-    await promptView.click();
-    await page.waitForSelector('[role="dialog"]');
-    const dlg = page.locator('[role="dialog"]');
-    await dlg.locator('button:text-is("Rendered")').waitFor({ timeout: 10000 });
-    await dlg.locator(".markdown-body").waitFor({ timeout: 10000 });
+  check("Workflow switcher is absent on Prompts",
+    (await page.locator("text=Workflow switcher").count()) === 0);
+  check("slim active rows render",
+    (await page.locator('[data-testid="prompt-active-row"]').count()) >= 1);
 
-    check("prompt View shows Rendered and Source controls",
-      (await dlg.locator('button:text-is("Rendered")').count()) === 1 &&
-      (await dlg.locator('button:text-is("Source")').count()) === 1);
+  await page.locator('[data-testid="manage-templates"]').click();
+  await page.waitForSelector('[role="dialog"]');
+  const dlg = page.locator('[role="dialog"]');
+  await dlg.locator('button:text-is("Rendered")').waitFor({ timeout: 10000 });
+  await dlg.locator(".markdown-body").waitFor({ timeout: 10000 });
 
-    const structure = await dlg.locator(
-      ".markdown-body h2, .markdown-body h3, .markdown-body ul, .markdown-body ol, .markdown-body p",
-    ).count();
-    check("prompt Rendered shows markdown structure", structure > 0);
+  check("prompt manager shows Rendered and Source controls",
+    (await dlg.locator('button:text-is("Rendered")').count()) === 1 &&
+    (await dlg.locator('button:text-is("Source")').count()) === 1);
 
-    const mdText = await dlg.locator(".markdown-body").innerText();
-    check("prompt Rendered has playbook prose",
-      /mission|workspace|ONBOARD|PLAN|EXECUTE|REVIEW|classify|result\.json/i.test(mdText));
+  const structure = await dlg.locator(
+    ".markdown-body h2, .markdown-body h3, .markdown-body ul, .markdown-body ol, .markdown-body p",
+  ).count();
+  check("prompt Rendered shows markdown structure", structure > 0);
 
-    await dlg.locator('button:text-is("Source")').click();
-    await dlg.locator("pre").waitFor({ timeout: 5000 });
-    const src = await dlg.locator("pre").innerText();
-    check("prompt Source has substantial template text", src.trim().length > 50);
-    // unsubstituted placeholders are expected in Source (and often Rendered)
-    check("prompt Source keeps unsubstituted {var} placeholders when present",
-      /\{[a-z_]+\}/.test(src) || src.length > 50);
+  const mdText = await dlg.locator(".markdown-body").innerText();
+  check("prompt Rendered has playbook prose",
+    /mission|workspace|ONBOARD|PLAN|EXECUTE|REVIEW|classify|result\.json/i.test(mdText));
 
-    await dlg.locator('button:text-is("Close")').click();
-    await page.waitForTimeout(100);
-    check("prompt View Close dismisses the dialog",
-      (await page.locator('[role="dialog"]').count()) === 0);
-  }
+  await dlg.locator('button:text-is("Source")').click();
+  // built-in selected → read-only <pre>; custom → editable textarea
+  const srcNode = dlg.locator("pre, textarea[aria-label='Template source']").first();
+  await srcNode.waitFor({ timeout: 5000 });
+  const src = await srcNode.inputValue().catch(async () => srcNode.innerText());
+  check("prompt Source has substantial template text", src.trim().length > 50);
+  check("prompt Source keeps unsubstituted {var} placeholders when present",
+    /\{[a-z_]+\}/.test(src) || src.length > 50);
+
+  await dlg.locator('button:text-is("Close")').click();
+  await page.waitForTimeout(100);
+  check("prompt manager Close dismisses the dialog",
+    (await page.locator('[role="dialog"]').count()) === 0);
 });
 
 summary("markdown");

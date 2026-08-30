@@ -87,12 +87,24 @@ check("setPmoOverride draft contract is unchanged", () => {
     "non-empty value must set the override key");
 });
 
-check("Workflow switcher is visually subordinated (no accent card)", () => {
-  assert.doesNotMatch(promptsSrc,
-    /border-accent-200 bg-accent-50/,
-    "Workflow switcher must not use the accent-tinted card chrome");
-  assert.match(promptsSrc, /Workflow switcher/,
-    "Workflow switcher control must remain");
+check("Workflow switcher is gone (CAKE-166)", () => {
+  assert.doesNotMatch(promptsSrc, /label="Workflow switcher"/,
+    "Workflow switcher SettingRow must be removed");
+  assert.doesNotMatch(promptsSrc, /applyWorkflow/,
+    "applyWorkflow draft helper must be removed");
+  assert.doesNotMatch(promptsSrc, /Apply to all/,
+    "Apply-to-all workflow control must be removed");
+});
+
+check("one Manage templates page action + slim active rows (CAKE-166)", () => {
+  assert.match(promptsSrc, /data-testid="manage-templates"/,
+    "page header needs a Manage templates control");
+  assert.match(promptsSrc, /data-testid="prompt-active-row"/,
+    "Mission/Dev Type actives are slim rows");
+  assert.doesNotMatch(promptsSrc, /\+ Create prompt template/,
+    "per-group Create buttons move into the manager modal");
+  assert.doesNotMatch(promptsSrc, /Manage templates \(\{entries\.length\}\)…/,
+    "per-group <details> Manage templates disclosures are gone");
 });
 
 if (failed) {

@@ -12,7 +12,7 @@ import MarkdownBody, {
   MarkdownSourcePre,
   MarkdownViewShell,
 } from "./MarkdownBody.jsx";
-import { fileToB64 } from "../lib/files.js";
+import { fileToB64, textToB64 } from "../lib/files.js";
 import { isMarkdownPath, stripYamlFrontmatter } from "../lib/markdown.js";
 
 // ── skill authoring (docs/11 Skills section) ─────────────────────────────────
@@ -141,24 +141,45 @@ function AddSkillDialog({ onClose, onSaved }) {
   );
 }
 
-// Read-only skill viewer: store-first content (or bundled) for operators who
-// need to inspect a skill without opening Gitea. Multi-file skills get tabs.
-// .md files: Rendered Markdown (frontmatter stripped) + Source (stored bytes).
-function ViewSkillDialog({ name, onClose }) {
+// Skill viewer: store skills get editable Source + live Rendered; external
+// skills stay read-only with an honest repository notice (CAKE-166).
+function ViewSkillDialog({ name, onClose, skillSources = [], onSaved }) {
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   const [file, setFile] = useState("SKILL.md");
   const [mode, setMode] = useState("rendered"); // rendered | source
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const load = () => {
+    setDetail(null); setErr(""); setFile("SKILL.md"); setMode("rendered");
+    setDraft(""); setDirty(false);
+    return get(`/skills/${encodeURIComponent(name)}`)
+      .then((r) => {
+        setDetail(r);
+        const paths = (r.files || []).map((f) => f.path);
+        const initial = paths.includes("SKILL.md") ? "SKILL.md" : (paths[0] || "");
+        setFile(initial);
+        setDraft(r.files?.find((f) => f.path === initial)?.content ?? "");
+      })
+      .catch((e) => {
+        setErr(String(e.message || e).replace(/^\d+ /, ""));
+      });
+  };
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null); setErr(""); setFile("SKILL.md"); setMode("rendered");
+    setDraft(""); setDirty(false);
     get(`/skills/${encodeURIComponent(name)}`)
       .then((r) => {
         if (cancelled) return;
         setDetail(r);
         const paths = (r.files || []).map((f) => f.path);
-        setFile(paths.includes("SKILL.md") ? "SKILL.md" : (paths[0] || ""));
+        const initial = paths.includes("SKILL.md") ? "SKILL.md" : (paths[0] || "");
+        setFile(initial);
+        setDraft(r.files?.find((f) => f.path === initial)?.content ?? "");
       })
       .catch((e) => {
         if (!cancelled) setErr(String(e.message || e).replace(/^\d+ /, ""));
@@ -166,13 +187,45 @@ function ViewSkillDialog({ name, onClose }) {
     return () => { cancelled = true; };
   }, [name]);
 
-  const content = detail?.files?.find((f) => f.path === file)?.content ?? "";
+  const selectFile = (path) => {
+    setFile(path);
+    setDraft(detail?.files?.find((f) => f.path === path)?.content ?? "");
+    setDirty(false);
+    setErr("");
+  };
+
+  const editable = detail?.source === "store";
+  const external = detail?.source === "external";
+  const originUrl = external
+    ? (skillSources.find((s) => s.name === detail.origin)?.url || "")
+    : "";
   const md = isMarkdownPath(file);
-  // non-md tabs always show raw source; toggle only applies to markdown files
   const showRendered = md && mode === "rendered";
+  const sourceLabel = detail?.source === "store" ? "store"
+    : detail?.source === "external" ? `source: ${detail.origin}`
+      : "bundled";
+
+  const save = async () => {
+    if (!detail || !editable) return;
+    setBusy(true); setErr("");
+    try {
+      const files = (detail.files || []).map((f) => ({
+        path: f.path,
+        content_b64: textToB64(f.path === file ? draft : (f.content ?? "")),
+      }));
+      await send("POST", "/skills/import", { files, overwrite: true });
+      setDirty(false);
+      onSaved?.();
+      await load();
+    } catch (e) {
+      setErr(String(e.message || e).replace(/^\d+ /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <Modal className="max-w-3xl" onClose={onClose}>
+    <Modal className="max-w-3xl" onClose={busy ? undefined : onClose}>
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h4 className="font-mono text-base font-semibold tracking-tight">
@@ -189,8 +242,10 @@ function ViewSkillDialog({ name, onClose }) {
             <span className={"rounded px-1.5 py-0.5 text-xs "
               + (detail.source === "store"
                 ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
-                : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
-              {detail.source === "store" ? "store" : "bundled"}
+                : detail.source === "external"
+                  ? "bg-accent-50 text-accent-800 dark:bg-accent-950/70 dark:text-accent-200"
+                  : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+              {sourceLabel}
               {detail.builtin ? " · built-in" : ""}
             </span>
           )}
@@ -199,6 +254,30 @@ function ViewSkillDialog({ name, onClose }) {
           )}
         </div>
       </div>
+      {external && (
+        <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+          data-testid="skill-external-readonly">
+          This skill is read-only here — changes must be made in the external
+          repository
+          {detail?.origin ? ` (${detail.origin})` : ""}.
+          {originUrl ? (
+            <>
+              {" "}
+              <a href={originUrl} target="_blank" rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2">
+                Open repository ↗
+              </a>
+            </>
+          ) : (
+            <> No repository URL is configured on that skill source.</>
+          )}
+        </p>
+      )}
+      {editable && (
+        <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+          Source edits save immediately to the skill store (overwrite).
+        </p>
+      )}
       {err && (
         <p className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
           {err}
@@ -213,7 +292,7 @@ function ViewSkillDialog({ name, onClose }) {
             <div className="mb-2 flex flex-wrap gap-1">
               {detail.files.map((f) => (
                 <button key={f.path} type="button"
-                  onClick={() => setFile(f.path)}
+                  onClick={() => selectFile(f.path)}
                   className={`rounded-md border px-2 py-0.5 font-mono text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
                     file === f.path
                       ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
@@ -226,22 +305,33 @@ function ViewSkillDialog({ name, onClose }) {
           )}
           <MarkdownViewShell>
             {showRendered ? (
-              <MarkdownBody>{stripYamlFrontmatter(content)}</MarkdownBody>
+              <MarkdownBody>{stripYamlFrontmatter(draft)}</MarkdownBody>
+            ) : editable ? (
+              <Textarea rows={18}
+                className="min-h-[40vh] border-0 bg-transparent font-mono text-xs shadow-none focus:ring-0"
+                value={draft}
+                aria-label="Skill source"
+                onChange={(e) => { setDraft(e.target.value); setDirty(true); }} />
             ) : (
-              <MarkdownSourcePre>{content}</MarkdownSourcePre>
+              <MarkdownSourcePre>{draft}</MarkdownSourcePre>
             )}
           </MarkdownViewShell>
         </>
       )}
-      <div className="mt-5 flex justify-end">
-        <Button kind="ghost" onClick={onClose}>Close</Button>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button kind="ghost" disabled={busy} onClick={onClose}>Close</Button>
+        {editable && (
+          <Button disabled={busy || !dirty} onClick={save}>
+            {busy ? "Saving…" : "Save skill"}
+          </Button>
+        )}
       </div>
     </Modal>
   );
 }
 
 
-export default function SkillsSection({ setPageErr }) {
+export default function SkillsSection({ setPageErr, skillSources = [] }) {
   const [confirm, setConfirm] = useState(null); // delete confirms
   // skill store catalog (v1): store-listed when Gitea is up, bundled
   // fallback otherwise — `store` says which (and where to edit)
@@ -442,6 +532,8 @@ export default function SkillsSection({ setPageErr }) {
         onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
       {viewSkill && (
         <ViewSkillDialog name={viewSkill}
+          skillSources={skillSources}
+          onSaved={loadSkills}
           onClose={() => setViewSkill(null)} />
       )}
     </>

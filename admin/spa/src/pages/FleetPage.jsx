@@ -60,7 +60,10 @@ export default function FleetPage({ section, onHealthChange }) {
         <PromptsSection cfg={dr.draft.cfg} setField={dr.setField}
           devTypeNames={Object.keys(dr.draft.devTypes || {})} />
       )}
-      {section === "skills" && <SkillsSection setPageErr={setPageErr} />}
+      {section === "skills" && (
+        <SkillsSection setPageErr={setPageErr}
+          skillSources={dr.draft.cfg.skill_sources || []} />
+      )}
     </div>
   );
 }

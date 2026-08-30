@@ -3,6 +3,7 @@ import { Copy, Check } from "lucide-react";
 import { Overlay } from "./Modal.jsx";
 import { getText } from "../api.js";
 import { TERMINAL_STATES } from "../lib/runStates.js";
+import { runHoverDetail } from "../lib/runHover.js";
 
 export { TERMINAL_STATES };
 
@@ -55,6 +56,8 @@ export default function RunTerminal({ run, onClose }) {
   };
 
   const note = run.error || run.verdict; // app-level judgment, when present
+  // CAKE-167: same facts as the Runs-tab mission-cell title popup
+  const hoverDetail = runHoverDetail(run);
 
   return (
     // Overlay supplies the focus trap, Esc/backdrop close, <main> scroll
@@ -74,6 +77,12 @@ export default function RunTerminal({ run, onClose }) {
             live ? "bg-accent-900 text-accent-200" : "bg-neutral-800 text-neutral-400"}`}>
             {live ? "live" : run.state}
           </span>
+          {hoverDetail && (
+            <span title={hoverDetail}
+              className="max-w-[28rem] truncate font-mono text-[10px] text-neutral-400">
+              {hoverDetail}
+            </span>
+          )}
           {(run.memory_mounts || []).length > 0 && (
             <span className="max-w-[22rem] truncate font-mono text-[10px] text-neutral-400"
               title={(run.memory_mounts || []).map((m) =>

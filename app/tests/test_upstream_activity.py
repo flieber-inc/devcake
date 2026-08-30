@@ -210,7 +210,7 @@ def test_bundled_skills_never_include_review_ledger():
 
 def _dispatch_with_ancestry(tmp_path, *, strict: bool, fail_root: bool = True):
     """Dispatch a child whose parent activity may be unreadable."""
-    from devcake.config import AppConfig, DevType, PMOInstance
+    from devcake.config import AppConfig, Assignment, DevType, PMOInstance
     from devcake.domain.model import MissionType
     from fakes import FakeInternalForge, make_mission_manager
     from test_prompt_templates import _ForgeWithDescriptor
@@ -226,7 +226,10 @@ def _dispatch_with_ancestry(tmp_path, *, strict: bool, fail_root: bool = True):
     pmo = MultiActivityPMO([root, child], activities)
     if fail_root:
         pmo.fail_ids.add("r")
-    cfg = AppConfig(context_sourcing_strict=strict)
+    cfg = AppConfig(
+        context_sourcing_strict=strict,
+        assignments={mt: Assignment(dev_type="senior-dev")
+                     for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")})
     mgr = make_mission_manager(
         tmp_path, pmo=pmo, forge=_ForgeWithDescriptor(), config=cfg,
         dev_types={"senior-dev": DevType(name="senior-dev",

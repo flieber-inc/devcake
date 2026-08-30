@@ -13,6 +13,8 @@ import usePoll from "../lib/usePoll.js";
 import { SERVICES, serviceValue, devTypeState, runsForDevActivity } from "../lib/services.js";
 import { relTime, fullTime } from "../lib/format.js";
 import { get } from "../api.js";
+import Button from "../components/Button.jsx";
+import FirstSetupDialog from "../components/FirstSetupDialog.jsx";
 import { connRef } from "../lib/connectionFields.js";
 import { STAGES } from "../lib/missionStages.js";
 
@@ -170,7 +172,10 @@ export const SETUP_INTERNAL_FORGE_KEY = "setup-checklist:internal-forge";
 // The repo step is satisfied by an external work-repo token, a healthy
 // internal forge (zero-repo path), or an explicit operator dismiss.
 function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) {
-  const [checks, setChecks] = useState(null); // {pmoOk, repoOk, devOk}
+  const [checks, setChecks] = useState(null); // {pmoOk, repoOk, devOk, rosterEmpty}
+  const [harnesses, setHarnesses] = useState({});
+  const [firstSetup, setFirstSetup] = useState(false);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     (async () => {
       try {
@@ -184,20 +189,22 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
         const sc = conn ? await get(`/secrets-check?conn=${encodeURIComponent(conn)}`) : { conn: {} };
         const pmoOk = pmos.some((p) => sc.conn[connRef("pmo", p.name, "api_key")]?.present);
         const repoOk = repos.some((r) => sc.conn[connRef("repo", r.name, "token")]?.present);
-        const [dts, harnesses] = await Promise.all([get("/dev-types"), get("/harnesses")]);
+        const [dts, hs] = await Promise.all([get("/dev-types"), get("/harnesses")]);
+        setHarnesses(hs);
         const envNames = [...new Set(dts.flatMap(
-          (d) => harnesses[d.harness_template]?.credential_env || []))];
-        const hs = envNames.length
+          (d) => hs[d.harness_template]?.credential_env || []))];
+        const secretCheck = envNames.length
           ? await get(`/secrets-check?harness=${encodeURIComponent(envNames.join(","))}`)
           : { harness: {} };
-        const devOk = dts.some((d) =>
+        const rosterEmpty = dts.length === 0;
+        const devOk = !rosterEmpty && dts.some((d) =>
           (d.secrets_present || []).length > 0 ||
-          (harnesses[d.harness_template]?.credential_env || [])
-            .some((v) => hs.harness[v]?.present));
-        setChecks({ pmoOk, repoOk, devOk });
+          (hs[d.harness_template]?.credential_env || [])
+            .some((v) => secretCheck.harness[v]?.present));
+        setChecks({ pmoOk, repoOk, devOk, rosterEmpty });
       } catch { setChecks(null); }
     })();
-  }, []);
+  }, [tick]);
   if (!checks) return null;
   const internalForgeOk = Boolean(health?.internal_forge?.ok);
   const dismissedInternal = dismissedKeys.includes(SETUP_INTERNAL_FORGE_KEY);
@@ -223,71 +230,96 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
         ? { label: "I'll work with the internal forge", onClick: onDismissInternalForge }
         : null,
     },
-    { ok: checks.devOk, text: "Give a Dev Type credentials", href: "#/fleet/dev-types", go: "Dev Types" },
+    checks.rosterEmpty
+      ? {
+          ok: false,
+          text: "First setup? Auto-create your first Devs.",
+          href: "#/fleet/dev-types",
+          go: "Dev Types",
+          action: { label: "Auto-create…", onClick: () => setFirstSetup(true) },
+        }
+      : {
+          ok: checks.devOk,
+          text: "Give a Dev Type credentials",
+          href: "#/fleet/dev-types",
+          go: "Dev Types",
+        },
   ];
   const done = steps.filter((s) => s.ok).length;
   return (
-    <Card className="p-5">
-      <div className="flex items-start gap-4">
-        {/* the half-baked stack: one layer fills per completed step (+base) */}
-        <span className="mt-1 flex w-9 flex-col-reverse gap-1" role="img"
-          aria-label={`setup ${done} of 3 steps complete`}>
-          {[0, 1, 2, 3].map((i) => (
-            <span key={i}
-              style={{ width: `${100 - i * 8}%` }}
-              className={`h-1.5 rounded-full ${
-                i <= done ? "bg-accent-500 dark:bg-accent-400" : "bg-neutral-200 dark:bg-neutral-800"
-              }`} />
-          ))}
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-display text-lg font-extrabold tracking-tight">
-            Let&apos;s get baking<span className="text-accent-600 dark:text-accent-400">.</span>
-          </h3>
-          <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-            {3 - done} step{done === 2 ? "" : "s"} to DevCake&apos;s first adopted mission.
-          </p>
-          <ul className="mt-3 divide-y divide-neutral-100 dark:divide-neutral-800">
-            {steps.map((s) => (
-              <li key={s.text} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
-                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${
-                  s.ok
-                    ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
-                    : "border-[1.5px] border-dashed border-neutral-300 dark:border-neutral-700"
-                }`}>
-                  {s.ok ? "✓" : ""}
-                </span>
-                <span className={`min-w-0 flex-1 ${s.ok ? "text-neutral-500 line-through decoration-neutral-300 dark:text-neutral-400 dark:decoration-neutral-700" : ""}`}>
-                  {s.text}
-                  {s.note && (
-                    /* inline-block: escapes the parent's line-through
-                       (decorations propagate through inline boxes only) */
-                    <span className="ml-1.5 inline-block text-xs font-normal text-neutral-400 dark:text-neutral-500">
-                      {s.note}
+    <>
+      <Card className="p-5">
+        <div className="flex items-start gap-4">
+          {/* the half-baked stack: one layer fills per completed step (+base) */}
+          <span className="mt-1 flex w-9 flex-col-reverse gap-1" role="img"
+            aria-label={`setup ${done} of 3 steps complete`}>
+            {[0, 1, 2, 3].map((i) => (
+              <span key={i}
+                style={{ width: `${100 - i * 8}%` }}
+                className={`h-1.5 rounded-full ${
+                  i <= done ? "bg-accent-500 dark:bg-accent-400" : "bg-neutral-200 dark:bg-neutral-800"
+                }`} />
+            ))}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="font-display text-lg font-extrabold tracking-tight">
+              Let&apos;s get baking<span className="text-accent-600 dark:text-accent-400">.</span>
+            </h3>
+            <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
+              {3 - done} step{done === 2 ? "" : "s"} to DevCake&apos;s first adopted mission.
+            </p>
+            <ul className="mt-3 divide-y divide-neutral-100 dark:divide-neutral-800">
+              {steps.map((s) => (
+                <li key={s.text} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${
+                    s.ok
+                      ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
+                      : "border-[1.5px] border-dashed border-neutral-300 dark:border-neutral-700"
+                  }`}>
+                    {s.ok ? "✓" : ""}
+                  </span>
+                  <span className={`min-w-0 flex-1 ${s.ok ? "text-neutral-500 line-through decoration-neutral-300 dark:text-neutral-400 dark:decoration-neutral-700" : ""}`}>
+                    {s.text}
+                    {s.note && (
+                      /* inline-block: escapes the parent's line-through
+                         (decorations propagate through inline boxes only) */
+                      <span className="ml-1.5 inline-block text-xs font-normal text-neutral-400 dark:text-neutral-500">
+                        {s.note}
+                      </span>
+                    )}
+                  </span>
+                  {!s.ok && (
+                    <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                      {s.dismiss && (
+                        <button type="button" onClick={s.dismiss.onClick}
+                          title="Missions without a work-repo set use the bundled Gitea; deliverables attach to the PMO."
+                          className="text-xs font-medium text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200">
+                          {s.dismiss.label}
+                        </button>
+                      )}
+                      {s.action && (
+                        <Button kind="ghost" onClick={s.action.onClick}>
+                          {s.action.label}
+                        </Button>
+                      )}
+                      <a href={s.href}
+                        className="text-xs font-semibold text-accent-700 hover:underline dark:text-accent-300">
+                        {s.go} →
+                      </a>
                     </span>
                   )}
-                </span>
-                {!s.ok && (
-                  <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                    {s.dismiss && (
-                      <button type="button" onClick={s.dismiss.onClick}
-                        title="Missions without a work-repo set use the bundled Gitea; deliverables attach to the PMO."
-                        className="text-xs font-medium text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200">
-                        {s.dismiss.label}
-                      </button>
-                    )}
-                    <a href={s.href}
-                      className="text-xs font-semibold text-accent-700 hover:underline dark:text-accent-300">
-                      {s.go} →
-                    </a>
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+      {firstSetup && (
+        <FirstSetupDialog harnesses={harnesses}
+          onClose={() => setFirstSetup(false)}
+          onCreated={() => { setFirstSetup(false); setTick((n) => n + 1); }} />
+      )}
+    </>
   );
 }
 

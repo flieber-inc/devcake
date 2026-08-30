@@ -410,9 +410,10 @@ class GiteaProvisioner:
     async def ensure_skill_store(self, seed_files: list[dict]) -> None:
         """Create-or-adopt {OPERATOR_ORG}/{SKILL_REPO} and seed the bundled
         skills — MISSING paths only, one commit, never clobbering operator
-        edits (a deleted built-in file returns on next boot; DEFAULT_DEV_TYPES
-        precedent). No auto_init: the seed commit itself initializes main, so
-        the bundled README is not blocked by Gitea's auto-init stub."""
+        edits (a deleted built-in file returns on next boot — same top-up
+        shape the skill store has always used). No auto_init: the seed
+        commit itself initializes main, so the bundled README is not
+        blocked by Gitea's auto-init stub."""
         await self._req("POST", "/orgs", tolerate=(409, 422),
                         json={"username": OPERATOR_ORG, "visibility": "private"})
         await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos", tolerate=(409,),

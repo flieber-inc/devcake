@@ -15,7 +15,8 @@ from ...house_pins import effective_cli_version
 from ...staffing import HarnessNotStaffed, app_digest, require_staffed
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
-from ...config import DevType, active_prompt_template_for, assignment_for
+from ...config import (AssignmentUnstaffed, DevType,
+                       active_prompt_template_for, assignment_for)
 
 MEMORY_MOUNT_SENTENCE = (
     "Memory notebooks are mounted read-only under /workspace/memory/.\n"
@@ -411,7 +412,12 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     if not await _attempt_gate(mgr, live, mtype, attempt):
         return None
 
-    assignment = assignment_for(mgr.config, mgr.instance, mtype.value)
+    try:
+        assignment = assignment_for(mgr.config, mgr.instance, mtype.value)
+    except AssignmentUnstaffed as e:
+        mgr.blocked_reasons[live.pmo_id] = str(e)
+        log.warning("dispatch of %s refused — %s", live.key, e)
+        return None
     from ..ids import RunIdOverflow, make_run_id
     try:
         run_id = make_run_id(mgr.instance_name, mission.key, seq, mtype.value)

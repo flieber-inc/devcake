@@ -28,7 +28,7 @@ export default function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
     <Modal onClose={busy ? undefined : onClose}>
       <h4 className="mb-3 text-base font-semibold tracking-tight">New Dev Type</h4>
       <div className="space-y-3">
-        <Field label="Name" hint="lowercase letters/digits/dashes — e.g. judgment">
+        <Field label="Name" hint="lowercase letters/digits/dashes — e.g. executor">
           <Input value={name} onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && name.trim() && !busy && create()} />
         </Field>

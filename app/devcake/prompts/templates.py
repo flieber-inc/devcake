@@ -298,7 +298,7 @@ def known_devtype_dirs() -> list[Path]:
 def seed_devtype_prompts(dev_types: dict) -> None:
     """Top-up seeding at boot and on dev-type create: Development ← the dev
     type's current identifying prompt (once); Customer Success ← the preset
-    for the seeded trio (once)."""
+    for wizard role names judge/executor/steward (once)."""
     from ..config import _atomic_yaml
     from .customer_success import CS_DEV_PROMPTS
     for name, dt in dev_types.items():

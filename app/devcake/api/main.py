@@ -627,6 +627,14 @@ async def list_dev_types():
     return await devtypes_service.list_dev_types(dev_types=svc().dev_types)
 
 
+@app.post("/api/v1/dev-types/first-setup")
+async def first_setup_dev_types(body: dict):
+    s = svc()
+    return await devtypes_service.first_setup(
+        body, config=s.config, dev_types=s.dev_types,
+        version_source=s.version_source)
+
+
 @app.post("/api/v1/dev-types")
 @app.put("/api/v1/dev-types/{name}")
 async def upsert_dev_type(body: dict, name: str | None = None):

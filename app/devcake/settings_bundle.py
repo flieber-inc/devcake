@@ -661,9 +661,8 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
     elif dropped:
         for msg in dropped:
             log.warning(msg)
-    # emptiness is impossible post-model (config.validate_assignment_map runs
-    # as a field validator on every model_validate) — only the cross-store
-    # dev-type reference is checked here
+    # Empty assignments = unstaffed (CAKE-164); non-empty maps must name
+    # existing Dev Types. Shape completeness is the model validator's job.
     assert_assignment_dev_types(cfg.assignments or {}, dev_type_names)
     for inst in cfg.pmos:                     # ADR-0019 override maps
         assert_assignment_dev_types(

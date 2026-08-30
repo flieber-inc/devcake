@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # One-time (or re-run on expiry) Grok Build OAuth login for a DevCake Dev Type.
 #
-# Usage: ./scripts/grok_login.sh [dev-type]
-#   Positional wins over DEVCAKE_DEV_TYPE; default is the seeded grok-build
-#   Dev Type `implementer`.
+# Usage: ./scripts/grok_login.sh <dev-type>
+#   Positional wins over DEVCAKE_DEV_TYPE. Pass the operator-chosen Dev Type
+#   name (first-setup's executor is a common grok-build example — names are
+#   never hardcoded by the product seed).
 # Env:
-#   DEVCAKE_DEV_TYPE       — Dev Type name (default: implementer)
+#   DEVCAKE_DEV_TYPE       — Dev Type name (required if no positional arg)
 #   DEVCAKE_APP_CONTAINER  — app container id/name (default: docker compose ps -q app)
 #
 # Runs `grok login --device-auth` INSIDE the dev-grok-build image so the session
@@ -20,7 +21,12 @@ cd "$(dirname "$0")/.."
 # shellcheck disable=SC1091
 source scripts/lib/app_container.sh
 
-DEV_TYPE="${1:-${DEVCAKE_DEV_TYPE:-implementer}}"
+DEV_TYPE="${1:-${DEVCAKE_DEV_TYPE:-}}"
+if [[ -z "$DEV_TYPE" ]]; then
+  echo "grok_login: pass a Dev Type name (positional or DEVCAKE_DEV_TYPE)" >&2
+  echo "  example after first-setup: ./scripts/grok_login.sh executor" >&2
+  exit 2
+fi
 # Align with DevType.name in app/devcake/config.py (path-safe token).
 if [[ ! "$DEV_TYPE" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
   echo "grok_login: refusing Dev Type name ${DEV_TYPE@Q}" >&2

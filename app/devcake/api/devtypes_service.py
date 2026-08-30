@@ -11,8 +11,9 @@ import os
 
 from fastapi import HTTPException
 
-from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DEV_TYPE_NAME_RE,
-                      DevType, delete_dev_type, save_config, save_dev_type,
+from ..config import (Assignment, DEV_TYPE_NAME_RE, DevType, EXECUTOR_PROMPT,
+                      JUDGE_PROMPT, STEWARD_PROMPT, WIZARD_ASSIGNMENTS,
+                      delete_dev_type, save_config, save_dev_type,
                       validate_assignment_map, validate_memory_bindings)
 from ..harness import HARNESSES, dev_type_status
 from ..house_pins import HOUSE_PINS, LAUNCH_SUPPORTED
@@ -132,6 +133,133 @@ async def latest_cli_version(template: str, *, source):
         return {"cli_version": resolve_latest(template, source=source)}
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
+
+
+_WIZARD_ROLES = ("executor", "judge", "steward")
+_WIZARD_PROMPTS = {
+    "executor": EXECUTOR_PROMPT,
+    "judge": JUDGE_PROMPT,
+    "steward": STEWARD_PROMPT,
+}
+
+
+def _pin_cli_version(template: str, *, source) -> str:
+    """Resolve remote latest to a concrete semver; offline → HOUSE_PINS.
+    Never returns or persists the literal string ``latest``."""
+    from ..versions import resolve_latest
+    try:
+        if source is not None:
+            return resolve_latest(template, source=source)
+    except (ValueError, OSError, ConnectionError, TimeoutError) as e:
+        log.info("first-setup: resolve_latest(%s) failed (%s) — house pin",
+                 template, e)
+    except Exception as e:  # noqa: BLE001 — offline first boot must not wedge; any registry/client failure falls back to HOUSE_PINS
+        log.info("first-setup: resolve_latest(%s) unexpected (%s) — house pin",
+                 template, e)
+    pin = HOUSE_PINS.get(template)
+    if not pin or pin == "latest":
+        raise HTTPException(
+            422, f"no concrete CLI pin available for harness {template!r}")
+    return pin
+
+
+async def first_setup(body: dict, *, config, dev_types, version_source):
+    """CAKE-164: create executor/judge/steward on an empty roster, pin CLIs,
+    wire global assignments + steward.dev_type. Refuses if the in-memory
+    roster is non-empty or any of the three names already exist."""
+    if dev_types:
+        raise HTTPException(
+            409, "first setup requires an empty Dev Type roster — "
+                 "existing deployments keep their names")
+    for name in _WIZARD_ROLES:
+        if name in dev_types:
+            raise HTTPException(
+                409, f"a Dev Type named {name!r} already exists")
+
+    roles = body.get("roles") if isinstance(body, dict) else None
+    if not isinstance(roles, dict):
+        raise HTTPException(422, "body must carry a 'roles' object")
+
+    planned: list[DevType] = []
+    for name in _WIZARD_ROLES:
+        spec = roles.get(name)
+        if not isinstance(spec, dict):
+            raise HTTPException(
+                422, f"roles.{name} must be an object with harness_template")
+        template = str(spec.get("harness_template") or "").strip()
+        if not template:
+            raise HTTPException(
+                422, f"roles.{name}.harness_template is required")
+        if template not in HARNESSES:
+            raise HTTPException(
+                422, f"roles.{name}: unknown harness {template!r}")
+        if template not in LAUNCH_SUPPORTED:
+            raise HTTPException(
+                422, f"roles.{name}: harness {template!r} is not "
+                     f"launch-supported")
+        model = str(spec.get("model") or "").strip()
+        cli_version = _pin_cli_version(template, source=version_source)
+        planned.append(DevType(
+            name=name,
+            harness_template=template,
+            identifying_prompt=_WIZARD_PROMPTS[name],
+            max_concurrency=1 if name == "steward" else 2,
+            model=model,
+            cli_version=cli_version,
+        ))
+
+    created: list[str] = []
+    try:
+        for dt in planned:
+            dev_types[dt.name] = dt
+            save_dev_type(dt)
+            created.append(dt.name)
+            prompt_templates.seed_devtype_prompts({dt.name: dt})
+        # Wire staffing — deep-copy so in-place renames cannot mutate the
+        # module constant.
+        config.assignments = {
+            k: v.model_copy() for k, v in WIZARD_ASSIGNMENTS.items()}
+        # Shape + cross-store checks (same as PUT /assignments).
+        validate_assignment_map(
+            config.assignments, require_complete=True, context="assignments")
+        from ..settings_bundle import BundleError, assert_assignment_dev_types
+        try:
+            assert_assignment_dev_types(config.assignments, set(dev_types))
+        except BundleError as e:
+            raise HTTPException(e.status, str(e)) from e
+        config.steward.dev_type = "steward"
+        save_config(config)
+        publish_keep_set(dev_types)
+    except Exception:
+        # Roll back YAML + prompt dirs + in-memory entries on any failure
+        # after the first create so a partial roster cannot wedge boot.
+        for name in created:
+            dev_types.pop(name, None)
+            try:
+                delete_dev_type(name)
+            except Exception as e:  # noqa: BLE001 — best-effort rollback
+                log.warning("first-setup rollback delete_dev_type(%s): %s",
+                            name, e)
+            try:
+                import shutil
+                from pathlib import Path as _P
+                data = _P(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
+                root = data / "config" / "devtype_prompt_templates"
+                target = confined(root, name)
+                if target.is_dir():
+                    shutil.rmtree(target, ignore_errors=True)
+            except Exception as e:  # noqa: BLE001 — best-effort rollback
+                log.warning("first-setup rollback prompts(%s): %s", name, e)
+        raise
+
+    return {
+        "created": list(_WIZARD_ROLES),
+        "assignments": {k: v.model_dump()
+                        for k, v in config.assignments.items()},
+        "steward_dev_type": config.steward.dev_type,
+        "dev_types": [dt.model_dump() for dt in
+                      (dev_types[n] for n in _WIZARD_ROLES)],
+    }
 
 
 async def upsert_dev_type(body: dict, name: str | None = None, *,

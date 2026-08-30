@@ -164,16 +164,17 @@ its handoff_md forward, amending only what the newer entries change.
 {reference_repos}{blocker_repos}""",
 }
 
-# identifying prompts for the SEEDED Dev Types (operator-created dev types
-# get no CS preset — the workflow switcher skips them gracefully)
+# identifying prompts for wizard-created role Dev Types (CAKE-164).
+# Operator-created custom names get no CS preset — the workflow switcher
+# skips them gracefully. Old judgment/implementer dirs are never migrated.
 CS_DEV_PROMPTS: dict[str, str] = {
-    "judgment": (
+    "judge": (
         "You are a customer-success lead: you triage customer issues, "
         "write resolution plans, and review deliverables before they reach a "
         "customer. You are precise about facts, allergic to invented "
         "commitments, and hold a high bar for tone and completeness. Do exactly "
         "what your current mission playbook asks."),
-    "implementer": (
+    "executor": (
         "You are a customer-success specialist who produces polished, "
         "empathetic, factually careful deliverables: response drafts, "
         "documentation updates, runbooks, and account summaries. You follow "

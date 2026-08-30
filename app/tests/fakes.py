@@ -201,13 +201,25 @@ def make_mission_manager(
     from devcake.adapters.files.run_store import RunStore
     from devcake.domain.runs import RunManager
 
-    cfg = config if config is not None else AppConfig()
+    # Default test vehicle keeps judgment/implementer names (opaque fixtures,
+    # not the product seed — CAKE-164 emptied the house seeder). When the
+    # caller omits config, staff those names so schedule/dispatch still work.
+    from devcake.config import Assignment
+    if config is not None:
+        cfg = config
+    else:
+        cfg = AppConfig(assignments={
+            "ONBOARD": Assignment(dev_type="judgment",
+                                  extra_cli_args="--max-turns 15"),
+            "PLAN": Assignment(dev_type="judgment"),
+            "EXECUTE": Assignment(dev_type="implementer"),
+            "REVIEW": Assignment(dev_type="judgment"),
+        })
     inst = instance if instance is not None else DEFAULT_INSTANCE
     dts = dev_types if dev_types is not None else {
         "judgment": DevType(name="judgment", harness_template="claude-code"),
         "implementer": DevType(name="implementer", harness_template="grok-build"),
-        "steward": DevType(name="steward", harness_template="claude-code",
-                          model="claude-opus-5"),
+        "steward": DevType(name="steward", harness_template="claude-code"),
     }
     fr = forge_runtime if forge_runtime is not None else FakeForgeRuntime(forge)
     msg = messaging if messaging is not None else NullMessaging()

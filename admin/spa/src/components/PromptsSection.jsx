@@ -342,7 +342,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                     </h4>
                   </span>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="w-full min-w-0 max-w-full overflow-x-auto">
                   <table className="w-full min-w-[28rem] text-sm">
                     <tbody>
                       {MISSION_TYPES.map((mt) => {

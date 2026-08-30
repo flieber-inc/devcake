@@ -51,14 +51,16 @@ await withPage(async (page) => {
   check("expanding a summary reveals Inherit selects for that board",
     inheritAfter >= inheritBefore + 4);
 
-  // Mobile viewport: summary remains usable without forced overflow.
+  // Mobile: wide override table keeps its own overflow-x-auto scrollport
+  // (tasks.mjs idiom); document itself must not grow past the viewport.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
-  const overflow = await page.evaluate(() => {
-    const main = document.querySelector("main") || document.body;
-    return main.scrollWidth > main.clientWidth + 1;
-  });
-  check("mobile viewport: prompts main has no horizontal overflow", !overflow);
+  const wrapCount = await page.locator("#prompts .overflow-x-auto").count();
+  check("mobile: override editor has an overflow-x-auto scrollport", wrapCount >= 1);
+  const docOver = await page.evaluate(() =>
+    Math.ceil(document.documentElement.scrollWidth)
+      - document.documentElement.clientWidth);
+  check(`mobile: document has no horizontal overflow (${docOver}px)`, docOver <= 1);
 });
 
 summary("prompts_overrides");

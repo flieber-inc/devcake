@@ -26,6 +26,8 @@ const SUITES = [
   "alerts.mjs",
   "design_tokens.mjs",
   "list_window_helpers.mjs",
+  "cake162_polish.mjs",
+  "cake162_ui.mjs",
   "settings.mjs",
   "tasks.mjs",
   "hierarchy.mjs",

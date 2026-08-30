@@ -159,7 +159,7 @@ Internal (zero-repo) missions always auto-merge; operators who want doctrine con
 **Multi-select convention (mandatory for new fields):** every field that
 selects multiple entries from a catalog/list — the PMO **repo set**,
 **reference repos**, Dev Type **skills**, and any future such field — uses
-the shared toggle-chip control
+the shared control
 (`admin/spa/src/components/SelectionChips.jsx`). (Stale-name nuance,
 ADR-0016 addendum: an unknown flat skill name is SKIPPED at dispatch with
 a warning, but an unknown `<card>/` prefix GATES dispatch — a torn-out
@@ -168,16 +168,19 @@ exists for.) Since the 2026-08-02
 bulk-scale rework: **selected chips render first, in selection order**
 (the order is load-bearing where a `firstBadge` marks it — the repo set's
 first entry is the default routing target, and every non-first selected
-chip carries a pin "make default" affordance that moves it to the front);
-the unselected **catalog** renders below, and past ~12 options it gains a
-**search box that narrows the catalog chips** (≤30 matches shown + an "N
-more — refine" note) — search narrows the chip control, it never replaces
-it. Callers for whom order is meaningless normalize it in `onChange` (the
-draft diff is order-sensitive). A selected entry whose option no longer
-exists renders **red/strikethrough with ✕** (visible and removable — a
-stale name must never wedge the Save PUT); dangling-name draft errors also
-render inline under the repo chips. Explicit empty-state note required. Do
-not introduce checkbox lists or multi-select dropdowns for these.
+chip carries a pin "make default" affordance that moves it to the front).
+Small catalogs (≤~12 options) keep a zero-friction **chip cloud** of
+unselected entries below. Past that threshold (CAKE-162): a **search box
+plus a capped add-list** (≤30 matching rows + an "N more — refine" note)
+replaces the unselected chip cloud so a 160-repo deployment stays usable
+across three PMO pickers — selected chips stay chips; search narrows the
+add-list, it never becomes a multi-select dropdown. Callers for whom order
+is meaningless normalize it in `onChange` (the draft diff is
+order-sensitive). A selected entry whose option no longer exists renders
+**red/strikethrough with ✕** (visible and removable — a stale name must
+never wedge the Save PUT); dangling-name draft errors also render inline
+under the repo chips. Explicit empty-state note required. Do not introduce
+checkbox lists or multi-select dropdowns for these.
 
 Sections (one section per `#/config/<id>` view, from `nav.js`, in this order): **Dev Types · Mission Types · Skills · Prompts · Limits · Scheduled Tasks · Profiles & Export**. Repositories and PMO connections are **not** Configuration sections — they live under the sidebar's Adapters item (`#/repos`, `#/pmo`) and edit the same draft. The old Traffic card dissolved 2026-08-14: the Relations Steward controls live on **Scheduled Tasks** (the DevCake-tasks card, beside Memory Curator; custom cron rows are the second card) and Decomposition depth joined Limits (`#/config/traffic` and `#/config/cron` redirect).
 

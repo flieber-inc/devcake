@@ -39,11 +39,12 @@ export default function ConfigPage({ section, onHealthChange }) {
         subtitle="Edits everywhere gather into one draft — nothing applies until you Save" />
       {pageErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {pageErr}</p>}
 
-      {/* mobile section switcher (sidebar sub-nav is expanded-drawer-only) */}
-      <div className="sticky top-0 z-20 -mx-4 flex gap-1.5 overflow-x-auto bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90 lg:hidden">
+      {/* mobile section switcher (sidebar sub-nav is expanded-drawer-only).
+          Wrap — never horizontal-scroll (CAKE-162 / no-horizontal-scroll). */}
+      <div className="sticky top-0 z-20 -mx-4 flex flex-wrap gap-1.5 bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90 lg:hidden">
         {CONFIG_SECTIONS.map((s) => (
           <a key={s.id} href={`#/config/${s.id}`}
-            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
+            className={`rounded-full border px-3 py-1 text-xs font-medium ${
               section === s.id
                 ? "border-accent-300 bg-accent-50 font-semibold text-accent-800 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
                 : "border-neutral-200 bg-surface-raised text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300"

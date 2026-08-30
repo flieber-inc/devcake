@@ -12,9 +12,13 @@ import { Field, Input } from "./Field.jsx";
 // default routing target) and was previously invisible (chips rendered in
 // catalog order). Non-first selected chips get a pin "make default"
 // affordance when firstBadge is set. Catalogs past `searchThreshold`
-// options gain a search box that narrows the catalog chips (capped at
-// `matchCap` matches) — search narrows the chip catalog, it never replaces
-// the chip control.
+// options gain a search box.
+//
+// 2026-08-30 (CAKE-162): past searchThreshold the unselected catalog is an
+// **add-list** (filter + capped clickable rows), not a chip cloud — a
+// 160-entry catalog rendered thrice on one PMO card was unusable at the
+// old matchCap chip ceiling. Small catalogs keep today's zero-friction
+// chip cloud. Search still never becomes a multi-select dropdown.
 //
 // A selected name whose option no longer exists renders as a red
 // strikethrough ✕ chip: visible AND removable, so a stale entry can never
@@ -50,6 +54,8 @@ export default function SelectionChips({
     .filter((o) => !q || o.name.toLowerCase().includes(q));
   const shown = searching ? catalog.slice(0, matchCap) : catalog;
   const hiddenCount = catalog.length - shown.length;
+
+  const addOption = (name) => onChange([...selected, name]);
 
   return (
     <Field label={label} help={help}>
@@ -101,7 +107,7 @@ export default function SelectionChips({
         {/* catalog search — only past the threshold, so small catalogs keep
             today's zero-friction chip cloud */}
         {searching && !disabled && (
-          <span className="relative block w-64">
+          <span className="relative block w-full max-w-sm">
             <Input className="pr-7" value={query}
               placeholder={`Search ${options.length} entries…`}
               aria-label={`Search ${label || "options"}`}
@@ -115,35 +121,73 @@ export default function SelectionChips({
             )}
           </span>
         )}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {options.length === 0 && stale.length === 0 && (
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">{emptyNote}</span>
-          )}
-          {shown.map((o) => {
-            const blocked = disabled || o.disabled;
-            return (
-              <button key={o.name} type="button" disabled={blocked}
-                title={disabled ? undefined : o.disabled ? o.disabledNote : o.title}
-                onClick={() => onChange([...selected, o.name])}
-                className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
-                  blocked
-                    ? "cursor-not-allowed border-neutral-200 text-neutral-300 dark:border-neutral-800 dark:text-neutral-600"
-                    : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"}`}>
-                {o.name}
-              </button>
-            );
-          })}
-          {hiddenCount > 0 && (
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">
-              {hiddenCount} more — refine the search
-            </span>
-          )}
-          {searching && q && catalog.length === 0 && (
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">
-              no matches for “{query.trim()}”
-            </span>
-          )}
-        </div>
+        {options.length === 0 && stale.length === 0 && (
+          <span className="text-xs text-neutral-500 dark:text-neutral-400">{emptyNote}</span>
+        )}
+        {/* Large catalogs: searchable add-list (CAKE-162). Small catalogs:
+            zero-friction chip cloud. */}
+        {searching ? (
+          <div
+            role="listbox"
+            data-testid="selection-chips-add-list"
+            aria-label={`Add ${label || "options"}`}
+            className="max-h-48 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800"
+          >
+            {shown.map((o) => {
+              const blocked = disabled || o.disabled;
+              return (
+                <button
+                  key={o.name}
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  disabled={blocked}
+                  title={disabled ? undefined : o.disabled ? o.disabledNote : o.title}
+                  onClick={() => addOption(o.name)}
+                  className={`flex w-full items-center px-2.5 py-1.5 text-left font-mono text-xs transition ${
+                    blocked
+                      ? "cursor-not-allowed text-neutral-300 dark:text-neutral-600"
+                      : "text-neutral-700 hover:bg-stone-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/60 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  {o.name}
+                </button>
+              );
+            })}
+            {hiddenCount > 0 && (
+              <p className="border-t border-neutral-100 px-2.5 py-1.5 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                {hiddenCount} more — refine the search
+              </p>
+            )}
+            {q && catalog.length === 0 && (
+              <p className="px-2.5 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                no matches for “{query.trim()}”
+              </p>
+            )}
+            {!q && catalog.length === 0 && options.length > 0 && (
+              <p className="px-2.5 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                all entries selected
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {shown.map((o) => {
+              const blocked = disabled || o.disabled;
+              return (
+                <button key={o.name} type="button" disabled={blocked}
+                  title={disabled ? undefined : o.disabled ? o.disabledNote : o.title}
+                  onClick={() => addOption(o.name)}
+                  className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
+                    blocked
+                      ? "cursor-not-allowed border-neutral-200 text-neutral-300 dark:border-neutral-800 dark:text-neutral-600"
+                      : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"}`}>
+                  {o.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {disabled && disabledNote && (
           <span className="text-xs text-neutral-500 dark:text-neutral-400">{disabledNote}</span>
         )}

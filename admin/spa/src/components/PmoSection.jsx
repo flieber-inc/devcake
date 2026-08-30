@@ -216,7 +216,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
 
   return (
     <>
-      <Section id="pmo" title="PMO connections"
+      <Section id="pmo" title="Watched teams"
         description="The PMO teams DevCake watches, and how missions are adopted."
         help={(() => {
           const systems = registry.pmo_systems || [];

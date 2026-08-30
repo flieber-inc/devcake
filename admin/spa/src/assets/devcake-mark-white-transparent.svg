@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="472" height="568" viewBox="685 20 472 568"
+     role="img" aria-labelledby="title description">
+  <title id="title">devcake white and violet emblem</title>
+  <desc id="description">The white and violet devcake geometric emblem on a transparent background.</desc>
+
+  <defs>
+    <linearGradient id="warm-mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.52" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <linearGradient id="warm-type" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <linearGradient id="violet-mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a28ef1"/>
+      <stop offset="0.5" stop-color="#826bdf"/>
+      <stop offset="1" stop-color="#6042cc"/>
+    </linearGradient>
+    <linearGradient id="violet-type" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a18bef"/>
+      <stop offset="0.55" stop-color="#7b61dc"/>
+      <stop offset="1" stop-color="#5e40cb"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Geometric emblem -->
+  <g>
+    <path fill="url(#warm-mark)" d="
+      M 715 190
+      C 716 184, 720 180, 727 177
+      L 997 47
+      C 1004 44, 1012 46, 1018 51
+      C 1023 55, 1025 59, 1025 66
+      L 1025 193
+      C 1025 198, 1022 200, 1018 198
+      L 953 165
+      C 946 162, 940 163, 934 166
+      L 918 175
+      C 912 179, 909 184, 909 190
+      C 909 197, 912 202, 919 206
+      L 1019 257
+      C 1024 260, 1026 264, 1025 268
+      C 1025 272, 1023 275, 1019 278
+      L 955 317
+      C 948 321, 940 321, 933 317
+      L 727 214
+      C 719 210, 715 203, 715 196
+      Z"/>
+
+    <path fill="url(#warm-mark)" d="
+      M 715 246
+      L 928 351
+      C 932 353, 934 356, 934 361
+      L 934 440
+      C 934 441, 932 442, 929 440
+      L 722 336
+      C 717 333, 715 330, 715 325
+      Z"/>
+
+    <path fill="url(#warm-mark)" d="
+      M 715 370
+      L 929 476
+      C 932 478, 934 481, 934 485
+      L 934 554
+      C 934 557, 932 559, 929 557
+      L 728 453
+      C 719 449, 715 442, 715 433
+      Z"/>
+
+    <path fill="url(#violet-mark)" d="
+      M 955 507
+      C 955 502, 958 499, 963 495
+      L 1059 418
+      C 1066 412, 1069 406, 1069 399
+      C 1069 391, 1065 385, 1058 381
+      L 983 340
+      C 978 337, 976 333, 978 328
+      C 978 325, 980 322, 984 320
+      L 1041 285
+      C 1047 282, 1054 283, 1060 286
+      L 1114 317
+      C 1122 322, 1127 331, 1127 341
+      L 1127 421
+      C 1127 437, 1120 449, 1105 460
+      L 963 557
+      C 959 560, 955 557, 955 552
+      Z"/>
+  </g>
+
+</svg>

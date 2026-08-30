@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devcake-cli"
+version = "0.1.0"
+description = "DevCake host CLI (baker run and sibling verbs)"
+readme = "README.md"
+requires-python = ">=3.12"
+# Host baker still imports scripts/dev_factory under PYTHONPATH=scripts:app
+# (supervisor / up.sh already export that pair). No runtime deps here —
+# keep the console script thin (ADR-0038 Decision 3).
+dependencies = []
+
+[project.scripts]
+devcake = "devcake_cli.main:main"
+
+[tool.setuptools.package-dir]
+"" = "cli"
+
+[tool.setuptools.packages.find]
+where = ["cli"]
+include = ["devcake_cli*"]

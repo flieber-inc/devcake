@@ -223,7 +223,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
   if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
-    echo "── would: run host baker in foreground (exec python3 -m dev_factory; no supervisor)"
+    echo "── would: run host baker in foreground (exec \`devcake baker run\`; no supervisor)"
   else
     echo "── would: start host baker detached (launchd / systemd --user / flock respawn; .factory/watch.pid) — not a compose service"
   fi
@@ -434,8 +434,8 @@ fi
 _FACTORY_DIR="$(pwd)/.factory"
 mkdir -p "$_FACTORY_DIR"
 devcake_baker_prepare_pidfile "$_FACTORY_DIR/watch.pid"
-# Displace any leftover python -m dev_factory for THIS factory dir (orphans the
-# pidfile does not name — pre-upgrade bakers, hand-launched, crashed sessions).
+# Displace leftover bakers for THIS factory dir (legacy `python -m
+# dev_factory` and `devcake baker run` — orphans the pidfile does not name).
 # Must run BEFORE the supervised child starts: a surviving flock-holder would
 # make the new baker exit 0 on contention, and Restart=on-failure / launchd
 # KeepAlive (SuccessfulExit=false) would not bring it back.
@@ -461,10 +461,11 @@ export DEVCAKE_FACTORY_DIR="$_FACTORY_DIR"
 if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
   # Foreground mode for terminals / CI / automation that reaps detached
   # children. Write $$ then exec so the pidfile names the baker after replace.
+  _BAKER_EXEC="$(devcake_baker_resolve_entry)"
   echo "── host baker in foreground (pidfile $_BAKER_PIDFILE; Ctrl-C to stop)"
   echo "── stack up (admin: http://localhost:8080); baker takes this terminal"
   echo $$ >"$_BAKER_PIDFILE"
-  exec python3 -m dev_factory
+  exec $_BAKER_EXEC
 fi
 # Ensure the log exists; measure baseline BEFORE launch so the startup
 # print is counted as progress (not raced into the baseline).

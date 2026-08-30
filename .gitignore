@@ -47,3 +47,5 @@ devcake-data-*.tar.gz
 .env.*
 .env.bak*
 *.env.bak
+*.egg-info/
+build/

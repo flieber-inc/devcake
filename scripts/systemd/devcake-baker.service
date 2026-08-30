@@ -5,10 +5,14 @@
 #
 # Placeholders filled at install time:
 #   @REPO@          absolute checkout path (WorkingDirectory)
-#   @PYTHON@        absolute python3 interpreter
+#   @BAKER_EXEC@    full baker command — `<devcake> baker run` (uv/pipx CLI)
+#                   or the deprecated transition fallback `<python3> -m dev_factory`
 #   @PYTHONPATH@    scripts:app path pair matching up.sh exports
 #   @ENV_FILE@      .factory/baker.env (OO ingest + DEVCAKE_* — mode 0600)
 #   @WATCH_LOG@     .factory/watch.log (append stdout/stderr)
+#
+# Entry is `devcake baker run` (ADR-0038 Decision 5). The deprecated module
+# entry remains import-compatible during the transition window.
 
 [Unit]
 Description=DevCake host baker (keep-set compile + probe)
@@ -22,7 +26,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=@PYTHONPATH@
 Environment=DEVCAKE_FACTORY_LOG=@WATCH_LOG@
 EnvironmentFile=-@ENV_FILE@
-ExecStart=@PYTHON@ -m dev_factory
+ExecStart=@BAKER_EXEC@
 Restart=on-failure
 RestartSec=5
 # Bound restart storm during a long outage; budget is minutes-scale in-process.

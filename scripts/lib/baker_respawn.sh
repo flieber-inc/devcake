@@ -19,10 +19,12 @@ PIDFILE="${4:?pidfile required}"
 
 LOCKFILE="${FACTORY_DIR}/watch.respawn.lock"
 ENV_FILE="${FACTORY_DIR}/baker.env"
-PYTHON_BIN="$(command -v python3)" || {
-  echo "devcake baker-respawn: python3 not found" >&2
-  exit 1
-}
+if DEVCAKE_BIN="$(command -v devcake 2>/dev/null)"; then
+  BAKER_EXEC="${DEVCAKE_BIN} baker run"
+else
+  echo "devcake baker-respawn: \`devcake\` not on PATH — deprecated dev_factory fallback (install via uv tool / pipx; ADR-0038)" >&2
+  BAKER_EXEC="$(command -v python3) -m dev_factory"
+fi
 
 mkdir -p "$FACTORY_DIR"
 : >>"$LOGFILE"
@@ -50,8 +52,8 @@ cd "$REPO"
 BACKOFF=2
 echo "devcake baker-respawn: supervising baker (repo=${REPO})" >>"$LOGFILE"
 while true; do
-  echo "devcake baker-respawn: starting python -m dev_factory" >>"$LOGFILE"
-  "$PYTHON_BIN" -m dev_factory >>"$LOGFILE" 2>&1 &
+  echo "devcake baker-respawn: starting ${BAKER_EXEC}" >>"$LOGFILE"
+  ${BAKER_EXEC} >>"$LOGFILE" 2>&1 &
   baker_pid=$!
   printf '%s\n' "$baker_pid" >"$PIDFILE"
   set +e

@@ -750,7 +750,9 @@ def _up_sh_text() -> str:
 def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
     text = _up_sh_text()
     assert "docker buildx bake app admin hello" in text
-    assert "python3 -m dev_factory" in text
+    # Host baker entry is the CLI verb (ADR-0038 Decision 5); deprecated
+    # `python -m dev_factory` remains importable but is not the ExecStart.
+    assert "devcake baker run" in text
     assert "PYTHONPATH=" in text
     # Detached path: platform-routed supervisors (not bare nohup baker).
     assert "devcake_baker_platform" in text
@@ -758,6 +760,7 @@ def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
     assert "devcake_baker_launchd_install" in text
     assert "devcake_baker_respawn_install" in text
     assert "nohup python3 -m dev_factory" not in text
+    assert "nohup devcake" not in text
     init = next((p / "dev_factory" / "__init__.py"
                  for p in _FACTORY_CANDIDATES if p.is_dir()), None)
     assert init is not None
@@ -781,8 +784,14 @@ def test_baker_systemd_unit_restarts_on_failure():
     unit = _baker_unit_text()
     assert "Restart=on-failure" in unit
     assert "RestartSec=" in unit
-    # ExecStart uses @PYTHON@ placeholder (resolved to host python3 at install).
-    assert "-m dev_factory" in unit
+    # ExecStart uses @BAKER_EXEC@ — resolved at install to `<devcake> baker run`,
+    # or the deprecated `<python3> -m dev_factory` transition fallback when the
+    # CLI is not installed (ADR-0038 Decision 5).
+    assert "ExecStart=@BAKER_EXEC@" in unit
+    assert "@BAKER_EXEC@" in unit
+    assert "ExecStart=" in unit and "-m dev_factory" not in [
+        line for line in unit.splitlines() if line.startswith("ExecStart=")
+    ][0]
     assert "WorkingDirectory=" in unit
     # Must never mount docker.sock into a container — baker stays on the host.
     assert "docker.sock" not in unit
@@ -860,17 +869,21 @@ def test_up_sh_confirms_baker_liveness_after_launch():
 
 
 def test_up_sh_foreground_baker_bypasses_supervisor():
-    """--foreground-baker runs python3 -m dev_factory without detach/unit."""
+    """--foreground-baker runs `devcake baker run` without detach/unit."""
     text = _up_sh_text()
     assert "--foreground-baker" in text
     # Documented in the header that usage() prints.
     header = "\n".join(text.splitlines()[:25])
     assert "--foreground-baker" in header
     assert "FOREGROUND_BAKER" in text
-    assert "exec python3 -m dev_factory" in text
+    assert "baker run" in text
+    assert "devcake_baker_resolve_entry" in text
     # Flag gate: foreground path must not wrap the exec in a supervisor.
-    exec_idx = text.index("exec python3 -m dev_factory")
-    window = text[max(0, exec_idx - 200): exec_idx]
+    exec_idx = text.index("baker run")
+    # Prefer the foreground exec site (after FOREGROUND_BAKER gate).
+    fg_marker = text.index("FOREGROUND_BAKER")
+    exec_idx = text.index("baker run", fg_marker)
+    window = text[max(0, exec_idx - 250): exec_idx]
     assert "nohup" not in window
     assert "systemctl" not in window
     assert "launchctl" not in window
@@ -1947,9 +1960,9 @@ def test_baker_launchd_plist_keepalive_and_run_at_load():
     assert "RunAtLoad" in plist
     assert "KeepAlive" in plist
     assert "SuccessfulExit" in plist
-    # Runner sources baker.env then execs python -m dev_factory (host-side).
+    # Runner sources baker.env then execs `devcake baker run` (host-side).
     assert "@RUNNER@" in plist
-    assert "dev_factory" in plist
+    assert "baker run" in plist or "devcake" in plist
     assert "WorkingDirectory" in plist or "@REPO@" in plist
     # Must never mount docker.sock — baker stays on the host.
     assert "docker.sock" not in plist
@@ -1993,12 +2006,22 @@ def test_baker_respawn_script_is_flock_guarded_loop():
     assert path is not None, "baker_respawn.sh missing"
     body = path.read_text()
     assert "flock" in body
-    assert "dev_factory" in body
+    assert "baker run" in body
+    # Transition doctrine (ADR-0038 Decision 5): the CLI path is primary and
+    # the deprecated `-m dev_factory` remains ONLY as the loud fallback branch
+    # when `devcake` is not on PATH — never the unconditional entry.
+    assert "BAKER_EXEC" in body
+    assert "command -v devcake" in body
+    assert "-m dev_factory" in body           # fallback branch present
+    assert "deprecated" in body               # and loudly labeled
     # Loop / respawn on exit — not a one-shot.
     assert "while" in body or "respawn" in body.lower()
     helper = _baker_host_sh_text()
     assert "devcake_baker_respawn_install()" in helper
     assert "DEGRADED" in helper or "degraded" in helper
+    # Generated launchd runner also execs the CLI verb.
+    assert "baker run" in helper
+    assert 'exec "${python_bin}" -m dev_factory' not in helper
 
 
 def _patch_once_compose(monkeypatch, listed):
@@ -2143,16 +2166,17 @@ def test_append_baker_event_is_jsonl(tmp_path):
     assert json.loads(lines[1])["detail"] == "nginx"
 
 
-# up.sh starts the baker with the host's bare `python3 -m dev_factory` — no
-# venv, no pip install. Everything it can import, at load or at runtime, must
-# be stdlib or first-party. This suite runs in the app image where pydantic
-# IS installed, so a plain import cannot catch a leak; the subprocess blocks
-# third-party imports to simulate a clean Mac/Debian host (the versions.py →
-# harness.py → pydantic edge shipped exactly this way).
+# Host baker entry (`devcake baker run` / deprecated `python -m dev_factory`)
+# runs with PYTHONPATH=scripts:app — no venv for the factory modules.
+# Everything watch/core can import, at load or at runtime, must be stdlib or
+# first-party. This suite runs in the app image where pydantic IS installed,
+# so a plain import cannot catch a leak; the subprocess blocks third-party
+# imports to simulate a clean Mac/Debian host (the versions.py → harness.py
+# → pydantic edge shipped exactly this way).
 _HOST_GUARD = """
 import sys
 
-FIRST_PARTY = {"dev_factory", "devcake", "app_digest"}
+FIRST_PARTY = {"dev_factory", "devcake", "app_digest", "devcake_cli"}
 
 class BlockThirdParty:
     def find_spec(self, name, path=None, target=None):
@@ -2164,7 +2188,7 @@ class BlockThirdParty:
 sys.meta_path.insert(0, BlockThirdParty())
 
 import dev_factory            # package load: liveness + core + devcake.versions
-import dev_factory.watch      # the `python3 -m dev_factory` entrypoint
+import dev_factory.watch      # baker loop (CLI and deprecated -m entry)
 import app_digest             # watch.py imports it at runtime
 import devcake.staffing       # core.py runtime import (receipt fail detail)
 import devcake.bake_status    # staffing's lazy liveness read

@@ -33,7 +33,9 @@ _LIST_FIELDS = {"run_id", "mission_key", "mission_type", "dev_type", "seq",
                 "state", "created_at", "started_at", "ended_at", "error",
                 "error_class", "attempt_counted", "verdict",
                 "continuations_used", "memory_mounts",
-                "harness_version", "mission_url"}
+                "harness_version", "mission_url",
+                # CAKE-167: TEAM/synthetic-key hover needs these on flat rows
+                "pmo_ref", "steward_duty", "outcome_summary"}
 
 _DETAIL_FIELDS = _LIST_FIELDS | {
     "schema_version", "mission_pmo_id", "pmo_kind", "pmo_ref", "repo_ref",

@@ -15,6 +15,7 @@ import CostInputsModal from "../components/CostInputsModal.jsx";
 import usePoll from "../lib/usePoll.js";
 import { relTime, fullTime, duration, durationSeconds, tokens, usd, shortHarnessVersion } from "../lib/format.js";
 import { safeHref } from "../lib/markdown.js";
+import { runHoverDetail } from "../lib/runHover.js";
 
 const cfg = window.DEVCAKE || {};
 const PAGE = 25;
@@ -199,13 +200,16 @@ export default function RunsPage() {
 
   // no stage badge here: the stage glyph sits immediately left of this cell
   // and carries the same fact (plus the run id) in its popup — printing it
-  // twice per row bought nothing but width
+  // twice per row bought nothing but width. Synthetic keys (TEAM/HELLO/OAUTH)
+  // put PMO + duty + outcome in the native title popup (CAKE-167).
   const missionCell = (r) => {
     if (!r.mission_key) {
       return <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>;
     }
+    const hover = runHoverDetail(r);
     return (
       <span className="whitespace-nowrap"
+        title={hover || undefined}
         onClick={(e) => { if (pmoHref(r.mission_url)) e.stopPropagation(); }}>
         {missionKeyLink(r.mission_key, r.mission_url)}
       </span>

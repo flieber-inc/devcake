@@ -174,6 +174,8 @@ RUN_SCALAR_COLUMNS = {
     "attempt_of_step", "stage_label_at_dispatch", "branch", "spec_prompt",
     # steward_duty: ADR-0033 flavor discriminator — deliberate widening
     "steward_duty",
+    # CAKE-167: compact steward finalize line for Runs-tab hover
+    "outcome_summary",
     "spec_skills_dir", "state", "created_at", "started_at", "ended_at",
     "last_heartbeat", "timeout_seconds", "traceparent", "auth_digest",
     "artifact_bytes", "error", "error_class", "attempt_counted", "verdict",

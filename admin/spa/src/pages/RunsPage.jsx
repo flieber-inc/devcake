@@ -14,8 +14,22 @@ import { Input, Select } from "../components/Field.jsx";
 import CostInputsModal from "../components/CostInputsModal.jsx";
 import usePoll from "../lib/usePoll.js";
 import { relTime, fullTime, duration, durationSeconds, tokens, usd, shortHarnessVersion } from "../lib/format.js";
+import { absenceCopy } from "../lib/tokenCostAbsence.js";
 import { safeHref } from "../lib/markdown.js";
 import { runHoverDetail } from "../lib/runHover.js";
+
+// CAKE-171: muted italic placeholder when a token/cost scalar was not measured.
+// Copy comes only from absenceCopy — never a second phrase string here.
+function AbsenceNote({ copy }) {
+  return (
+    <span
+      className="inline-block max-w-[9rem] text-left text-[11px] italic leading-snug text-neutral-500 dark:text-neutral-400"
+      title={copy}
+      aria-label={copy}>
+      {copy}
+    </span>
+  );
+}
 
 const cfg = window.DEVCAKE || {};
 const PAGE = 25;
@@ -107,12 +121,23 @@ export default function RunsPage() {
   // effective displayed cost per row (ADR-0021): native first, estimates
   // fill gaps — flipped when the operator's Cost Inputs override is on
   const overrideOn = !!data.rate_card?.override_native;
+  const runAbsence = (r) =>
+    <AbsenceNote copy={absenceCopy({ state: r.state, source: r.token_source })} />;
+  // Aggregates have no single run state; same finished-style "not extracted"
+  const aggregateAbsence = () =>
+    <AbsenceNote copy={absenceCopy({ state: "finished" })} />;
+  const tokenOrAbsence = (value, r) =>
+    value != null ? tokens(value) : runAbsence(r);
+  const aggregateTokenOrAbsence = (value) =>
+    value != null ? tokens(value) : aggregateAbsence();
+  const aggregateUsdOrAbsence = (value) =>
+    value != null ? usd(value) : aggregateAbsence();
   const costCell = (r) => {
     const showEst = overrideOn
       ? r.cost_usd_estimated != null
       : r.cost_usd == null && r.cost_usd_estimated != null;
     const eff = showEst ? r.cost_usd_estimated : r.cost_usd;
-    if (eff == null) return <span>—</span>;
+    if (eff == null) return runAbsence(r);
     if (!showEst) return <span>{usd(eff)}</span>;
     const title = `estimated (${data.rate_card?.rate_card_id || "rate card"})`
       + (overrideOn && r.cost_usd != null ? ` — harness reported ${usd(r.cost_usd)}` : "");
@@ -273,10 +298,10 @@ export default function RunsPage() {
       <td className="whitespace-nowrap pr-2 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
         {duration(r.started_at, r.ended_at)}
       </td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokens(r.output_tokens)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.input_tokens, r)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokenOrAbsence(r.output_tokens, r)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.cache_read_tokens, r)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.cache_write_tokens, r)}</td>
       <td className="pr-2 text-right text-xs tabular-nums">{costCell(r)}</td>
       <td className="pl-2 text-right">
         {/* dispatched/running only — finalizing hides Stop too: the Dev has
@@ -544,13 +569,13 @@ export default function RunsPage() {
                     title="Sum of completed runs' durations (live runs excluded)">
                     {durationSeconds(data.totals.runtime_seconds)}
                   </td>
-                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.input_tokens)}</td>
-                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.output_tokens)}</td>
-                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.cache_read_tokens)}</td>
-                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.cache_write_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(data.totals.input_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(data.totals.output_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(data.totals.cache_read_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(data.totals.cache_write_tokens)}</td>
                   <td className="pr-2 text-right tabular-nums"
                     title={`native ${usd(data.totals.cost_usd)} · estimated ${usd(data.totals.cost_usd_estimated)}`}>
-                    {usd(data.totals.cost_usd_effective)}
+                    {aggregateUsdOrAbsence(data.totals.cost_usd_effective)}
                   </td>
                   <td />
                 </tr>
@@ -573,12 +598,12 @@ export default function RunsPage() {
                       title="Sum of this mission's completed runs' durations">
                       {durationSeconds(g.subtotal.runtime_seconds)}
                     </td>
-                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.input_tokens)}</td>
-                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.output_tokens)}</td>
-                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.cache_read_tokens)}</td>
-                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.cache_write_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(g.subtotal.input_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(g.subtotal.output_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(g.subtotal.cache_read_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{aggregateTokenOrAbsence(g.subtotal.cache_write_tokens)}</td>
                     <td className="pr-2 text-right tabular-nums" title={subtotalTitle(g.subtotal)}>
-                      {usd(g.subtotal.cost_usd_effective)}
+                      {aggregateUsdOrAbsence(g.subtotal.cost_usd_effective)}
                     </td>
                     <td />
                   </tr>

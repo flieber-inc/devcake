@@ -7,8 +7,8 @@ import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mj
 await withPage(async (page) => {
   // 1: no bare secondary/destructive buttons on the redesigned surfaces
   for (const [hash, waitFor] of [
-    ["#/config/dev-types", "#dev-types"],
-    ["#/config/skills", "#skills"],
+    ["#/fleet/dev-types", "#dev-types"],
+    ["#/fleet/skills", "#skills"],
     ["#/runs", 'h1:has-text("Runs")'],
   ]) {
     await gotoFresh(page, hash);
@@ -20,7 +20,7 @@ await withPage(async (page) => {
   }
 
   // 2-3: Dev Type card ⋯ reaches the Rename prompt and Delete confirm
-  await gotoFresh(page, "#/config/dev-types");
+  await gotoFresh(page, "#/fleet/dev-types");
   await page.waitForSelector("#dev-types");
   const devMenu = page.locator('button[aria-label^="More actions for"]').first();
   if (!(await devMenu.count())) {
@@ -91,7 +91,7 @@ await withPage(async (page) => {
   await page.click('[role="dialog"] button:has-text("Cancel")');
 
   // 6: Skills header — one primary; secondary actions in ⋯ or a lone ghost
-  await gotoFresh(page, "#/config/skills");
+  await gotoFresh(page, "#/fleet/skills");
   await page.waitForSelector("#skills");
   const addSkill = await page.locator('button:has-text("Add skill")').count();
   if (!addSkill) {

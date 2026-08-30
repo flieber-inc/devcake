@@ -199,7 +199,7 @@ PMO (Linear / Gitea Issues) ──poll / labels──► app (orchestrator)
 
 Self-hosted, single operator, loopback by default. Stack passwords live in
 `.env`; **operator secrets** (PMO keys, forge tokens, model credentials) are
-entered through the admin UI's Configuration (incl. Skills → Skill sources), Repositories and PMO pages and stored
+entered through the admin UI's Connections (Repositories, PMO, Skill sources), Fleet, and Settings pages and stored
 on the app volume — never echoed back. Be clear-eyed about what "GUI secret
 store" means: values rest as **plaintext files (mode 0600) on the `/data`
 volume** — there is no vault and no at-rest encryption (a key would have to
@@ -233,7 +233,7 @@ cp .env.example .env
 # Later restarts (images already baked):  ./up.sh
 # Configure Dev Types in the admin UI — the host baker compiles those pins.
 
-# In a browser: http://localhost:8080  — basic auth → Config / Adapters → secrets + connection tests
+# In a browser: http://localhost:8080  — basic auth → Connections / Fleet / Settings → secrets + connection tests
 # Telemetry connectivity: app boot auto-provisions the OO ingest user from OO_INGEST_*.
 # Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
 ```

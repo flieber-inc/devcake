@@ -25,7 +25,7 @@ async function deleteIfPresent(page, name) {
 
 await withPage(async (page) => {
   // 1 — the section renders on its route
-  await gotoFresh(page, "#/config/profiles");
+  await gotoFresh(page, "#/settings/profiles");
   await page.waitForSelector("#profiles");
   check("Profiles view renders the #profiles section",
     (await page.locator("#profiles").count()) === 1

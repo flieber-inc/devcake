@@ -223,7 +223,7 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
         ? { label: "I'll work with the internal forge", onClick: onDismissInternalForge }
         : null,
     },
-    { ok: checks.devOk, text: "Give a Dev Type credentials", href: "#/config/dev-types", go: "Dev Types" },
+    { ok: checks.devOk, text: "Give a Dev Type credentials", href: "#/fleet/dev-types", go: "Dev Types" },
   ];
   const done = steps.filter((s) => s.ok).length;
   return (

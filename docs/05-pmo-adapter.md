@@ -295,7 +295,7 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 
 1. Gitea UI → create org/repo e.g. `myteam/missions` (empty git repo is fine).
 2. Mint a PAT with issue write on that repo.
-3. Admin → PMO page (`#/pmo`, under Adapters) → system **Gitea Issues**, api base of that Gitea, issues repo `myteam/missions`, paste PAT → Save → Test connection (expect `managed_labels_present == managed_labels_expected == len(ALL_LABELS)` — currently 11/11 including `DEVCAKE-DISCOVERY`).
+3. Admin → PMO page (`#/pmo`, under Connections) → system **Gitea Issues**, api base of that Gitea, issues repo `myteam/missions`, paste PAT → Save → Test connection (expect `managed_labels_present == managed_labels_expected == len(ALL_LABELS)` — currently 11/11 including `DEVCAKE-DISCOVERY`).
 4. Label an issue `DEVCAKE` (opt-in) and poll.
 
 Work forge remains independent (GitHub/GitLab/Gitea repo cards, or empty → per-mission internal forge).

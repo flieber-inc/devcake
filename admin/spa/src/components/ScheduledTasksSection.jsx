@@ -12,7 +12,7 @@ import { CRON_ID_RE, CRON_ID_RULE } from "../lib/draftErrors.js";
 import { STAGES } from "../lib/missionStages.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
-// Scheduled Tasks (#/config/scheduled-tasks): the one home for everything
+// Scheduled Tasks (#/settings/scheduled-tasks): the one home for everything
 // that fires on a timer. Card 1 = DevCake tasks (built-in: Relations
 // Steward + Memory Curator — permanent, never deletable). Card 2 = Custom
 // tasks (operator cron rows). The card split IS the segregation.
@@ -141,7 +141,7 @@ function StewardPanel() {
       )}>
       <SettingRow label="Dev Type"
         desc="Which AI worker profile runs this task."
-        help="Dev Types are the worker profiles you define under Configuration → Dev Types (which model, which coding harness). The built-in 'steward' profile is an EXECUTE-grade, judgment-heavy model (Opus-class) — point this task at a different Dev Type if you want a cheaper vehicle.">
+        help="Dev Types are the worker profiles you define under Fleet → Dev Types (which model, which coding harness). The built-in 'steward' profile is an EXECUTE-grade, judgment-heavy model (Opus-class) — point this task at a different Dev Type if you want a cheaper vehicle.">
         <Select className="w-44" value={rm.dev_type || ""}
           aria-label="Relations Steward Dev Type"
           onChange={(e) => {

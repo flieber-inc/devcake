@@ -196,7 +196,7 @@ await withPage(async (page) => {
     });
 
   await gotoFresh(page, "#/pmo");
-  await page.waitForSelector('h1:has-text("PMO"), h1:has-text("Adapters"), #pmo', {
+  await page.waitForSelector('h1:has-text("PMO"), h1:has-text("Connections"), #pmo', {
     timeout: 10000,
   }).catch(() => {});
   if ((await page.locator('button:has-text("Test connection")').count()) === 0) {

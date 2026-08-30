@@ -2,41 +2,70 @@ import React, { useEffect, useRef, useState } from "react";
 import { TriangleAlert, OctagonAlert } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import OverviewPage, { SETUP_INTERNAL_FORGE_KEY } from "./pages/OverviewPage.jsx";
-import ConfigPage from "./pages/ConfigPage.jsx";
+import FleetPage from "./pages/FleetPage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
 import ReposPage from "./pages/ReposPage.jsx";
 import RunsPage from "./pages/RunsPage.jsx";
 import MissionsPage from "./pages/MissionsPage.jsx";
 import DraftChrome from "./components/DraftChrome.jsx";
 import { ConfigDraftProvider } from "./lib/ConfigDraftContext.jsx";
 import PmoPage from "./pages/PmoPage.jsx";
+import SkillSourcesPage from "./pages/SkillSourcesPage.jsx";
 import ConsolesPage from "./pages/ConsolesPage.jsx";
 import deriveAlerts, { alertKey } from "./lib/alerts.js";
-import { CONFIG_SECTIONS } from "./lib/nav.js";
+import {
+  DRAFT_PAGES, FLEET_SECTIONS, SETTINGS_SECTIONS,
+} from "./lib/nav.js";
 import usePoll from "./lib/usePoll.js";
 import { get, send } from "./api.js";
 
-const PAGES = ["overview", "missions", "runs", "config", "repos", "pmo", "consoles"];
-const SECTION_IDS = CONFIG_SECTIONS.map((s) => s.id);
+const PAGES = [
+  "overview", "missions", "runs",
+  "repos", "pmo", "skill-sources",
+  "fleet", "settings", "consoles",
+];
+const FLEET_IDS = FLEET_SECTIONS.map((s) => s.id);
+const SETTINGS_IDS = SETTINGS_SECTIONS.map((s) => s.id);
 
-// Renamed/moved routes (2026-08-02 nav reorg + the v0.1.1 B4 repos move):
-// old bookmarks land on their new homes, never silently on the first config
-// section via the unknown-section fallback below.
+// Renamed/moved routes (2026-08-02 Adapters reorg + CAKE-159 Connections /
+// Fleet / Settings): old bookmarks land on their new homes, never silently
+// on the first section via the unknown-section fallback below.
 const REDIRECTS = [
   [/^#\/config\/repository$/, "#/repos", { page: "repos", section: null }],
   [/^#\/config\/pmo$/, "#/pmo", { page: "pmo", section: null }],
-  [/^#\/config\/traffic$/, "#/config/limits", { page: "config", section: "limits" }],
-  [/^#\/config\/cron$/, "#/config/scheduled-tasks",
-    { page: "config", section: "scheduled-tasks" }],
-  [/^#\/config\/assignments$/, "#/config/mission-types",
-    { page: "config", section: "mission-types" }],
+  [/^#\/config\/skills$/, "#/fleet/skills",
+    { page: "fleet", section: "skills" }],
+  [/^#\/config\/dev-types$/, "#/fleet/dev-types",
+    { page: "fleet", section: "dev-types" }],
+  [/^#\/config\/mission-types$/, "#/fleet/mission-types",
+    { page: "fleet", section: "mission-types" }],
+  [/^#\/config\/prompts$/, "#/fleet/prompts",
+    { page: "fleet", section: "prompts" }],
+  [/^#\/config\/limits$/, "#/settings/limits",
+    { page: "settings", section: "limits" }],
+  [/^#\/config\/scheduled-tasks$/, "#/settings/scheduled-tasks",
+    { page: "settings", section: "scheduled-tasks" }],
+  [/^#\/config\/profiles$/, "#/settings/profiles",
+    { page: "settings", section: "profiles" }],
+  [/^#\/config\/traffic$/, "#/settings/limits",
+    { page: "settings", section: "limits" }],
+  [/^#\/config\/cron$/, "#/settings/scheduled-tasks",
+    { page: "settings", section: "scheduled-tasks" }],
+  [/^#\/config\/assignments$/, "#/fleet/mission-types",
+    { page: "fleet", section: "mission-types" }],
+  [/^#\/config\/?$/, "#/fleet/dev-types",
+    { page: "fleet", section: "dev-types" }],
+  [/^#\/config\/.+$/, "#/fleet/dev-types",
+    { page: "fleet", section: "dev-types" }],
   [/^#\/logs$/, "#/consoles", { page: "consoles", section: null }],
 ];
 
-// tiny hash router: #/overview · #/runs · #/config/<section> · #/repos ·
-// #/pmo · #/consoles. Configuration is settings-style — one section per
-// view — so bare #/config (or an unknown section) lands on the first
-// section. Redirects replace the hash (no history entry) and return a
-// synthetic route so the render doesn't wait for the hashchange round-trip.
+// tiny hash router: #/overview · #/runs · #/fleet/<section> ·
+// #/settings/<section> · #/repos · #/pmo · #/skill-sources · #/consoles.
+// Fleet and Settings are settings-style — one section per view — so bare
+// #/fleet or #/settings (or an unknown section) lands on the first section.
+// Redirects replace the hash (no history entry) and return a synthetic route
+// so the render doesn't wait for the hashchange round-trip.
 function parseHash() {
   for (const [re, target, route] of REDIRECTS) {
     if (re.test(window.location.hash)) {
@@ -46,11 +75,19 @@ function parseHash() {
   }
   const m = window.location.hash.match(/^#\/([^/]+)(?:\/(.+))?/);
   const page = m && PAGES.includes(m[1]) ? m[1] : "overview";
-  if (page === "config") {
+  if (page === "fleet") {
     const sec = m?.[2];
-    if (!sec || !SECTION_IDS.includes(sec)) {
-      window.location.replace(`#/config/${SECTION_IDS[0]}`);
-      return { page: "config", section: SECTION_IDS[0] };
+    if (!sec || !FLEET_IDS.includes(sec)) {
+      window.location.replace(`#/fleet/${FLEET_IDS[0]}`);
+      return { page: "fleet", section: FLEET_IDS[0] };
+    }
+    return { page, section: sec };
+  }
+  if (page === "settings") {
+    const sec = m?.[2];
+    if (!sec || !SETTINGS_IDS.includes(sec)) {
+      window.location.replace(`#/settings/${SETTINGS_IDS[0]}`);
+      return { page: "settings", section: SETTINGS_IDS[0] };
     }
     return { page, section: sec };
   }
@@ -87,7 +124,7 @@ export default function App() {
     }
   };
 
-  // nav guard: ConfigPage registers an async fn while its draft is dirty.
+  // nav guard: DraftChrome registers an async fn while its draft is dirty.
   // hashchange fires AFTER the URL already changed, so blocking = revert the
   // hash (one suppressed event), ask, then replay the target if allowed.
   const navGuard = useRef(null);
@@ -103,8 +140,8 @@ export default function App() {
         return;
       }
       const next = parseHash();
-      const leavingDraft = /^#\/(config|repos|pmo)/.test(lastHash.current)
-        && !["config", "repos", "pmo"].includes(next.page);
+      const leavingDraft = /^#\/(fleet|settings|repos|pmo|skill-sources)/.test(lastHash.current)
+        && !DRAFT_PAGES.includes(next.page);
       if (navGuard.current && leavingDraft) {
         suppress.current = true;
         window.location.hash = lastHash.current; // revert before asking
@@ -165,7 +202,7 @@ export default function App() {
     <div className="flex h-screen bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
       <Sidebar
         page={page}
-        configSection={section}
+        section={section}
         alertCount={alerts.length}
         health={health}
         healthError={healthError}
@@ -219,18 +256,20 @@ export default function App() {
                 }}
               />
             )}
-            {page === "config" && (
-              <ConfigPage section={section} onHealthChange={setHealth} />
+            {page === "fleet" && (
+              <FleetPage section={section} onHealthChange={setHealth} />
             )}
+            {page === "settings" && <SettingsPage section={section} />}
             {page === "repos" && <ReposPage onHealthChange={setHealth} />}
             {page === "pmo" && (
               <PmoPage health={health} healthError={healthError}
                 onHealthChange={setHealth} />
             )}
+            {page === "skill-sources" && <SkillSourcesPage />}
             {page === "runs" && <RunsPage />}
             {page === "missions" && <MissionsPage />}
             {page === "consoles" && <ConsolesPage health={health} />}
-            {["config", "repos", "pmo"].includes(page) && (
+            {DRAFT_PAGES.includes(page) && (
               <DraftChrome registerNavGuard={registerNavGuard} health={health} />
             )}
           </div>

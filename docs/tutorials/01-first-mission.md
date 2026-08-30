@@ -25,7 +25,7 @@ Every step mirrors the project's integration-test shape.
   before creating the mission; missing Claude fails judgment stages, missing
   Grok fails EXECUTE. Registry table: [`08-harness-templates.md`](../08-harness-templates.md) §4.
   - Claude Code: `claude setup-token` → paste `CLAUDE_CODE_OAUTH_TOKEN` in
-    Configuration → Dev Types (or `ANTHROPIC_API_KEY`).
+    Fleet → Dev Types (or `ANTHROPIC_API_KEY`).
   - Grok Build: device-code OAuth via DevCake in step 3 (or `XAI_API_KEY`).
 
 ## Step 1 — Bootstrap and start
@@ -60,12 +60,12 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 
 ### Step 1b — Secrets and connections
 
-1. **PMO** (`#/pmo`, under Adapters) — Add PMO instance → team key → **Set** Linear API key → Test.
+1. **PMO** (`#/pmo`, under Connections) — Add PMO instance → team key → **Set** Linear API key → Test.
 2. **Repositories** (`#/repos`) — Add repository → choose a short card **name**
    (lowercase letters/digits/underscores, ≤39 — this is the `devcake-repo:<name>` marker) →
    URL → **Set** write token; prefer **RO** for non-EXECUTE and a **reviewer**
    token (app-only, different account) for formal forge approval → Test.
-   Repositories and PMO both live under the sidebar's **Adapters** group.
+   Repositories, PMO, and Skill sources live under the sidebar's **Connections** group.
 3. **Bind that card on the PMO instance** — still on **PMO** (`#/pmo`), under
    the instance's **Repositories** chips, select the sandbox card you just
    added (first selected = default for unmarked tickets). **Save** the shared
@@ -73,7 +73,7 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
    missions take the **zero-repo** path: bundled internal Gitea with forced
    auto-merge — not a GitHub PR ([operator-drill](operator-drill.md) §3;
    ADR-0010 / `docs/06`).
-4. **Configuration → Dev Types** — set **both** harness credentials from
+4. **Fleet → Dev Types** — set **both** harness credentials from
    *What you need* (Claude for `judgment`, Grok OAuth or key for
    `implementer`).
 5. On **Repositories**, leave the **external** card's **`auto_merge` OFF** for
@@ -84,19 +84,20 @@ Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
 ## Step 2 — Meet the admin pages
 
-Six top-level sidebar items (Adapters expands to two pages — seven surfaces total):
+Top-level sidebar items (Connections expands to three pages):
 
 - **Overview** — masthead answer sentence, Let's get baking checklist, alerts, Needs Human Action, stats, In the oven, recent runs, quick links. Service health = **sidebar** dots.
 - **Missions** — pipeline strip (stage counts) + grouped mission list of the poll snapshot; **Poll now**; row MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
 - **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
-- **Adapters** — sidebar group with two pages: **Repositories** (external forge repos + bundled internal Gitea operator repos + merge posture toggles) and **PMO** (instances + adoption mode). Both edit the same shared config draft; connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
-- **Configuration** — sections: Dev Types, Mission Types, Skills, Prompts, Limits, Scheduled Tasks, Profiles & Export.
+- **Connections** — sidebar group with three pages: **Repositories** (external forge repos + bundled internal Gitea operator repos + merge posture toggles), **PMO** (instances + adoption mode), and **Skill sources**. All edit the same shared config draft; connection tests hit `/connections/pmo/{name}/test`, `/connections/forge/{name}/test`, and `/connections/skill/{name}/test`.
+- **Fleet** — who does the work: Dev Types, Mission Types, Prompts, Skills catalog.
   Secrets are VALUES here (never echoed back).
+- **Settings** — how the system behaves: Limits, Scheduled Tasks, Profiles & Export.
 - **Consoles** — the external UIs: OpenObserve (traces/costs), Dagu (execution history), Gitea (internal forge, when enabled). One Dev run = one trace.
 
 ## Step 3 — Log Grok in (one time)
 
-On Configuration → Dev Types, **implementer** → **Connect via OAuth…** — dialog shows URL + code.
+On Fleet → Dev Types, **implementer** → **Connect via OAuth…** — dialog shows URL + code.
 (Or `./scripts/grok_login.sh` — defaults to the seeded `implementer`; override with
 `DEVCAKE_DEV_TYPE` or a positional Dev Type name.) Session is DevCake's own. Device-code OAuth
 rides the operator's **xAI account billing / subscription quota** (same trust

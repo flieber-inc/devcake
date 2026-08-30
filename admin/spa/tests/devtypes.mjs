@@ -5,7 +5,7 @@
 import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/dev-types");
+  await gotoFresh(page, "#/fleet/dev-types");
   await page.waitForSelector("#dev-types");
 
   // 1: roster grid — the dashed tile is the ONLY create affordance (no

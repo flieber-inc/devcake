@@ -6,29 +6,31 @@ import wordmarkColor from "../assets/devcake-wordmark-color-transparent.svg";
 import {
   LayoutDashboard, SquareTerminal, Settings2, Plug, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
-  Columns3,
+  Columns3, Bot,
 } from "lucide-react";
 import StatusDot from "./StatusDot.jsx";
 import { SERVICES, serviceValue } from "../lib/services.js";
 import Toggle from "./Toggle.jsx";
-import { CONFIG_SECTIONS } from "../lib/nav.js";
+import {
+  CONNECTION_PAGES, FLEET_SECTIONS, SETTINGS_SECTIONS,
+} from "../lib/nav.js";
 import { getTheme, setTheme, onThemeChange } from "../theme.js";
 
-// Entries are pages, or a multi-page parent (Adapters) that behaves exactly
-// like Configuration: one nav item (its href lands on the first child) with
+// Entries are pages, or a multi-page parent (Connections) that behaves exactly
+// like Fleet/Settings: one nav item (its href lands on the first child) with
 // indented sub-entries rendered only while one of its pages is active. The
 // child pages stay reachable from a collapsed/mobile rail via each page's
-// own chip row (AdapterTabs), mirroring ConfigPage's section chips.
+// own chip row (ConnectionTabs), mirroring Fleet/Settings section chips
+// (CAKE-159; was Adapters + Configuration).
 const NAV = [
   { page: "overview", href: "#/overview", label: "Overview", icon: LayoutDashboard },
   { page: "missions", href: "#/missions", label: "Missions", icon: Columns3 },
   { page: "runs", href: "#/runs", label: "Runs", icon: SquareTerminal },
-  { pages: ["repos", "pmo"], href: "#/repos", label: "Adapters", icon: Plug,
-    children: [
-      { page: "repos", href: "#/repos", label: "Repositories" },
-      { page: "pmo", href: "#/pmo", label: "PMO" },
-    ] },
-  { page: "config", href: "#/config", label: "Configuration", icon: Settings2 },
+  { pages: CONNECTION_PAGES.map((c) => c.page), href: "#/repos",
+    label: "Connections", icon: Plug,
+    children: CONNECTION_PAGES },
+  { page: "fleet", href: "#/fleet", label: "Fleet", icon: Bot },
+  { page: "settings", href: "#/settings", label: "Settings", icon: Settings2 },
   { page: "consoles", href: "#/consoles", label: "Consoles", icon: ScrollText },
 ];
 
@@ -52,8 +54,8 @@ function NavItem({ href, icon: Icon, label, active, collapsed, onClick }) {
   );
 }
 
-// Indented sub-entry list under an active parent item — one idiom for both
-// Configuration's sections and Adapters' pages.
+// Indented sub-entry list under an active parent item — one idiom for
+// Fleet/Settings sections and Connections pages.
 function SubNav({ children }) {
   return (
     <div className="ml-[1.35rem] flex flex-col gap-0.5 border-l border-neutral-200 py-1 pl-3 dark:border-neutral-800">
@@ -189,7 +191,7 @@ function IntakeSwitch({ collapsed, paused, busy, disabled, error, onToggle }) {
 }
 
 export default function Sidebar({
-  page, configSection, alertCount, health, healthError,
+  page, section, alertCount, health, healthError,
   intakePaused, intakeBusy, intakeError, onIntakeToggle,
 }) {
   const [collapsedPref, setCollapsedPref] = useState(() => {
@@ -268,10 +270,19 @@ export default function Sidebar({
         ) : (
           <React.Fragment key={item.page}>
             <NavItem {...item} active={page === item.page} collapsed={collapsed} />
-            {item.page === "config" && page === "config" && !collapsed && (
+            {item.page === "fleet" && page === "fleet" && !collapsed && (
               <SubNav>
-                {CONFIG_SECTIONS.map((s) => (
-                  <SubLink key={s.id} href={`#/config/${s.id}`} active={configSection === s.id}>
+                {FLEET_SECTIONS.map((s) => (
+                  <SubLink key={s.id} href={`#/fleet/${s.id}`} active={section === s.id}>
+                    {s.label}
+                  </SubLink>
+                ))}
+              </SubNav>
+            )}
+            {item.page === "settings" && page === "settings" && !collapsed && (
+              <SubNav>
+                {SETTINGS_SECTIONS.map((s) => (
+                  <SubLink key={s.id} href={`#/settings/${s.id}`} active={section === s.id}>
                     {s.label}
                   </SubLink>
                 ))}

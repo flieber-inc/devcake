@@ -2,7 +2,7 @@ import React from "react";
 import { Zap } from "lucide-react";
 
 // Marks controls that act on the server the moment they're used — they do
-// NOT wait for the Config page's Save.
+// NOT wait for the page Save.
 export default function ImmediateBadge({ text = "applies immediately" }) {
   return (
     <span

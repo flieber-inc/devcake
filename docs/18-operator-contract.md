@@ -33,12 +33,12 @@ proving a fresh machine works is the
 | **Back up `/data`** | Before every upgrade; weekly otherwise | `scripts/backup_data.sh` — secret dump; no-arg default under `~/.local/share/devcake/backups` ([`13`](13-deployment.md) §8) |
 | **Back up `gitea_data`** | Same cadence, if the internal forge holds real work | `scripts/backup_gitea.sh` / `restore_gitea.sh` — same outside-checkout default and password-export handling ([`13`](13-deployment.md) §8) |
 | **Re-run the fresh-`/data` drill** | Each release you adopt; quarterly otherwise | [operator drill](tutorials/operator-drill.md) — stranger-operability proof; pytest on backup payloads does **not** replace it ([`13`](13-deployment.md) §8 residual) |
-| **Export a settings bundle** | Before risky config surgery | **Configuration → Profiles & Export** — encrypted by default; store like a credential dump ([`11`](11-admin-panel.md)) |
+| **Export a settings bundle** | Before risky config surgery | **Settings → Profiles & Export** — encrypted by default; store like a credential dump ([`11`](11-admin-panel.md)) |
 | **Rotate secrets** | On a schedule you choose; immediately on suspicion or a team departure | §4 below |
 | **Pause intake** | Before maintenance, upgrades, or anything that shouldn't dispatch new work | Sidebar master switch; in-flight runs finish ([`02`](02-domain-model.md), [`11`](11-admin-panel.md)) |
 | **Treat Clear run history as a maintenance window** | When you use it | Dispatch (poll, hello, OAuth, steward) is paused for the entire wipe, including OpenObserve stream deletes: Clear-runs holds the poll + dispatch locks, soft-drains and Dagu-stops live Devs, then wipes. `ok: false` with `undrained` means a container could not be stopped — inspect Dagu before re-running work because the app has no `docker.sock`. The store wipe generation prevents an in-flight finalizer from resurrecting deleted records ([`10`](10-persistence.md), [`11`](11-admin-panel.md), [`13`](13-deployment.md) §8) |
 | **Do NOT treat a throttled Dev Type as a breaker** | When `/health` shows `dev_backend_degraded` | There is no credential to fix — DevCake has throttled that Dev Type to one probe run and resumes automatically once runs succeed. Check your model provider ([15] §4a) |
-| **Tend team memory** | When `/health` shows `memory_curator_no_board` / `claims_queue_capped`; whenever a Curator PR waits | The notebooks are YOUR repositories (they survive Clear; only a full stack wipe takes them): their READMEs are the filing policy, and with `memory_auto_merge` off (default) every note becomes official only through your merge. A capped queue means leads are being refused — run the Memory Curator (Configuration → Scheduled Tasks) or raise the cap ([`11`](11-admin-panel.md), ADR-0035) |
+| **Tend team memory** | When `/health` shows `memory_curator_no_board` / `claims_queue_capped`; whenever a Curator PR waits | The notebooks are YOUR repositories (they survive Clear; only a full stack wipe takes them): their READMEs are the filing policy, and with `memory_auto_merge` off (default) every note becomes official only through your merge. A capped queue means leads are being refused — run the Memory Curator (Settings → Scheduled Tasks) or raise the cap ([`11`](11-admin-panel.md), ADR-0035) |
 | **Rebuild in lockstep on upgrade** | Every time `app/`, `admin/`, or `images/` change | `docker compose stop dagu` then `./up.sh --bake` so the live DAG bind cannot see a new `dev-run.yaml` without `DEVCAKE_WS_HOST` ([`13`](13-deployment.md) §8, `AGENTS.md`). Default `--bake` is control plane + hello; the host baker compiles configured harness pins. |
 
 ## 4. Secret rotation (the procedure, in one place)
@@ -49,7 +49,7 @@ Rotation is four different motions depending on the secret:
    **PMO** page's secret field (`#/pmo`), **Save**, then run the named
    connection test. **Forge tokens** — same motion on **Repositories**
    (`#/repos`). **Skill-source read tokens** — same motion on the
-   **Skill sources** card (Configuration → Skills). The write path
+   **Skill sources** page (Connections → Skill sources); the installed catalog is Fleet → Skills. The write path
    hot-reloads adapters ([`11`](11-admin-panel.md)).
 2. **Model / harness credentials** — upload via the Dev Type card under
    Configuration (OAuth wizard, credential upload, or `scripts/grok_login.sh`

@@ -1222,7 +1222,7 @@ async def _unlimited_warn(mgr, mission: Mission, mtype: MissionType,
         f"has failed {failures} consecutive times, and `attempt_reset: "
         f"unlimited` means DevCake will keep retrying indefinitely. "
         f"Cumulative recorded cost so far: ${cost:.2f}. Add `DEVCAKE-SKIP` "
-        f"to stop this mission, or change Limits & Traffic → Attempt reset "
+        f"to stop this mission, or change Policies → Attempts & retries "
         f"to restore give-up.")
     mgr._audit(mission.pmo_id, "unlimited_loop_warning",
                f"{mtype.value} x{failures}")

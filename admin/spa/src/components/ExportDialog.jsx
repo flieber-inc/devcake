@@ -91,7 +91,7 @@ export default function ExportDialog({ profiles, onClose }) {
 
       <div className="divide-y divide-neutral-100 rounded-md border border-neutral-200 px-3 py-1 dark:divide-neutral-800 dark:border-neutral-800">
         <CheckRow id="exp-config" label="Runtime configs" checked={incCfg}
-          desc="connections, repos, Dev Types, mission-type assignments, prompt templates, limits — no secret values"
+          desc="connections, repos, Dev Types, mission-type assignments, prompt templates, policies — no secret values"
           onChange={setIncCfg} />
         <CheckRow id="exp-secrets" label="Runtime secrets" checked={incSec}
           desc={secretsDesc}

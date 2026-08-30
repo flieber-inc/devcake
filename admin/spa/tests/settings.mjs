@@ -31,9 +31,9 @@ await withPage(async (page) => {
   await page.waitForSelector("#pmo");
   check("#/config/pmo redirects to the PMO page", page.url().endsWith("#/pmo"));
   await gotoFresh(page, "#/config/traffic");
-  await page.waitForSelector("#limits");
-  check("#/config/traffic redirects to the Limits view",
-    page.url().endsWith("#/config/limits"));
+  await page.waitForSelector("#policies");
+  check("#/config/traffic redirects to the Policies view",
+    page.url().endsWith("#/config/policies"));
   await gotoFresh(page, "#/config/cron");
   await page.waitForSelector("#scheduled-tasks");
   check("#/config/cron redirects to Scheduled Tasks",
@@ -56,21 +56,27 @@ await withPage(async (page) => {
     await page.locator("#dev-types").count() === 1 &&
     await page.locator("#skills").count() === 0);
   await gotoFresh(page, "#/config/limits");
-  await page.waitForSelector("#limits");
-  check("Limits view stands alone — Traffic is gone, Steward moved",
-    await page.locator("#limits").count() === 1 &&
+  await page.waitForSelector("#policies");
+  check("#/config/limits redirects to Policies",
+    page.url().endsWith("#/config/policies"));
+  check("Policies view stands alone — Traffic is gone, Steward moved",
+    await page.locator("#policies").count() === 1 &&
     await page.locator("#traffic").count() === 0 &&
     await page.locator("#dev-types").count() === 0);
-  check("Decomposition depth lives on the Limits card now",
-    (await page.locator('select[aria-label="Decomposition depth limit"]').count()) === 1);
-  // 2026-08 reviewer round: the one 11-row scroll became four story-grouped
-  // cards; the knob-shaped non-knob ("Service auto-restart" / "managed in
-  // compose") is gone; the mirror help no longer scolds about the off switch
-  check("Limits view renders the four story-grouped cards",
-    await page.locator("#limits").count() === 1 &&
-    await page.locator("#limits-attempts").count() === 1 &&
-    await page.locator("#limits-recovery").count() === 1 &&
-    await page.locator("#limits-mirrors").count() === 1);
+  check("Decomposition depth lives on Counting budgets",
+    (await page.locator('select[aria-label="Decomposition depth limit"]').count()) === 1 &&
+    await page.locator("#policies-budgets").count() === 1);
+  // CAKE-161: six domain cards (fleet bounds merges concurrency+cgroups)
+  check("Policies view renders the six domain-grouped cards",
+    await page.locator("#policies").count() === 1 &&
+    await page.locator("#policies-attempts").count() === 1 &&
+    await page.locator("#policies-budgets").count() === 1 &&
+    await page.locator("#policies-recovery").count() === 1 &&
+    await page.locator("#policies-mirrors").count() === 1 &&
+    await page.locator("#policies-memory").count() === 1);
+  check("Fleet bounds carries timeout and container cgroups together",
+    (await page.locator('#policies input[aria-label="Dev run timeout (minutes)"]').count()) === 1 &&
+    (await page.locator('#policies input[aria-label="Container memory limit (MB)"]').count()) === 1);
   check("the Service auto-restart informational row is gone",
     (await page.locator("text=managed in compose").count()) === 0 &&
     (await page.locator("text=Service auto-restart").count()) === 0);
@@ -95,11 +101,11 @@ await withPage(async (page) => {
     ["true", "false"].includes(await brakeToggle.getAttribute("aria-checked")));
 
   // 5: sidebar sub-nav highlight is route-driven
-  const activeLink = page.locator('aside a[href="#/config/limits"]');
+  const activeLink = page.locator('aside a[href="#/config/policies"]');
   check("sidebar sub-nav highlights the routed section",
     ((await activeLink.getAttribute("class")) || "").includes("font-semibold"));
 
-  // 6: ONE draft across PAGES — edit on #/pmo, then on #/config/limits.
+  // 6: ONE draft across PAGES — edit on #/pmo, then on #/config/policies.
   // Navigate via sidebar links, never gotoFresh (a reload drops the draft);
   // the config sub-nav is invisible from #/pmo, so hop through the
   // Configuration NavItem.
@@ -119,12 +125,12 @@ await withPage(async (page) => {
   check("pmo → config hop raises no nav guard",
     (await page.locator("text=unsaved change").count()) === 0 ||
     (await page.locator('[role="dialog"]').count()) === 0);
-  await page.click('aside a[href="#/config/limits"]');
+  await page.click('aside a[href="#/config/policies"]');
   await page.waitForSelector(GLOBAL_MAX);
   const gmax = page.locator(GLOBAL_MAX);
   const gmaxBefore = await gmax.inputValue();
   await gmax.fill(String(Number(gmaxBefore) + 1));
-  check("edit in Limits & Traffic joins the same draft (2)", (await dirtyCount()) === "2");
+  check("edit in Policies joins the same draft (2)", (await dirtyCount()) === "2");
 
   // 7: Save opens the review dialog listing both edits — then Cancel
   await page.click('button:has-text("Save changes…")');
@@ -186,22 +192,22 @@ await withPage(async (page) => {
 });
 
 // 9b: ADR-0022 continuation + ADR-0024 mirror controls — all live in
-// Limits & Traffic and label their save-review rows. Ends in Cancel +
+// Policies and label their save-review rows. Ends in Cancel +
 // Discard (iron rule).
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/limits");
-  await page.waitForSelector("#limits");
+  await gotoFresh(page, "#/config/policies");
+  await page.waitForSelector("#policies");
   const maxAge = page.locator('input[aria-label="Mirror sync max age (seconds)"]');
-  check("Limits view renders the mirror sync max-age input",
+  check("Policies view renders the mirror sync max-age input",
     (await maxAge.count()) === 1);
-  check("Limits view renders the mirror LFS toggle",
+  check("Policies view renders the mirror LFS toggle",
     (await page.locator('button[aria-label="Mirror LFS content"], [role="switch"][aria-label="Mirror LFS content"]').count()) >= 1 ||
     (await page.locator('text=Mirror LFS content').count()) >= 1);
   const policy = page.locator('select[aria-label="Continuation policy"]');
   const maxc = page.locator('input[aria-label="Max continuations per run"]');
-  check("Limits view renders the continuation policy select",
+  check("Policies view renders the continuation policy select",
     (await policy.count()) === 1);
-  check("Limits view renders the max continuations input",
+  check("Policies view renders the max continuations input",
     (await maxc.count()) === 1);
   const policyBefore = await policy.inputValue();
   await policy.selectOption(policyBefore === "fresh-only" ? "auto" : "fresh-only");
@@ -237,10 +243,10 @@ await withPage(async (page) => {
     (await page.locator('a[href="#/config/pmo"]:visible').count()) === 0 &&
     (await page.locator('a[href="#/config/traffic"]:visible').count()) === 0 &&
     (await page.locator('a[href="#/config/cron"]:visible').count()) === 0);
-  await page.locator('a[href="#/config/limits"]:visible', { hasText: "Limits" }).first().click();
-  await page.waitForSelector("#limits");
-  check("mobile chip switches to the Limits view",
-    await page.locator("#limits").count() === 1 &&
+  await page.locator('a[href="#/config/policies"]:visible', { hasText: "Policies" }).first().click();
+  await page.waitForSelector("#policies");
+  check("mobile chip switches to the Policies view",
+    await page.locator("#policies").count() === 1 &&
     await page.locator("#skills").count() === 0);
 
   // CAKE-162: section chips wrap — never a horizontal scrollbar

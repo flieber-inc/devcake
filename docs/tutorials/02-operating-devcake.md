@@ -47,7 +47,7 @@ abandoned (decomposed away, or PR closed unmerged).
   failing step's attempt count — comment with the literal `DEVCAKE-RETRY` in
   the body (e.g. after fixing the cause) to grant a fresh budget. After
   `DEVCAKE-FAILED` lands, removing the label does the same. With the policy
-  set to *Any comment* (Limits), every non-DevCake comment resets —
+  set to *Any comment* (Policies), every non-DevCake comment resets —
   fine on a board with no bot traffic, defeated by one chatty integration.
 - **Re-triage:** move an untouched-looking mission back to Backlog with no stage
   labels and it becomes ONBOARD material again.
@@ -75,7 +75,7 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   **reviewer token** (app-only formal approval), and eyes open. REVIEW always
   runs as a pipeline stage; which Dev Type staffs it is a performance choice
   (skills / identifying prompt), not a security control.
-- **`memory_auto_merge`** (Configuration → Limits, Memory card) — off
+- **`memory_auto_merge`** (Configuration → Policies, Memory card) — off
   (default): every note a Memory Curator proposes for a team-memory
   notebook becomes official only through **your** merge. On means two
   models in a row — a Curator wrote it and a Reviewer approved it; not a

@@ -188,4 +188,4 @@ dags bind) fixed in compose via `DAGU_WIKI_DIR`.
   Dagu probes of 2026-08-03 (recorded above).
 - Operator: `07-dev-runtime.md` §§3, 5, 7b; `13-deployment.md` §§1, 4-5,
   8; `14-security.md` §§5-6, 11; `15-errors-and-retries.md` §§1-2;
-  `11-admin-panel.md` (Limits & Traffic).
+  `11-admin-panel.md` (Policies).

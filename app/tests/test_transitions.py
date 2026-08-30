@@ -558,6 +558,12 @@ def test_unlimited_never_gives_up_and_warns_at_cadence(tmp_path, monkeypatch):
     assert fake.swaps == []                       # DEVCAKE-FAILED never applied
     assert any("Unlimited-attempts mode" in c and "$" in c
                for c in fake.comments)
+    # Operator chrome must name the live Config surface (Policies), not the
+    # retired Limits & Traffic section title (CAKE-161).
+    warn_bodies = [c for c in fake.comments if "Unlimited-attempts mode" in c]
+    assert warn_bodies, "expected an unlimited-attempts feed warning"
+    assert all("Limits & Traffic" not in c for c in warn_bodies)
+    assert all("Policies → Attempts & retries" in c for c in warn_bodies)
     warned = len(fake.comments)
 
     # same attempt recurring (a later gate deferred the dispatch) → no spam

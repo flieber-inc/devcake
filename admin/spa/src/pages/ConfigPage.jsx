@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader.jsx";
 import AssignmentsSection from "../components/AssignmentsSection.jsx";
 import DevTypesSection from "../components/DevTypesSection.jsx";
-import LimitsSection from "../components/LimitsSection.jsx";
+import PoliciesSection from "../components/PoliciesSection.jsx";
 import ProfilesSection from "../components/ProfilesSection.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SkillsSection from "../components/SkillsSection.jsx";
@@ -63,7 +63,7 @@ export default function ConfigPage({ section, onHealthChange }) {
         <PromptsSection cfg={dr.draft.cfg} setField={dr.setField}
           devTypeNames={Object.keys(dr.draft.devTypes || {})} />
       )}
-      {section === "limits" && <LimitsSection />}
+      {section === "policies" && <PoliciesSection />}
       {section === "scheduled-tasks" && <ScheduledTasksSection />}
       {section === "profiles" && <ProfilesSection />}
     </div>

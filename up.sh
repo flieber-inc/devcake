@@ -434,6 +434,12 @@ fi
 _FACTORY_DIR="$(pwd)/.factory"
 mkdir -p "$_FACTORY_DIR"
 devcake_baker_prepare_pidfile "$_FACTORY_DIR/watch.pid"
+# Displace any leftover python -m dev_factory for THIS factory dir (orphans the
+# pidfile does not name — pre-upgrade bakers, hand-launched, crashed sessions).
+# Must run BEFORE the supervised child starts: a surviving flock-holder would
+# make the new baker exit 0 on contention, and Restart=on-failure / launchd
+# KeepAlive (SuccessfulExit=false) would not bring it back.
+devcake_baker_displace_orphans "$_FACTORY_DIR"
 # Ingest creds so the baker can ship a dying word to OO if the app is
 # already gone (the app's push_oo_log chokepoint cannot run then).
 # Read only those keys — do not shell-source the env file into this process.
@@ -491,14 +497,8 @@ if [[ "$_BAKER_SUPERVISED" -eq 0 ]]; then
   # DEGRADED: flock-guarded respawn loop (never bare nohup of the baker).
   case "$_BAKER_PLAT" in
     darwin) devcake_baker_degraded_gap "launchd install/start failed" ;;
-    linux)
-      if devcake_baker_systemd_available; then
-        devcake_baker_degraded_gap "systemd user unit install/start failed"
-      else
-        devcake_baker_degraded_gap "user systemd unavailable"
-      fi
-      ;;
-    *) devcake_baker_degraded_gap "platform ${_BAKER_PLAT} has no native supervisor" ;;
+    linux)  devcake_baker_degraded_gap "$(devcake_baker_linux_degraded_reason)" ;;
+    *)      devcake_baker_degraded_gap "platform ${_BAKER_PLAT} has no native supervisor" ;;
   esac
   if ! devcake_baker_respawn_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
     echo "── failed to install flock-guarded baker respawn supervisor" >&2

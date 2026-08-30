@@ -17,6 +17,7 @@ const SUITES = [
   // carries them.
   "markdown_helpers.mjs",
   "format_helpers.mjs",
+  "token_cost_absence_helpers.mjs",
   "deps_helpers.mjs",
   "board_helpers.mjs",
   "config_draft.mjs",
@@ -47,6 +48,7 @@ const SUITES = [
   "error_surface.mjs",
   "honesty_leftovers.mjs",
   "adapter_rename_ui.mjs",
+  "cake170_templates.mjs",
 ];
 
 // pick up admin credentials from the repo-root .env when not already set

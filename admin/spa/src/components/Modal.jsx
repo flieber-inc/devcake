@@ -4,6 +4,11 @@ import Button from "./Button.jsx";
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// Nested Overlay Esc must dismiss only the topmost dismissible dialog
+// (PromptDialog over Modal). Registration order alone is wrong: older
+// listeners fire first and would close the underlying modal.
+const ESC_DISMISS_STACK = [];
+
 // Shared overlay: dialog semantics, focus trap, scroll lock on <main>.
 // `onDismiss` enables Esc + backdrop close — omit it for confirms, which
 // must be resolved by their explicit buttons only. `surfaceClass` swaps the
@@ -38,9 +43,18 @@ export function Overlay({ children, className = "", surfaceClass, onDismiss, ari
   }, []);
   useEffect(() => {
     if (!onDismiss) return;
-    const esc = (e) => e.key === "Escape" && onDismiss();
+    ESC_DISMISS_STACK.push(onDismiss);
+    const esc = (e) => {
+      if (e.key !== "Escape") return;
+      if (ESC_DISMISS_STACK[ESC_DISMISS_STACK.length - 1] !== onDismiss) return;
+      onDismiss();
+    };
     document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("keydown", esc);
+      const i = ESC_DISMISS_STACK.lastIndexOf(onDismiss);
+      if (i >= 0) ESC_DISMISS_STACK.splice(i, 1);
+    };
   }, [onDismiss]);
   return (
     <div
@@ -135,9 +149,15 @@ export function PromptDialog({
   );
 }
 
+// Viewport-bounded shell for tall content (Manage templates, Skills View).
+// max-h alone keeps Confirm/Prompt (Overlay direct) short; overflow-y-auto
+// scrolls the card body when children exceed ~85vh (CAKE-170).
 export function Modal({ children, className = "max-w-lg", onClose }) {
   return (
-    <Overlay className={`p-6 ${className}`} onDismiss={onClose}>
+    <Overlay
+      className={`flex max-h-[85vh] flex-col overflow-y-auto p-6 ${className}`}
+      onDismiss={onClose}
+    >
       {children}
     </Overlay>
   );

@@ -78,9 +78,16 @@ def acquire_baker_singleton(factory_dir: Path | str) -> IO[str]:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         fh.close()
+        holder = "unknown"
+        try:
+            text = lock_path.read_text(encoding="utf-8").strip()
+            if text:
+                holder = text
+        except OSError:
+            pass
         print(
             "dev_factory: another baker already holds "
-            f"{lock_path} — exiting without stealing the lock",
+            f"{lock_path} (pid {holder}) — exiting without stealing the lock",
             flush=True,
         )
         raise SystemExit(0) from None

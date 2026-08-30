@@ -1,13 +1,40 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Section } from "./Card.jsx";
 import { Help, Input, Select } from "./Field.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { MISSION_TYPES } from "../lib/missionStages.js";
 
+/** Teaching copy for Extra CLI args — labeled examples from GET /harnesses. */
+function cliArgsHelpText(harnesses) {
+  const names = Object.keys(harnesses || {}).sort();
+  const lines = names.flatMap((name) => {
+    const ex = harnesses[name]?.cli_arg_examples || [];
+    return ex.length ? [`${name}: ${ex.join(" ")}`] : [];
+  });
+  const empty = names.filter(
+    (name) => !(harnesses[name]?.cli_arg_examples || []).length);
+  const examples = lines.length
+    ? `Examples by harness:\n${lines.join("\n")}`
+    : "Examples load from the harness registry.";
+  const emptyNote = empty.length
+    ? `\n\nNo useful Mission-Type flag listed for: ${empty.join(", ")} ` +
+      "(no turn-cap on some CLIs — use run timeout or a smaller task)."
+    : "";
+  return (
+    "Appended verbatim to the harness CLI for this mission type. " +
+    "Flags are harness-specific — one vendor's flag will not fit every " +
+    "harness, and they rarely survive a Dev Type change. " +
+    "Leave blank unless you need them; nothing is pre-filled.\n\n" +
+    examples +
+    emptyNote
+  );
+}
+
 export default function AssignmentsSection() {
-  const { dr } = useSharedDraft();
+  const { dr, harnesses } = useSharedDraft();
   const setField = dr.setField;
   const pmos = dr.draft.cfg.pmos || [];
+  const cliHelp = useMemo(() => cliArgsHelpText(harnesses), [harnesses]);
 
   // harness-mismatch advisory for a global assignment row (replaces the old
   // blocking dialog and its cancelAction special case)
@@ -75,7 +102,7 @@ export default function AssignmentsSection() {
             <thead className="text-left text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr><th className="py-1">Mission type</th><th>Dev type</th>
                 <th>Extra CLI args (harness-specific)
-                  <Help text="Appended to the harness CLI for this mission type, e.g. --max-turns 15. Flags are harness-specific — they rarely survive a dev type change." /></th></tr>
+                  <Help text={cliHelp} /></th></tr>
             </thead>
             <tbody>
               {MISSION_TYPES.map((mt) => {
@@ -91,7 +118,7 @@ export default function AssignmentsSection() {
                     </td>
                     <td className="py-2">
                       <Input value={dr.draft.assignments[mt]?.extra_cli_args || ""}
-                        placeholder="e.g. --max-turns 15"
+                        placeholder="optional"
                         onChange={(e) => setField(`assignments.${mt}.extra_cli_args`, e.target.value)} />
                       {adv && (
                         <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
@@ -147,7 +174,7 @@ export default function AssignmentsSection() {
                           {row?.dev_type ? (
                             <>
                               <Input value={row.extra_cli_args || ""}
-                                placeholder="e.g. --max-turns 15"
+                                placeholder="optional"
                                 onChange={(e) => setField(
                                   `cfg.pmos.${i}.assignments.${mt}.extra_cli_args`, e.target.value)} />
                               {adv && (

@@ -26,6 +26,8 @@ devcake_baker_platform() {
 
 # Loud banner when falling back to the flock-guarded respawn loop.
 # Printed to stderr so operators cannot miss the degraded path.
+# When reason names enable-linger (no-user-session path), print the sharper
+# remedy by name so WSL-with-systemd operators are not left on the generic tip.
 devcake_baker_degraded_gap() {
   local reason="${1:-neither systemd nor launchd available}"
   echo "══════════════════════════════════════════════════════════════" >&2
@@ -36,6 +38,14 @@ devcake_baker_degraded_gap() {
   echo "     Linux:  systemd --user + loginctl enable-linger \"\$USER\"" >&2
   echo "     macOS:  launchd LaunchAgent (login session / Docker Desktop)" >&2
   echo "   Then re-run ./up.sh to install the native supervisor." >&2
+  case "$reason" in
+    *enable-linger*)
+      echo "   Sharper fix (systemd present, no user session manager):" >&2
+      echo "     loginctl enable-linger \"\$USER\"" >&2
+      echo "     then restart your session (or the host), then ./up.sh" >&2
+      echo "     — ./up.sh will install the native systemd user unit." >&2
+      ;;
+  esac
   echo "══════════════════════════════════════════════════════════════" >&2
 }
 
@@ -53,6 +63,28 @@ devcake_baker_systemd_available() {
   # show-environment talks to the user manager; fails without a user bus.
   systemctl --user show-environment >/dev/null 2>&1 || return 1
   return 0
+}
+
+# systemctl binary exists but the user session manager is unreachable
+# (typical: WSL systemd=true without linger / no user bus).
+# Usage: → 0 when that is the case, 1 otherwise (incl. no systemctl at all).
+devcake_baker_systemd_user_session_missing() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user show-environment >/dev/null 2>&1 && return 1
+  return 0
+}
+
+# Linux DEGRADED reason for up.sh fallthrough. Distinguishes:
+#   install/start failed | no user session (linger) | binary unavailable.
+# Echoes one reason line on stdout.
+devcake_baker_linux_degraded_reason() {
+  if devcake_baker_systemd_available; then
+    echo "systemd user unit install/start failed"
+  elif devcake_baker_systemd_user_session_missing; then
+    echo "systemd present but no user session — run: loginctl enable-linger \"\$USER\", restart session/host, then ./up.sh"
+  else
+    echo "user systemd unavailable"
+  fi
 }
 
 # macOS launchd is available when we are on Darwin and launchctl exists.
@@ -187,6 +219,7 @@ devcake_baker_systemd_install() {
   fi
   printf '%s\n' "$main_pid" >"$pidfile" || return 1
   echo "── host baker supervised by systemd --user (${DEVCAKE_BAKER_UNIT}, pid ${main_pid})"
+  devcake_baker_displace_orphans "$factory_dir" "$main_pid"
   return 0
 }
 
@@ -245,6 +278,7 @@ devcake_baker_launchd_install() {
       if [[ -n "$new_pid" && "$new_pid" != "0" && "$new_pid" != "$old_pid" ]]; then
         if kill -0 "$new_pid" 2>/dev/null; then
           echo "── host baker supervised by launchd (${DEVCAKE_BAKER_LAUNCHD_LABEL}, pid ${new_pid})"
+          devcake_baker_displace_orphans "$factory_dir" "$new_pid"
           return 0
         fi
       fi
@@ -252,6 +286,7 @@ devcake_baker_launchd_install() {
       if [[ -n "$new_pid" && "$new_pid" != "0" ]] && kill -0 "$new_pid" 2>/dev/null; then
         if [[ "$tries" -ge 3 ]]; then
           echo "── host baker supervised by launchd (${DEVCAKE_BAKER_LAUNCHD_LABEL}, pid ${new_pid})"
+          devcake_baker_displace_orphans "$factory_dir" "$new_pid"
           return 0
         fi
       fi
@@ -306,16 +341,162 @@ devcake_baker_respawn_install() {
     new_pid="$(cat "$pidfile" 2>/dev/null || true)"
     if [[ -n "$new_pid" && "$new_pid" != "0" ]] && kill -0 "$new_pid" 2>/dev/null; then
       echo "── host baker supervised by flock respawn loop (supervisor ${supervisor_pid}, baker ${new_pid})"
+      # Keep the supervised baker; only when its pid is known (not the pending case).
+      devcake_baker_displace_orphans "$factory_dir" "$new_pid"
       return 0
     fi
   done
   # Supervisor is up; baker may still be starting — accept supervisor pid as signal.
+  # Skip post-install displace here: keep_pid would be the supervisor, and the
+  # pre-start sweep already cleared leftovers; killing a just-started baker would race.
   if kill -0 "$supervisor_pid" 2>/dev/null; then
     printf '%s\n' "$supervisor_pid" >"$pidfile" || true
     echo "── host baker respawn supervisor running (pid ${supervisor_pid}; baker pid pending)"
     return 0
   fi
   return 1
+}
+
+# True when cmdline looks like `python … -m dev_factory` / `-m dev_factory.…`
+# and is not the respawn supervisor script.
+devcake_baker_cmdline_is_module() {
+  local c="$1"
+  case "$c" in
+    *baker_respawn*) return 1 ;;
+  esac
+  case "$c" in
+    *-m\ dev_factory\ *|*-m\ dev_factory|*-m\ dev_factory.*) return 0 ;;
+  esac
+  return 1
+}
+
+# Best-effort absolute cwd for a pid.
+# Linux: /proc/<pid>/cwd. Darwin / no-/proc: lsof -d cwd (when available).
+# Prints the path or empty; never fails the caller.
+# Usage: devcake_baker_process_cwd <pid>
+devcake_baker_process_cwd() {
+  local pid="$1" cwd=""
+  if [[ -L "/proc/${pid}/cwd" ]]; then
+    cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)"
+  elif command -v lsof >/dev/null 2>&1; then
+    # lsof -Fn: lines like "p<pid>" / "n/path". Take the first n-record.
+    cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null \
+      | sed -n 's/^n//p' | head -n 1)" || true
+  fi
+  printf '%s' "$cwd"
+}
+
+# True when a candidate baker targets factory_abs.
+# When DEVCAKE_FACTORY_DIR is non-empty it is decisive: equal → match,
+# unequal → no match (do not fall through to cwd/cmdline). When unset/empty,
+# allow cwd (= repo whose .factory is factory_abs) or cmdline containing
+# factory_abs — true pre-env leftovers.
+# Usage: devcake_baker_targets_factory <cmdline> <env_factory> <cwd> <factory_abs> <repo_abs>
+devcake_baker_targets_factory() {
+  local c="$1" ef="$2" cw="$3" factory_abs="$4" repo_abs="$5"
+  local ef_abs=""
+  if [[ -n "$ef" ]]; then
+    ef_abs="$(cd "$ef" 2>/dev/null && pwd -P)" || ef_abs="$ef"
+    [[ "$ef_abs" == "$factory_abs" ]] && return 0
+    return 1
+  fi
+  [[ -n "$cw" && -n "$repo_abs" && "$cw" == "$repo_abs" ]] && return 0
+  case "$c" in
+    *"$factory_abs"*) return 0 ;;
+  esac
+  return 1
+}
+
+# Enumerate host python -m dev_factory processes targeting THIS factory dir.
+# Prints "pid age" lines (age = ps etime, or "unknown"). Matching rule:
+#   argv looks like `python … -m dev_factory` / `-m dev_factory.…`, AND
+#   DEVCAKE_FACTORY_DIR (environ) equals the resolved absolute factory dir
+#   when set (decisive — unequal means not this factory); when unset/empty,
+#   the process cwd is the repo whose `.factory` is that dir, OR the cmdline
+#   contains that absolute factory path.
+# Does NOT match baker_respawn.sh / systemd / launchd supervisors — only the
+# Python baker. Linux prefers /proc; Darwin (or no /proc) uses ps + lsof cwd.
+#
+# Usage: devcake_baker_list_factory_bakers <factory_dir>
+devcake_baker_list_factory_bakers() {
+  local factory_dir="$1"
+  local factory_abs="" repo_abs="" pid age cmd cwd env_factory eww
+  local cmdline_file environ_file
+
+  factory_abs="$(cd "$factory_dir" 2>/dev/null && pwd -P)" || factory_abs=""
+  [[ -n "$factory_abs" ]] || factory_abs="$factory_dir"
+  repo_abs="$(cd "${factory_abs}/.." 2>/dev/null && pwd -P)" || repo_abs=""
+
+  if [[ -d /proc/self ]]; then
+    for cmdline_file in /proc/[0-9]*/cmdline; do
+      [[ -e "$cmdline_file" ]] || continue
+      pid="${cmdline_file%/cmdline}"
+      pid="${pid##*/}"
+      [[ "$pid" =~ ^[0-9]+$ ]] || continue
+      cmd="$(tr '\0' ' ' <"$cmdline_file" 2>/dev/null | sed 's/[[:space:]]*$//')" || continue
+      [[ -n "$cmd" ]] || continue
+      devcake_baker_cmdline_is_module "$cmd" || continue
+      env_factory=""
+      environ_file="/proc/${pid}/environ"
+      if [[ -r "$environ_file" ]]; then
+        env_factory="$(tr '\0' '\n' <"$environ_file" 2>/dev/null \
+          | sed -n 's/^DEVCAKE_FACTORY_DIR=//p' | head -n 1)" || true
+      fi
+      cwd="$(devcake_baker_process_cwd "$pid")"
+      devcake_baker_targets_factory "$cmd" "$env_factory" "$cwd" \
+        "$factory_abs" "$repo_abs" || continue
+      age="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d '[:space:]')" || age=""
+      [[ -n "$age" ]] || age="unknown"
+      printf '%s %s\n' "$pid" "$age"
+    done
+  else
+    # Darwin / no usable /proc: ps pid + etime + command; best-effort environ
+    # + cwd via lsof (devcake_baker_process_cwd).
+    while read -r pid age cmd; do
+      [[ "$pid" =~ ^[0-9]+$ ]] || continue
+      [[ -n "$cmd" ]] || continue
+      devcake_baker_cmdline_is_module "$cmd" || continue
+      env_factory=""
+      eww="$(ps eww -p "$pid" -o command= 2>/dev/null || true)"
+      if [[ "$eww" == *"DEVCAKE_FACTORY_DIR="* ]]; then
+        env_factory="$(printf '%s\n' "$eww" \
+          | sed -n 's/.*DEVCAKE_FACTORY_DIR=\([^ ]*\).*/\1/p' | head -n 1)"
+      fi
+      cwd="$(devcake_baker_process_cwd "$pid")"
+      devcake_baker_targets_factory "$cmd" "$env_factory" "$cwd" \
+        "$factory_abs" "$repo_abs" || continue
+      age="$(printf '%s' "$age" | tr -d '[:space:]')"
+      [[ -n "$age" ]] || age="unknown"
+      printf '%s %s\n' "$pid" "$age"
+    done < <(ps -ax -o pid=,etime=,command= 2>/dev/null || true)
+  fi
+}
+
+# SIGTERM every listed baker for this factory dir except keep_pid and $$.
+# Pre-start: omit keep_pid (phrasing "pre-supervisor sweep").
+# Post-install: pass the supervised child pid (phrasing "not the supervised child").
+# Best-effort — a disappeared pid is not a failure. Log each kill with age.
+#
+# Usage: devcake_baker_displace_orphans <factory_dir> [keep_pid]
+devcake_baker_displace_orphans() {
+  local factory_dir="$1"
+  local keep_pid="${2:-}"
+  local pid age reason self
+  self="$$"
+  if [[ -n "$keep_pid" ]]; then
+    reason="not the supervised child"
+  else
+    reason="pre-supervisor sweep"
+  fi
+  while read -r pid age; do
+    [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$pid" == "$self" ]] && continue
+    [[ -n "$keep_pid" && "$pid" == "$keep_pid" ]] && continue
+    [[ -n "$age" ]] || age="unknown"
+    echo "── displacing leftover host baker (pid ${pid}, age ${age}) — ${reason}"
+    kill "$pid" 2>/dev/null || true
+  done < <(devcake_baker_list_factory_bakers "$factory_dir" || true)
+  sleep 0.3
 }
 
 # Prepare the baker pidfile for a new launch:
@@ -402,7 +583,7 @@ devcake_baker_wait_liveness() {
   local pid="$1" logfile="$2" pidfile="$3" launch_cmd="$4"
   local seconds="${5:-12}"
   local baseline="${6-}"
-  local size=0 elapsed=0 step=2
+  local size=0 elapsed=0 step=2 rotated=0
   [[ -f "$logfile" ]] || : >"$logfile"
   if [[ -z "$baseline" ]]; then
     baseline=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
@@ -414,6 +595,9 @@ devcake_baker_wait_liveness() {
       echo "── host baker died during launch confirmation (pid ${pid})" >&2
       echo "   launch: ${launch_cmd}" >&2
       echo "   pidfile: ${pidfile}" >&2
+      if [[ "$rotated" -eq 1 ]]; then
+        echo "   note: watch.log was rotated (shrunk) mid-launch — tail is of the current file" >&2
+      fi
       echo "   last log lines (${logfile}):" >&2
       tail -n 40 "$logfile" 2>/dev/null >&2 || true
       echo "   tip: retry with ./up.sh --foreground-baker when the parent reaps detached children" >&2
@@ -421,6 +605,13 @@ devcake_baker_wait_liveness() {
       return 1
     fi
     size=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
+    # Copytruncate (rotate_watch_log) shrinks the live inode below the
+    # pre-launch baseline — reset and keep waiting for post-rotate growth.
+    if [[ "$size" -lt "$baseline" ]]; then
+      rotated=1
+      baseline=$size
+      continue
+    fi
     if [[ "$size" -gt "$baseline" ]]; then
       echo "── host baker watching keep-set (pid ${pid} → ${logfile}; liveness confirmed)"
       return 0
@@ -429,6 +620,9 @@ devcake_baker_wait_liveness() {
   echo "── host baker did not progress its log within ~${seconds}s (pid ${pid})" >&2
   echo "   launch: ${launch_cmd}" >&2
   echo "   pidfile: ${pidfile}" >&2
+  if [[ "$rotated" -eq 1 ]]; then
+    echo "   note: watch.log was rotated (shrunk) mid-launch — tail is of the current file" >&2
+  fi
   echo "   last log lines (${logfile}):" >&2
   tail -n 40 "$logfile" 2>/dev/null >&2 || true
   echo "   tip: retry with ./up.sh --foreground-baker when the parent reaps detached children" >&2

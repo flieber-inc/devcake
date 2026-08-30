@@ -177,7 +177,10 @@ config; the admin panel's harness combobox therefore controls what actually
 runs. Dispatch also sends `DEVCAKE_HARNESS` in the run spec, which overrides
 the image-baked `ENV` (kept as a fallback). House CLI pin versions and
 npm/x.ai package identities still live only as `images/Dockerfile` ARG
-defaults — a single source for both is follow-up.
+defaults — a single source for both is follow-up. `Harness.cli_arg_examples`
+is **teaching only** (Mission Types Help via `GET /harnesses`, CAKE-172) —
+never applied at dispatch and never seeded into assignments; Extra CLI args
+remain operator-set (§1).
 
 Each template is a target in the multi-stage `images/Dockerfile` (shared `base` stage for git, forge CLIs, Python relay deps, non-root user):
 

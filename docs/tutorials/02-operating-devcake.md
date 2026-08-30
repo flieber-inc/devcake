@@ -140,6 +140,7 @@ history and PRs) move separately via `scripts/backup_gitea.sh` /
 Per-Dev-Type concurrency caps plus a global cap bound how many containers run at
 once (`/data/config/`); priorities decide the queue order; and the assignment
 matrix decides which Dev Type performs each mission type — including the extra
-CLI args slot (e.g. ONBOARD's `--max-turns 15` triage budget). When you're ready
+CLI args slot (optional, harness-specific — e.g. an ONBOARD `--max-turns 15`
+triage budget on claude-code / grok-build; first-setup leaves the slot empty). When you're ready
 to point DevCake at a real team: start `opt_in`, keep `auto_merge` off, label
 one small mission, and expand from there.

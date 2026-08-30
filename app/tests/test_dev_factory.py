@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -799,6 +800,11 @@ def test_up_sh_loud_degraded_gap_on_respawn_fallback():
     assert "respawn" in combined.lower()
     # Gap warning must mention linger / launchd so operators know the prefer path.
     assert "linger" in combined.lower() or "launchd" in combined.lower()
+    # Linux DEGRADED reason must consult the sharper probe — not only the
+    # hard-coded "user systemd unavailable" for every !systemd_available case.
+    assert "devcake_baker_linux_degraded_reason" in text
+    assert "devcake_baker_linux_degraded_reason" in helper
+    assert "devcake_baker_systemd_user_session_missing" in helper
 
 
 def test_up_sh_persists_devcake_tag_into_env():
@@ -971,6 +977,292 @@ main() {{
     assert killed.read_text().strip() == "4242"
 
 
+def test_baker_host_displace_orphans_kills_foreign_spares_keep_pid(tmp_path):
+    """Install sweep SIGTERMs leftover bakers for this factory; spares keep_pid."""
+    factory = tmp_path / ".factory"
+    factory.mkdir()
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  # Override enumerator after source (call-time lookup).
+  devcake_baker_list_factory_bakers() {{
+    echo "111 01:02:03"
+    echo "222 00:00:05"
+  }}
+  devcake_baker_displace_orphans "{factory}" 222
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert killed.read_text().strip() == "111"
+    assert "pid 111" in result.stdout
+    assert "01:02:03" in result.stdout
+    assert "displacing leftover host baker" in result.stdout
+    assert "222" not in killed.read_text()
+
+
+def test_baker_host_displace_orphans_kills_all_without_keep_pid(tmp_path):
+    """Pre-start sweep with no keep_pid SIGTERMs every matching baker."""
+    factory = tmp_path / ".factory"
+    factory.mkdir()
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  devcake_baker_list_factory_bakers() {{
+    echo "333 age-unknown"
+    echo "444 00:01:00"
+  }}
+  devcake_baker_displace_orphans "{factory}"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert sorted(killed.read_text().split()) == ["333", "444"]
+    assert "pid 333" in result.stdout
+    assert "pid 444" in result.stdout
+    assert "pre-supervisor sweep" in result.stdout
+
+
+def test_baker_host_displace_orphans_never_kills_self(tmp_path):
+    """Enumerator listing $$ must not SIGTERM the installing shell."""
+    factory = tmp_path / ".factory"
+    factory.mkdir()
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  self="$$"
+  devcake_baker_list_factory_bakers() {{
+    echo "$self 00:00:01"
+    echo "555 00:00:02"
+  }}
+  devcake_baker_displace_orphans "{factory}"
+  echo "self=$self"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    self_pid = [
+        line.split("=", 1)[1]
+        for line in result.stdout.splitlines()
+        if line.startswith("self=")
+    ][0]
+    assert killed.read_text().strip() == "555"
+    assert self_pid not in killed.read_text().split()
+
+
+def test_up_sh_and_baker_host_wire_displace_orphans():
+    """Displace chokepoint is defined once and invoked on install/refresh."""
+    helper = _baker_host_sh_text()
+    text = _up_sh_text()
+    assert "devcake_baker_displace_orphans()" in helper
+    assert "devcake_baker_list_factory_bakers()" in helper
+    assert "devcake_baker_displace_orphans" in text
+    # Pre-start sweep (no keep_pid) near prepare_pidfile.
+    prep = text.index("devcake_baker_prepare_pidfile")
+    # First displace call in up.sh should be the pre-start sweep.
+    first_disp = text.index("devcake_baker_displace_orphans")
+    assert first_disp > prep
+    # Post-install keep_pid sweeps live in each installer.
+    for name in (
+        "devcake_baker_systemd_install()",
+        "devcake_baker_launchd_install()",
+        "devcake_baker_respawn_install()",
+    ):
+        assert name in helper
+    assert helper.count("devcake_baker_displace_orphans") >= 4  # def + 3 installers
+
+
+def test_baker_targets_factory_env_is_decisive(tmp_path):
+    """When DEVCAKE_FACTORY_DIR is set, it alone decides the factory match.
+
+    env=other + cwd=this → not this factory (do not fall through to cwd).
+    env=this → match. env unset + cwd=this → match via cwd fallback.
+    Exercises targets_factory directly — not a stubbed enumerator.
+    """
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    (repo / ".factory").mkdir(parents=True)
+    (other / ".factory").mkdir(parents=True)
+    factory_abs = str((repo / ".factory").resolve())
+    other_abs = str((other / ".factory").resolve())
+    repo_abs = str(repo.resolve())
+    cmd = "python3 -m dev_factory"
+    result = _run_baker_host_driver(tmp_path, f"""
+main() {{
+  factory_abs="{factory_abs}"
+  other_abs="{other_abs}"
+  repo_abs="{repo_abs}"
+  cmd="{cmd}"
+  # env points elsewhere, cwd is this repo → must NOT match this factory.
+  if devcake_baker_targets_factory "$cmd" "$other_abs" "$repo_abs" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "FAIL env_other_cwd_this matched"
+  else
+    echo "OK env_other_cwd_this"
+  fi
+  # env names this factory → match regardless of cwd.
+  if devcake_baker_targets_factory "$cmd" "$factory_abs" "/tmp" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "OK env_this"
+  else
+    echo "FAIL env_this"
+  fi
+  # env unset: cwd = repo whose .factory is factory_abs → match.
+  if devcake_baker_targets_factory "$cmd" "" "$repo_abs" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "OK cwd_fallback"
+  else
+    echo "FAIL cwd_fallback"
+  fi
+  # env unset: cmdline carries absolute factory path → match.
+  if devcake_baker_targets_factory \\
+      "python3 -m dev_factory --factory $factory_abs" "" "/var/empty" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "OK cmdline_fallback"
+  else
+    echo "FAIL cmdline_fallback"
+  fi
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    out = result.stdout
+    assert "OK env_other_cwd_this" in out
+    assert "FAIL env_other_cwd_this" not in out
+    assert "OK env_this" in out
+    assert "OK cwd_fallback" in out
+    assert "OK cmdline_fallback" in out
+
+
+def _pids_from_block(block: str) -> set[str]:
+    out: set[str] = set()
+    for line in block.splitlines():
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            out.add(parts[0])
+    return out
+
+
+def _stub_dev_factory_pkg(tmp_path: Path) -> Path:
+    """Long-lived `python -m dev_factory` stand-in (argv-shaped, sleeps)."""
+    stub_root = tmp_path / "stub_pkg"
+    (stub_root / "dev_factory").mkdir(parents=True)
+    (stub_root / "dev_factory" / "__init__.py").write_text("")
+    (stub_root / "dev_factory" / "__main__.py").write_text(
+        "import time\ntime.sleep(120)\n"
+    )
+    return stub_root
+
+
+def test_baker_list_factory_bakers_respects_decisive_env(tmp_path):
+    """Live process: env=other must not list under this factory (real enumerator)."""
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    factory = repo / ".factory"
+    other_factory = other / ".factory"
+    factory.mkdir(parents=True)
+    other_factory.mkdir(parents=True)
+    stub_root = _stub_dev_factory_pkg(tmp_path)
+    env = {**os.environ, "PYTHONPATH": str(stub_root)}
+    env["DEVCAKE_FACTORY_DIR"] = str(other_factory.resolve())
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "dev_factory"],
+        cwd=str(repo),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(0.15)
+        assert proc.poll() is None, "stub baker exited early"
+        result = _run_baker_host_driver(tmp_path, f"""
+main() {{
+  echo "LIST_BEGIN"
+  devcake_baker_list_factory_bakers "{factory.resolve()}"
+  echo "LIST_END"
+  echo "OTHER_BEGIN"
+  devcake_baker_list_factory_bakers "{other_factory.resolve()}"
+  echo "OTHER_END"
+}}
+""")
+        assert result.returncode == 0, result.stderr + result.stdout
+        text = result.stdout
+        this_block = text.split("LIST_BEGIN", 1)[1].split("LIST_END", 1)[0]
+        other_block = text.split("OTHER_BEGIN", 1)[1].split("OTHER_END", 1)[0]
+        child = str(proc.pid)
+        assert child not in _pids_from_block(this_block), (
+            f"env=other baker pid {child} listed under this factory:\n{text}"
+        )
+        assert child in _pids_from_block(other_block), (
+            f"env=other baker pid {child} missing from other factory list:\n{text}"
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_baker_list_factory_bakers_cwd_fallback_when_env_unset(tmp_path):
+    """Live process: env unset + cwd=repo → listed for that repo's factory."""
+    repo = tmp_path / "repo"
+    factory = repo / ".factory"
+    factory.mkdir(parents=True)
+    stub_root = _stub_dev_factory_pkg(tmp_path)
+    env = {**os.environ, "PYTHONPATH": str(stub_root)}
+    env.pop("DEVCAKE_FACTORY_DIR", None)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "dev_factory"],
+        cwd=str(repo),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(0.15)
+        assert proc.poll() is None, "stub baker exited early"
+        result = _run_baker_host_driver(tmp_path, f"""
+main() {{
+  echo "LIST_BEGIN"
+  devcake_baker_list_factory_bakers "{factory.resolve()}"
+  echo "LIST_END"
+}}
+""")
+        assert result.returncode == 0, result.stderr + result.stdout
+        text = result.stdout
+        this_block = text.split("LIST_BEGIN", 1)[1].split("LIST_END", 1)[0]
+        child = str(proc.pid)
+        assert child in _pids_from_block(this_block), (
+            f"cwd-only baker pid {child} missing from factory list:\n{text}"
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_baker_host_darwin_cwd_probe_is_wired():
+    """Darwin / no-/proc branch must best-effort resolve cwd (not hard-code empty)."""
+    helper = _baker_host_sh_text()
+    assert "devcake_baker_process_cwd()" in helper
+    # The non-/proc path must call the cwd probe (lsof or shared helper).
+    # Hard-coded cwd="" with no probe is the CAKE-169 REVIEW reject defect.
+    assert "lsof" in helper
+    # Comment / matching rule still documents cwd fallback when env unset.
+    assert "cwd" in helper.lower()
+
+
 def test_baker_host_wait_liveness_succeeds_when_log_grows(tmp_path):
     logfile = tmp_path / "watch.log"
     pidfile = tmp_path / "watch.pid"
@@ -991,6 +1283,139 @@ main() {{
 """)
     assert result.returncode == 0, result.stderr + result.stdout
     assert "liveness confirmed" in result.stdout
+
+
+def test_baker_host_wait_liveness_resets_baseline_on_log_shrinkage(tmp_path):
+    """Copytruncate mid-wait must reset baseline; post-rotate growth confirms."""
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    # Oversized pre-upgrade log — baseline is this length before launch.
+    old = "OLD" * 1000
+    logfile.write_text(old)
+    baseline = len(old.encode())
+    pidfile.write_text("7\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  return 0
+}}
+_sleeps=0
+sleep() {{
+  _sleeps=$((_sleeps + 1))
+  if [[ "$_sleeps" -eq 1 ]]; then
+    # Copytruncate shrinks below baseline — wait loop resets, does not succeed.
+    : > "{logfile}"
+  elif [[ "$_sleeps" -eq 2 ]]; then
+    # Post-rotate growth past the reset baseline confirms liveness.
+    echo "dev_factory: watching keep-set" >> "{logfile}"
+  fi
+}}
+main() {{
+  # 6s budget (step=2) so sleep1=shrink + sleep2=growth fit before timeout.
+  devcake_baker_wait_liveness 7 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 6 {baseline}
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "liveness confirmed" in result.stdout
+
+
+def test_baker_host_wait_liveness_failure_mentions_rotation_when_log_shrank(tmp_path):
+    """Timeout after shrink must name rotation and still tail the live path."""
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    old = "OLD" * 1000
+    logfile.write_text(old)
+    baseline = len(old.encode())
+    pidfile.write_text("8\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  return 0
+}}
+_sleeps=0
+sleep() {{
+  _sleeps=$((_sleeps + 1))
+  if [[ "$_sleeps" -eq 1 ]]; then
+    : > "{logfile}"   # shrink only — no growth past the reset baseline
+  fi
+}}
+tail() {{ command tail "$@"; }}
+main() {{
+  set +e
+  devcake_baker_wait_liveness 8 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4 {baseline}
+  echo "rc=$?"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
+    assert "did not progress its log" in result.stderr
+    assert "rotat" in result.stderr.lower()
+    assert f"last log lines ({logfile}):" in result.stderr
+
+
+def test_baker_host_degraded_reason_distinguishes_no_user_session(tmp_path):
+    """systemctl present + dead user bus → enable-linger remedy, not generic."""
+    # Case A: binary present, user session missing → sharper linger path.
+    result_a = _run_baker_host_driver(tmp_path, """
+command() {
+  if [[ "${1:-}" == "-v" && "${2:-}" == "systemctl" ]]; then
+    echo "/usr/bin/systemctl"
+    return 0
+  fi
+  builtin command "$@"
+}
+systemctl() {
+  if [[ "${1:-}" == "--user" && "${2:-}" == "show-environment" ]]; then
+    return 1
+  fi
+  return 0
+}
+main() {
+  set +e
+  devcake_baker_systemd_user_session_missing
+  echo "missing_rc=$?"
+  reason="$(devcake_baker_linux_degraded_reason)"
+  echo "reason=$reason"
+  # Banner must name enable-linger for this case (stdout+stderr).
+  set +e
+  devcake_baker_degraded_gap "$reason" 2>banner.err
+  echo "banner<<EOF"
+  cat banner.err
+  echo "EOF"
+}
+""")
+    assert result_a.returncode == 0, result_a.stderr + result_a.stdout
+    assert "missing_rc=0" in result_a.stdout
+    reason_line = next(
+        ln for ln in result_a.stdout.splitlines() if ln.startswith("reason=")
+    )
+    reason = reason_line[len("reason=") :]
+    assert "user systemd unavailable" != reason
+    assert "enable-linger" in reason
+    assert "enable-linger" in result_a.stdout.lower() or "enable-linger" in result_a.stderr.lower()
+    # Banner body (captured) also carries the remedy by name.
+    assert "enable-linger" in result_a.stdout
+
+    # Case B: no systemctl at all → generic unavailable; do NOT prescribe linger
+    # as the primary reason (banner tip may still mention it).
+    result_b = _run_baker_host_driver(tmp_path, """
+command() {
+  if [[ "${1:-}" == "-v" && "${2:-}" == "systemctl" ]]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+main() {
+  set +e
+  devcake_baker_systemd_user_session_missing
+  echo "missing_rc=$?"
+  reason="$(devcake_baker_linux_degraded_reason)"
+  echo "reason=$reason"
+}
+""")
+    assert result_b.returncode == 0, result_b.stderr + result_b.stdout
+    assert "missing_rc=1" in result_b.stdout
+    assert "reason=user systemd unavailable" in result_b.stdout
 
 
 def test_up_sh_measures_baker_log_baseline_before_launch():
@@ -1467,11 +1892,12 @@ def test_unhealthy_budget_is_minutes_not_three_strikes():
     assert factory.unhealthy_backoff_s(10) == 30
 
 
-def test_baker_singleton_flock_blocks_second_instance(tmp_path):
+def test_baker_singleton_flock_blocks_second_instance(tmp_path, capsys):
     """Pidfile + flock: a second baker cannot run while the lock is held.
 
     Exit code 0 on contention so Restart=on-failure / launchd KeepAlive
     (SuccessfulExit=false) do not restart-storm a healthy peer.
+    Contention log must name the holder pid already written into watch.lock.
     """
     _load_factory()
     import dev_factory.watch as watch
@@ -1483,12 +1909,18 @@ def test_baker_singleton_flock_blocks_second_instance(tmp_path):
     lockfile = factory_dir / "watch.lock"
     assert pidfile.is_file()
     assert lockfile.is_file()
-    assert pidfile.read_text().strip().isdigit()
+    holder_pid = lockfile.read_text().strip()
+    assert holder_pid.isdigit()
+    assert holder_pid == str(os.getpid())
 
-    # Second acquire must refuse without stealing the lock.
+    # Second acquire must refuse without stealing the lock, naming the holder.
     with pytest.raises(SystemExit) as excinfo:
         watch.acquire_baker_singleton(factory_dir)
     assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert f"pid {holder_pid}" in out
+    assert str(lockfile) in out
+    assert "exiting without stealing the lock" in out
 
     holder.close()
     # After release, a new holder can take the lock.

@@ -336,6 +336,32 @@ def test_rows_and_detail_never_leak_prompts_results_or_notes(tmp_path):
     assert detail["input_tokens"] == 1_000_000
 
 
+def test_token_source_scalar_from_report_not_notes(tmp_path):
+    """CAKE-171: list/detail expose token_report.source as token_source so
+    finished-but-empty cells can name a short reason; notes stay off-wire."""
+    unavailable = {"schema": 1, "source": "unavailable", "model": "m",
+                   "input_tokens": None, "output_tokens": None,
+                   "cache_read_tokens": None, "cache_write_tokens": None,
+                   "total_tokens": None, "cost_usd_native": None,
+                   "notes": "SECRET EXTRACTION NOTE"}
+    store = _store(tmp_path, [
+        _run(1, tr=GROK_TR),
+        _run(2, tr=unavailable),
+        _run(3, tr=None),
+    ])
+    rows = {r["mission_key"]: r for r in
+            list_runs_response(store, CostInputs(), limit=25, offset=0)["runs"]}
+    assert rows["A-1"]["token_source"] == "end_event"
+    assert rows["A-2"]["token_source"] == "unavailable"
+    assert rows["A-3"]["token_source"] is None
+    assert "notes" not in rows["A-2"]
+    assert "SECRET EXTRACTION NOTE" not in str(rows["A-2"])
+    detail = run_detail(store.get(rows["A-2"]["run_id"]), CostInputs())
+    assert detail["token_source"] == "unavailable"
+    assert "notes" not in detail
+    assert "token_report" not in detail
+
+
 def test_get_run_response_404_when_missing(tmp_path):
     store = _store(tmp_path, [])
     with pytest.raises(HTTPException) as ei:

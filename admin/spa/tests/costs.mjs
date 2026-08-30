@@ -153,4 +153,62 @@ await withPage(async (page) => {
     (await page.locator('[role="dialog"]').count()) === 0);
 });
 
+// ── CAKE-171: honest absence phrases on null token/cost cells (mocked) ──
+await withPage(async (page) => {
+  const runs = [
+    { run_id: "A-1-1-EXECUTE-WAITXX", mission_key: "A-1", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "running",
+      input_tokens: null, output_tokens: null, cache_read_tokens: null,
+      cache_write_tokens: null, cost_usd: null, cost_usd_estimated: null,
+      started_at: new Date(Date.now() - 60000).toISOString(), ended_at: null },
+    { run_id: "A-2-1-EXECUTE-FAILXX", mission_key: "A-2", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "failed",
+      input_tokens: null, output_tokens: null, cache_read_tokens: null,
+      cache_write_tokens: null, cost_usd: null, cost_usd_estimated: null,
+      started_at: new Date(Date.now() - 240000).toISOString(),
+      ended_at: new Date(Date.now() - 180000).toISOString() },
+    { run_id: "A-3-1-EXECUTE-EMPTYX", mission_key: "A-3", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "finished",
+      token_source: "unavailable",
+      input_tokens: null, output_tokens: null, cache_read_tokens: null,
+      cache_write_tokens: null, cost_usd: null, cost_usd_estimated: null,
+      started_at: new Date(Date.now() - 120000).toISOString(),
+      ended_at: new Date(Date.now() - 60000).toISOString() },
+    { run_id: "A-4-1-EXECUTE-ZEROXX", mission_key: "A-4", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "finished",
+      token_source: "end_event",
+      input_tokens: 0, output_tokens: 0, cache_read_tokens: 0,
+      cache_write_tokens: 0, cost_usd: 0, cost_usd_estimated: null,
+      started_at: new Date(Date.now() - 300000).toISOString(),
+      ended_at: new Date(Date.now() - 240000).toISOString() },
+  ];
+  await page.route(/\/api\/v1\/runs(?:\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        total: 4, total_runs: 4, runs,
+        totals: {
+          runtime_seconds: 180,
+          input_tokens: 0, output_tokens: 0,
+          cache_read_tokens: 0, cache_write_tokens: null,
+          cost_usd: 0, cost_usd_estimated: null, cost_usd_effective: 0,
+          total_tokens_effective: 0,
+        },
+        pmo_refs: [], rate_card: { rate_card_id: "builtin-v2", override_native: false },
+      }) }));
+  await gotoFresh(page, "#/runs");
+  await page.waitForSelector("table tbody tr");
+  const body = await page.innerText("tbody");
+
+  check("running null cells say available after the run ends",
+    body.includes("available after the run ends"));
+  check("failed null cells say not extracted (run failed)",
+    body.includes("not extracted (run failed)"));
+  check("finished + unavailable source says not extracted (unavailable)",
+    body.includes("not extracted (unavailable)"));
+  check("measured zero still renders as 0 / $0.00, not an absence phrase",
+    /\b0\b/.test(body) && body.includes("$0.00"));
+  check("null aggregate cache-write column says not extracted (not a fabricated 0)",
+    (await page.locator('[data-testid="runs-totals"] [aria-label="not extracted"]').count()) >= 1);
+});
+
 summary("costs");

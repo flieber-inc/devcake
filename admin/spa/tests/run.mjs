@@ -17,6 +17,7 @@ const SUITES = [
   // carries them.
   "markdown_helpers.mjs",
   "format_helpers.mjs",
+  "token_cost_absence_helpers.mjs",
   "deps_helpers.mjs",
   "board_helpers.mjs",
   "config_draft.mjs",

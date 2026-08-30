@@ -68,7 +68,9 @@ def _parse_bound(value: str, *, end: bool) -> datetime:
 def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     """Scalar token/cost columns for one run. cost_usd_estimated is priced
     by the CURRENT card (None when the split is missing or the model
-    unmapped) — never the persisted stamp."""
+    unmapped) — never the persisted stamp. token_source is the closed
+    TokenReport v1 provenance enum when a report exists (CAKE-171); raw
+    notes stay off the wire."""
     tr = run.token_report or {}
     out = {k: tr.get(k) for k in _TOKEN_SUMS}
     # a SUBSET of output_tokens (grok reasoning_tokens / codex
@@ -81,14 +83,18 @@ def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     # names its provenance (ADR-0029)
     out["cost_usd"] = tr.get("cost_usd_native")
     out["cost_usd_estimated"] = costing.estimate_cost_usd(tr, cost_inputs.rates)
+    # Closed TokenReport v1 enum (session_json / end_event / … / unavailable)
+    # or None when no report was stamped — SPA absence copy only; not CSV.
+    out["token_source"] = tr.get("source") if run.token_report else None
     return out
 
 
 def _accumulate_totals(runs: list[Run], cost_inputs: CostInputs) -> dict:
     """Aggregate one set of runs (the grand totals row, or one mission
-    group's subtotal). A column no run contributed to stays None (rendered
-    "—"): summing nothing to 0 would show an all-grok fleet "cache w: 0"
-    over rows of "—", and a fleet with no cost data a fabricated $0.00."""
+    group's subtotal). A column no run contributed to stays None (SPA
+    renders the CAKE-171 "not extracted" absence phrase): summing nothing
+    to 0 would show an all-grok fleet "cache w: 0" over absent cells, and
+    a fleet with no cost data a fabricated $0.00."""
     totals: dict = {k: None for k in _TOKEN_SUMS}
     totals["runtime_seconds"] = 0
     cost = cost_est = cost_eff = tok_eff = None

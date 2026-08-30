@@ -580,23 +580,15 @@ class ModelRate(BaseModel):
     output_per_mtok: float = Field(ge=0)
 
 
-# xAI public list prices for grok-4.5 (standard, <200k prompt tokens) —
-# the one harness with token splits but no native cost_usd. Estimation is
-# app-side only; the harness layer stays estimate-free (docs/08 §5).
-DEFAULT_MODEL_RATES: list[ModelRate] = [
-    ModelRate(model_prefix="grok-4.5", input_per_mtok=2.00,
-              cache_read_per_mtok=0.30, output_per_mtok=6.00),
-    # Anthropic list prices for Claude Opus 5 (the seeded steward vehicle,
-    # ADR-0033 D10) — cache write at the 5m-TTL 1.25× premium; claude
-    # harnesses DO report cache-write counters, unlike grok
-    ModelRate(model_prefix="claude-opus", input_per_mtok=5.00,
-              cache_read_per_mtok=0.50, cache_write_per_mtok=6.25,
-              output_per_mtok=25.00),
-]
+# Shipped empty (CAKE-174 / ADR-0021 vintage bump): operators enter rates from
+# their model vendor's published API pricing page. The estimator already
+# treats unknown models as never-priced. Estimation is app-side only; the
+# harness layer stays estimate-free (docs/08 §5).
+DEFAULT_MODEL_RATES: list[ModelRate] = []
 
 # Bump the -vN suffix whenever DEFAULT_MODEL_RATES change, so a stamped
 # feed line ("cost (estimated, builtin-v1)") names an unambiguous vintage.
-BUILTIN_RATE_CARD_ID = "builtin-v2"
+BUILTIN_RATE_CARD_ID = "builtin-v3"
 
 
 class CostInputs(BaseModel):

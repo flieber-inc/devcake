@@ -1326,8 +1326,10 @@ def test_finalize_stamps_rate_card_estimate(tmp_path):
     """ADR-0021: a grok-shaped report (full split, mapped model, no native
     cost) persists cost_usd_estimated + rate_card_id; an unmapped model
     persists neither; native cost_usd is never invented or touched."""
+    from fakes import priced_cost_inputs
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
+    mgr.config.cost_inputs = priced_cost_inputs()
     run = _saved_run(store)
     grok_report = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
                    "cache_write_tokens": None, "output_tokens": 500_000,
@@ -1336,7 +1338,8 @@ def test_finalize_stamps_rate_card_estimate(tmp_path):
     run_coro(mgr.finalize(run, _finalize_payload(token_report=grok_report)))
     saved = store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60      # $2/$0.30/$6 per 1M
-    assert saved["rate_card_id"] == "builtin-v2"
+    assert saved["rate_card_id"] == mgr.config.cost_inputs.rate_card_id
+    assert saved["rate_card_id"].startswith("operator:")
     assert saved["cost_usd_native"] is None
 
 
@@ -1371,13 +1374,16 @@ def test_feed_shows_estimated_cost_and_reasoning(tmp_path):
     labeled estimated line appears (never the bare native line), and the
     reasoning counter surfaces (a v1 scalar, ADR-0029) without being
     priced."""
+    from fakes import priced_cost_inputs
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
+    mgr.config.cost_inputs = priced_cost_inputs()
+    card_id = mgr.config.cost_inputs.rate_card_id
     run = _saved_run(store)
     run_coro(mgr.finalize(run, _finalize_payload(
         token_report=_grok_shaped_report())))
     report = next(c for c in fake.comments if "token report" in c)
-    assert "cost (estimated, builtin-v2): $5.6000" in report
+    assert f"cost (estimated, {card_id}): $5.6000" in report
     assert "\ncost: $" not in report
     assert "reasoning: 20616" in report
 
@@ -1404,15 +1410,17 @@ def test_feed_native_only_report_renders_without_estimate_or_reasoning(tmp_path)
 def test_feed_override_native_shows_both_cost_lines(tmp_path):
     """override_native on + a mapped model WITH native cost → both lines
     appear (the honest form of 'operator rates override the display')."""
+    from fakes import priced_cost_inputs
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
-    mgr.config.cost_inputs.override_native = True
+    mgr.config.cost_inputs = priced_cost_inputs(override_native=True)
+    card_id = mgr.config.cost_inputs.rate_card_id
     run = _saved_run(store)
     run_coro(mgr.finalize(run, _finalize_payload(
         token_report=_grok_shaped_report(cost_usd_native=4.4321))))
     report = next(c for c in fake.comments if "token report" in c)
     assert "\ncost: $4.4321" in report
-    assert "cost (estimated, builtin-v2): $5.6000" in report
+    assert f"cost (estimated, {card_id}): $5.6000" in report
 
 
 def _finalize_payload(**over):

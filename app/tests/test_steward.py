@@ -71,7 +71,9 @@ def test_finalize_steward_stamps_rate_card_estimate(tmp_path):
     """ADR-0021 parity: steward spend is fleet spend — finalize_steward stamps
     the same cost_usd_estimated + rate_card_id as mission finalize (failed
     outcome path: the stamp must land regardless of run success)."""
+    from fakes import priced_cost_inputs
     mgr = make_mgr(tmp_path, MapPMO([]))
+    mgr.config.cost_inputs = priced_cost_inputs()
     run = Run(run_id="SYS-STEWARD-1-ZZZZZZ", mission_key="STEWARD",
               mission_type="STEWARD", dev_type="steward", seq=1,
               state="finalizing")
@@ -84,15 +86,19 @@ def test_finalize_steward_stamps_rate_card_estimate(tmp_path):
         mgr, run, {"result": {"outcome": "nope"}, "token_report": grok}))
     saved = mgr.runs.store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60
-    assert saved["rate_card_id"] == "builtin-v2"
+    assert saved["rate_card_id"] == mgr.config.cost_inputs.rate_card_id
+    assert saved["rate_card_id"].startswith("operator:")
     assert saved["cost_usd"] is None
 
 
 def test_opus_steward_reports_price_at_the_new_rate_row(tmp_path):
-    """ADR-0033 D10: the re-pinned Opus steward must not run cost-blind —
-    the claude-opus rate row prices its reports ($5/$0.50/$6.25/$25 per M;
-    claude harnesses DO report cache-write, unlike grok)."""
+    """ADR-0033 D10: with an operator claude-opus rate row, Opus steward
+    spend is priced ($5/$0.50/$6.25/$25 per M; claude harnesses DO report
+    cache-write, unlike grok). CAKE-174 ships an empty card — rates are
+    explicit in the test."""
+    from fakes import priced_cost_inputs
     mgr = make_mgr(tmp_path, MapPMO([]))
+    mgr.config.cost_inputs = priced_cost_inputs()
     run = Run(run_id="SYS-STEWARD-2-ZZZZZZ", mission_key="STEWARD",
               mission_type="STEWARD", dev_type="steward", seq=2,
               state="finalizing")
@@ -105,7 +111,7 @@ def test_opus_steward_reports_price_at_the_new_rate_row(tmp_path):
         mgr, run, {"result": {"outcome": "nope"}, "token_report": claude}))
     saved = mgr.runs.store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 11.00     # 5 + 1 + 2.5 + 2.5
-    assert saved["rate_card_id"] == "builtin-v2"
+    assert saved["rate_card_id"] == mgr.config.cost_inputs.rate_card_id
 
 
 def test_apply_steward_edges_validates_everything(tmp_path):

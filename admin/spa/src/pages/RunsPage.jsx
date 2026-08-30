@@ -14,12 +14,13 @@ import { Input, Select } from "../components/Field.jsx";
 import CostInputsModal from "../components/CostInputsModal.jsx";
 import usePoll from "../lib/usePoll.js";
 import { relTime, fullTime, duration, durationSeconds, tokens, usd, shortHarnessVersion } from "../lib/format.js";
-import { absenceCopy } from "../lib/tokenCostAbsence.js";
+import { absenceCopy, costAbsenceCopy } from "../lib/tokenCostAbsence.js";
 import { safeHref } from "../lib/markdown.js";
 import { runHoverDetail } from "../lib/runHover.js";
 
-// CAKE-171: muted italic placeholder when a token/cost scalar was not measured.
-// Copy comes only from absenceCopy — never a second phrase string here.
+// CAKE-171/174: muted italic placeholder when a token/cost scalar was not
+// measured. Copy comes only from the tokenCostAbsence phrasebook — never a
+// second phrase string here.
 function AbsenceNote({ copy }) {
   return (
     <span
@@ -119,8 +120,12 @@ export default function RunsPage() {
   };
 
   // effective displayed cost per row (ADR-0021): native first, estimates
-  // fill gaps — flipped when the operator's Cost Inputs override is on
+  // fill gaps — flipped when the operator's Cost Inputs override is on.
+  // Null cost uses costAbsenceCopy: waiting/failed keep CAKE-171 honesty;
+  // empty-card taxonomy only when cost is missing for rate reasons.
+  // usd(null) stays "—" for non-Runs callers.
   const overrideOn = !!data.rate_card?.override_native;
+  const emptyRateCard = data.rate_card?.rate_count === 0;
   const runAbsence = (r) =>
     <AbsenceNote copy={absenceCopy({ state: r.state, source: r.token_source })} />;
   // Aggregates have no single run state; same finished-style "not extracted"
@@ -137,7 +142,17 @@ export default function RunsPage() {
       ? r.cost_usd_estimated != null
       : r.cost_usd == null && r.cost_usd_estimated != null;
     const eff = showEst ? r.cost_usd_estimated : r.cost_usd;
-    if (eff == null) return runAbsence(r);
+    if (eff == null) {
+      return (
+        <AbsenceNote
+          copy={costAbsenceCopy({
+            state: r.state,
+            source: r.token_source,
+            emptyRateCard,
+          })}
+        />
+      );
+    }
     if (!showEst) return <span>{usd(eff)}</span>;
     const title = `estimated (${data.rate_card?.rate_card_id || "rate card"})`
       + (overrideOn && r.cost_usd != null ? ` — harness reported ${usd(r.cost_usd)}` : "");

@@ -6,8 +6,27 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from devcake.config import AppConfig, DevType, PMOInstance, RepoInstance
+from devcake.config import (AppConfig, CostInputs, DevType, ModelRate,
+                            PMOInstance, RepoInstance)
 from devcake.domain.orchestrator import MissionManager
+
+
+# Former shipped DEFAULT_MODEL_RATES (builtin-v2). Production seed is empty
+# (CAKE-174 / builtin-v3); tests that need a priced estimate pass these
+# explicitly — do not re-seed production defaults to keep them green.
+PRICED_MODEL_RATES: list[ModelRate] = [
+    ModelRate(model_prefix="grok-4.5", input_per_mtok=2.00,
+              cache_read_per_mtok=0.30, output_per_mtok=6.00),
+    ModelRate(model_prefix="claude-opus", input_per_mtok=5.00,
+              cache_read_per_mtok=0.50, cache_write_per_mtok=6.25,
+              output_per_mtok=25.00),
+]
+
+
+def priced_cost_inputs(**kwargs) -> CostInputs:
+    """CostInputs with the historical grok+claude list rates."""
+    return CostInputs(
+        rates=[r.model_copy() for r in PRICED_MODEL_RATES], **kwargs)
 
 
 def stub_forge_runtime(breakers: dict | None = None) -> SimpleNamespace:

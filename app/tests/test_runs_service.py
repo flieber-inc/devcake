@@ -9,8 +9,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException
 
+from fakes import PRICED_MODEL_RATES, priced_cost_inputs
 from devcake.adapters.files.run_store import RunStore
-from devcake.config import CostInputs, ModelRate
+from devcake.config import BUILTIN_RATE_CARD_ID, CostInputs, ModelRate
 from devcake.api.runs_service import (get_run_log_response, get_run_response,
                                       list_runs_response, run_detail,
                                       runs_csv_response, stream_run_log_response)
@@ -18,6 +19,8 @@ from devcake.domain.run import Run
 
 T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 
+# Historical stamp id from when rates shipped as builtin-v2 — read-side
+# recomputes from the current card; the stamp is only historical context.
 GROK_TR = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
            "cache_write_tokens": None, "output_tokens": 500_000,
            "total_tokens": 3_500_000, "cost_usd_native": None,
@@ -28,6 +31,8 @@ CLAUDE_TR = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
              "cache_write_tokens": 2_000, "output_tokens": 1_000,
              "total_tokens": None, "cost_usd_native": 0.1234,
              "model": "claude-opus-5", "source": "session_json"}
+PRICED = priced_cost_inputs()
+PRICED_CARD_ID = PRICED.rate_card_id
 
 
 def _run(i, *, pmo_ref="alpha", created=None, tr=None, minutes=7,
@@ -53,7 +58,7 @@ def _store(tmp_path, runs):
 def test_rows_carry_token_scalars_and_read_time_estimate(tmp_path):
     store = _store(tmp_path, [_run(1, tr=GROK_TR), _run(2, tr=CLAUDE_TR),
                               _run(3, tr=None)])
-    out = list_runs_response(store, CostInputs(), limit=25, offset=0)
+    out = list_runs_response(store, PRICED, limit=25, offset=0)
     rows = {r["mission_key"]: r for r in out["runs"]}
     grok = rows["A-1"]
     assert grok["input_tokens"] == 1_000_000
@@ -67,13 +72,30 @@ def test_rows_carry_token_scalars_and_read_time_estimate(tmp_path):
     assert rows["A-3"]["reasoning_tokens"] is None
     claude = rows["A-2"]
     assert claude["cost_usd"] == 0.1234
-    # mapped since the ADR-0033 claude-opus rate row (builtin-v2):
+    # claude-opus row on the explicit priced fixture:
     # 10k×$5 + 5k×$0.50 + 2k×$6.25 + 1k×$25 per M = $0.09
     assert claude["cost_usd_estimated"] == 0.09
     bare = rows["A-3"]
     assert bare["input_tokens"] is None and bare["cost_usd"] is None
-    assert out["rate_card"] == {"rate_card_id": "builtin-v2",
-                                "override_native": False}
+    assert out["rate_card"] == {"rate_card_id": PRICED_CARD_ID,
+                                "override_native": False,
+                                "rate_count": len(PRICED_MODEL_RATES)}
+
+
+def test_rate_card_payload_reports_emptiness(tmp_path):
+    """CAKE-174: rate_count lets the Runs UI show empty-card copy without
+    guessing — empty builtin vs operator card with N rows."""
+    store = _store(tmp_path, [])
+    empty = list_runs_response(store, CostInputs(), limit=25, offset=0)
+    assert empty["rate_card"] == {
+        "rate_card_id": BUILTIN_RATE_CARD_ID,
+        "override_native": False,
+        "rate_count": 0,
+    }
+    assert BUILTIN_RATE_CARD_ID == "builtin-v3"
+    filled = list_runs_response(store, PRICED, limit=25, offset=0)
+    assert filled["rate_card"]["rate_count"] == len(PRICED_MODEL_RATES)
+    assert filled["rate_card"]["rate_card_id"] == PRICED_CARD_ID
 
 
 def test_read_time_estimate_follows_current_card_not_the_stamp(tmp_path):
@@ -120,7 +142,7 @@ def test_totals_cover_the_whole_filtered_set(tmp_path):
     runs = [_run(i, tr=GROK_TR, minutes=10) for i in range(1, 4)] \
          + [_run(4, tr=CLAUDE_TR, minutes=5)]
     store = _store(tmp_path, runs)
-    out = list_runs_response(store, CostInputs(), limit=2, offset=0)
+    out = list_runs_response(store, PRICED, limit=2, offset=0)
     assert len(out["runs"]) == 2 and out["total"] == 4
     t = out["totals"]
     assert t["runtime_seconds"] == 3 * 600 + 300       # ALL runs, not the page
@@ -157,7 +179,7 @@ def test_totals_are_null_when_no_run_contributed(tmp_path):
     totals row (grok has no write counter), matching the per-row cells; a
     set with no token reports at all shows no fabricated $0.00 either."""
     store = _store(tmp_path, [_run(i, tr=GROK_TR) for i in range(1, 3)])
-    t = list_runs_response(store, CostInputs(), limit=25, offset=0)["totals"]
+    t = list_runs_response(store, PRICED, limit=25, offset=0)["totals"]
     assert t["cache_write_tokens"] is None      # every grok row is null
     assert t["input_tokens"] == 2_000_000       # contributed sums unaffected
     assert t["cost_usd"] is None                # no native cost anywhere
@@ -175,9 +197,9 @@ def test_totals_are_null_when_no_run_contributed(tmp_path):
 def test_totals_respect_override_native(tmp_path):
     both = dict(GROK_TR, cost_usd_native=3.0)
     store = _store(tmp_path, [_run(1, tr=both, minutes=1)])
-    off = list_runs_response(store, CostInputs(), limit=25, offset=0)
+    off = list_runs_response(store, PRICED, limit=25, offset=0)
     assert off["totals"]["cost_usd_effective"] == 3.0
-    on = list_runs_response(store, CostInputs(override_native=True),
+    on = list_runs_response(store, priced_cost_inputs(override_native=True),
                             limit=25, offset=0)
     assert on["totals"]["cost_usd_effective"] == 5.60
 
@@ -192,10 +214,10 @@ def test_sort_orders_whole_set_nulls_always_last(tmp_path):
     store = _store(tmp_path, [_run(1, tr=cheap, minutes=3),
                               _run(2, tr=None, minutes=99),
                               _run(3, tr=GROK_TR, minutes=1)])
-    by_cost = list_runs_response(store, CostInputs(), limit=25, offset=0,
+    by_cost = list_runs_response(store, PRICED, limit=25, offset=0,
                                  sort="cost", direction="desc")
     assert [r["mission_key"] for r in by_cost["runs"]] == ["A-3", "A-1", "A-2"]
-    by_cost_asc = list_runs_response(store, CostInputs(), limit=25, offset=0,
+    by_cost_asc = list_runs_response(store, PRICED, limit=25, offset=0,
                                      sort="cost", direction="asc")
     assert [r["mission_key"] for r in by_cost_asc["runs"]] == ["A-1", "A-3", "A-2"]
     by_dur = list_runs_response(store, CostInputs(), limit=25, offset=0,
@@ -211,10 +233,10 @@ def test_sort_by_cost_respects_override_and_bad_params_400(tmp_path):
     other = dict(GROK_TR, cost_usd_native=6.0,
                  input_tokens=2_000_000, total_tokens=4_500_000)  # est 7.6
     store = _store(tmp_path, [_run(1, tr=both), _run(2, tr=other)])
-    off = list_runs_response(store, CostInputs(), limit=25, offset=0,
+    off = list_runs_response(store, PRICED, limit=25, offset=0,
                              sort="cost", direction="desc")
     assert [r["mission_key"] for r in off["runs"]] == ["A-1", "A-2"]   # 9 > 6
-    on = list_runs_response(store, CostInputs(override_native=True),
+    on = list_runs_response(store, priced_cost_inputs(override_native=True),
                             limit=25, offset=0, sort="cost", direction="desc")
     assert [r["mission_key"] for r in on["runs"]] == ["A-2", "A-1"]    # 7.6 > 5.6
     for bad in ({"sort": "verdict"}, {"sort": "cost", "direction": "sideways"},
@@ -242,7 +264,7 @@ def test_group_by_mission_clusters_paginates_and_sorts_groups(tmp_path):
         mrun(3, "A-2", 1, cheap),
         mrun(4, "A-1", 1, cheap, pmo_ref="beta"),   # same key, other PMO
     ])
-    out = list_runs_response(store, CostInputs(), limit=25, offset=0,
+    out = list_runs_response(store, PRICED, limit=25, offset=0,
                              group_by="mission", sort="cost",
                              direction="desc")
     assert out["total"] == 3 and out["total_runs"] == 4
@@ -259,7 +281,7 @@ def test_group_by_mission_clusters_paginates_and_sorts_groups(tmp_path):
     assert out["totals"]["cost_usd_effective"] == round(
         2 * 5.6 + 2 * 0.29, 6)
     # pagination walks GROUPS
-    page = list_runs_response(store, CostInputs(), limit=2, offset=2,
+    page = list_runs_response(store, PRICED, limit=2, offset=2,
                               group_by="mission", sort="cost",
                               direction="desc")
     assert [(g["pmo_ref"], g["mission_key"]) for g in page["groups"]] == [
@@ -322,13 +344,13 @@ def test_mission_url_joins_live_cache_when_unstamped(tmp_path):
 
 def test_rows_and_detail_never_leak_prompts_results_or_notes(tmp_path):
     store = _store(tmp_path, [_run(1, tr=GROK_TR)])
-    out = list_runs_response(store, CostInputs(), limit=25, offset=0)
+    out = list_runs_response(store, PRICED, limit=25, offset=0)
     row = out["runs"][0]
     for banned in ("spec_prompt", "result", "notes", "token_report",
                    "spec_env", "auth_digest"):
         assert banned not in row
     assert "SECRET" not in str(out)
-    detail = run_detail(store.get("A-1-1-EXECUTE-ZZZZZZ"), CostInputs())
+    detail = run_detail(store.get("A-1-1-EXECUTE-ZZZZZZ"), PRICED)
     for banned in ("spec_prompt", "notes", "token_report", "spec_env",
                    "auth_digest"):
         assert banned not in detail
@@ -437,10 +459,10 @@ def test_csv_respects_filters_via_the_shared_pipe(tmp_path):
 def test_csv_effective_cost_matches_the_ui_rule(tmp_path):
     # native present + override off ⇒ native; override on ⇒ current estimate
     store = _store(tmp_path, [_run(1, tr=CLAUDE_TR)])
-    row = dict(zip(*_csv_rows(runs_csv_response(store, CostInputs()))[:2]))
+    row = dict(zip(*_csv_rows(runs_csv_response(store, PRICED))[:2]))
     assert row["cost_usd_effective"] == "0.1234"
-    assert row["rate_card_id"] == "builtin-v2"
-    over = CostInputs(override_native=True)
+    assert row["rate_card_id"] == PRICED_CARD_ID
+    over = priced_cost_inputs(override_native=True)
     row = dict(zip(*_csv_rows(runs_csv_response(store, over))[:2]))
     assert row["cost_usd_effective"] == "0.09"
 
@@ -467,7 +489,7 @@ def test_csv_cell_neutralizes_every_cwe1236_lead_in():
 
 def test_csv_sort_orders_the_whole_set_and_leaks_nothing(tmp_path):
     store = _store(tmp_path, [_run(1, tr=CLAUDE_TR), _run(2, tr=GROK_TR)])
-    resp = runs_csv_response(store, CostInputs(), sort="cost",
+    resp = runs_csv_response(store, PRICED, sort="cost",
                              direction="desc")
     rows = _csv_rows(resp)
     assert [r[2] for r in rows[1:]] == ["A-2", "A-1"]   # grok est 5.60 first

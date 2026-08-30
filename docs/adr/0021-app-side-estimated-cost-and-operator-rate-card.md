@@ -11,8 +11,9 @@
   published rates, without breaking the "native cost is never guessed"
   invariant that keeps `devcake.cost.usd` claude-only-and-honest. Founder
   decisions (2026-08-02): harness-reported data stays authoritative by
-  default; a per-model rate card with built-in defaults; an operator
-  checkbox may flip *displayed* cost to the rate-card computation.
+  default; a per-model rate card (shipped empty since CAKE-174 —
+  operators fill rates from vendor list prices); an operator checkbox
+  may flip *displayed* cost to the rate-card computation.
 
 ## Decision
 
@@ -43,12 +44,15 @@ native cost exists — the override display mode (§4) needs both numbers.
 
 `AppConfig.cost_inputs: {rates: [ModelRate], override_native: bool}`
 (`ModelRate` = `model_prefix` + four per-1M USD rates, `ge=0`, unique
-prefixes). Defaults ship the xAI grok-4.5 standard list rates
-($2.00 / $0.30 / $6.00 per 1M input / cache-read / output). The derived
-`rate_card_id` — `builtin-v1` when the card equals the defaults (bump the
-suffix when defaults change), else `operator:<sha256[:8]>` — names the
-vintage on every stamped estimate. Additive config: no schema bump,
-carried automatically by ADR-0013 bundles/profiles.
+prefixes). Defaults ship **empty** (CAKE-174 / `builtin-v3`) — operators
+enter rates from their model vendor's published API pricing page; earlier
+vintages briefly seeded grok-4.5 (+ later claude-opus) list rates. The
+derived `rate_card_id` — `builtin-vN` when the card equals the shipped
+defaults (bump the `-vN` suffix whenever defaults change), else
+`operator:<sha256[:8]>` — names the vintage on every stamped estimate.
+Additive config: no schema bump, carried automatically by ADR-0013
+bundles/profiles. Persisted cards on existing deployments are not
+rewritten by a seed change.
 
 The long-context (≥200k prompt) ×2 ceiling is deliberately **not** in v1:
 session aggregates cannot tell which turns crossed the threshold, so the

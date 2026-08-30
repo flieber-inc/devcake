@@ -21,7 +21,10 @@ from . import doctor, envfile
 from .paths import require_checkout_root
 
 _ROLES: tuple[str, ...] = ("judge", "executor", "steward")
-_DEFAULT_BASE_URL = "http://localhost:8000"
+# The compose stack publishes the app API on the host ONLY through the admin
+# proxy (docker-compose.yml: admin binds 127.0.0.1:8080; the app service has
+# no host port — 8000 exists only inside the app container).
+_DEFAULT_BASE_URL = "http://localhost:8080"
 
 _SETUP_HELP = """\
 usage: devcake setup [flags…] [--json]
@@ -63,6 +66,10 @@ Settings-bundle import (ADR-0013 import→profile→apply):
   --import-passphrase-stdin          passphrase from stdin
   --import-overwrite                 overwrite existing profile name
   --import-profile <name>            profile save-as (default: imported-<stem>)
+
+Control plane:
+  --base-url <url>                   default http://localhost:8080 (the admin
+                                     proxy publishes the app API on loopback)
 
 Universal: --help, --json
 Exit codes: 0 ok · 2 usage · 3 doctor hard-fail · 5 first-setup conflict · 1 other
@@ -220,6 +227,8 @@ def parse_setup_flags(argv: Sequence[str]) -> SetupOptions | int:
                 opts.import_overwrite = True
             elif tok == "--import-profile":
                 opts.import_profile = need_value(tok)
+            elif tok == "--base-url":
+                opts.base_url = need_value(tok).rstrip("/")
             elif tok.startswith("-"):
                 raise UsageError(f"unknown option: {tok} (try --help)")
             else:

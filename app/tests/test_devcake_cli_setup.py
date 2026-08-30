@@ -490,3 +490,54 @@ def test_setup_doctor_hard_fail_exits_3(monkeypatch, tmp_path, capsys):
     assert payload["ok"] is False
     assert payload["doctor"]["ok"] is False
     assert payload["roles_created"] == ["judge", "executor", "steward"]
+
+
+# ── Control-plane base URL ────────────────────────────────────────────────────
+
+
+def test_setup_targets_admin_proxy_by_default_with_base_url_override(
+    monkeypatch, tmp_path, capsys
+):
+    """The host publishes the app API only via the admin proxy on loopback
+    8080 (compose gives the app service no host port), so the default base
+    URL must target it; --base-url overrides for nonstandard binds."""
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+    import devcake_cli.setup as setup_mod
+
+    sock = _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKER_SOCK", str(sock))
+    _patch_doctor_ok(monkeypatch)
+
+    urls: list[str] = []
+
+    def _recording_http(method, url, body, headers):
+        urls.append(url)
+        return 200, {"created": ["judge", "executor", "steward"]}
+
+    monkeypatch.setattr(setup_mod, "default_http", _recording_http)
+
+    rc = cli_main.main(["--json", "setup", "--same-harness", "claude-code"])
+    capsys.readouterr()
+    assert rc == 0
+    assert urls and all(
+        u.startswith("http://localhost:8080/api/v1/") for u in urls
+    ), urls
+
+    urls.clear()
+    rc = cli_main.main(
+        [
+            "--json",
+            "setup",
+            "--same-harness",
+            "claude-code",
+            "--base-url",
+            "http://127.0.0.1:9999/",
+        ]
+    )
+    capsys.readouterr()
+    assert rc == 0
+    assert urls and all(
+        u.startswith("http://127.0.0.1:9999/api/v1/") for u in urls
+    ), urls

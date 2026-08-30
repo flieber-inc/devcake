@@ -751,12 +751,12 @@ def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
     assert "docker buildx bake app admin hello" in text
     assert "python3 -m dev_factory" in text
     assert "PYTHONPATH=" in text
-    # Detached path: systemd primary, nohup only as unsupervised fallback.
-    assert "devcake_baker_systemd_available" in text
+    # Detached path: platform-routed supervisors (not bare nohup baker).
+    assert "devcake_baker_platform" in text
     assert "devcake_baker_systemd_install" in text
-    assert "nohup python3 -m dev_factory" in text  # fallback retained
-    nohup_line = next(l for l in text.splitlines() if "nohup python3" in l)
-    assert "OO_INGEST_PASSWORD" not in nohup_line
+    assert "devcake_baker_launchd_install" in text
+    assert "devcake_baker_respawn_install" in text
+    assert "nohup python3 -m dev_factory" not in text
     init = next((p / "dev_factory" / "__init__.py"
                  for p in _FACTORY_CANDIDATES if p.is_dir()), None)
     assert init is not None
@@ -790,15 +790,15 @@ def test_baker_systemd_unit_restarts_on_failure():
     assert "StartLimit" in unit
 
 
-def test_up_sh_loud_unsupervised_gap_on_systemd_fallback():
-    """When user systemd is unavailable, fallback must shout the gap."""
+def test_up_sh_loud_degraded_gap_on_respawn_fallback():
+    """When native supervisors are unavailable, degraded path must shout."""
     text = _up_sh_text()
     helper = _baker_host_sh_text()
     combined = text + "\n" + helper
-    assert "UNSUPERVISED" in combined or "unsupervised" in combined
-    assert "systemd" in combined.lower()
-    # Gap warning must mention linger or user session so operators know why.
-    assert "linger" in combined.lower() or "user systemd" in combined.lower()
+    assert "DEGRADED" in combined or "degraded" in combined
+    assert "respawn" in combined.lower()
+    # Gap warning must mention linger / launchd so operators know the prefer path.
+    assert "linger" in combined.lower() or "launchd" in combined.lower()
 
 
 def test_up_sh_persists_devcake_tag_into_env():
@@ -853,22 +853,22 @@ def test_up_sh_confirms_baker_liveness_after_launch():
     assert "--foreground-baker" in helper
 
 
-def test_up_sh_foreground_baker_bypasses_nohup():
-    """--foreground-baker runs python3 -m dev_factory without nohup/detach/unit."""
+def test_up_sh_foreground_baker_bypasses_supervisor():
+    """--foreground-baker runs python3 -m dev_factory without detach/unit."""
     text = _up_sh_text()
     assert "--foreground-baker" in text
     # Documented in the header that usage() prints.
-    header = "\n".join(text.splitlines()[:20])
+    header = "\n".join(text.splitlines()[:25])
     assert "--foreground-baker" in header
     assert "FOREGROUND_BAKER" in text
-    # Fallback nohup retained for unsupervised hosts; foreground still execs.
-    assert "nohup python3 -m dev_factory" in text
     assert "exec python3 -m dev_factory" in text
-    # Flag gate: foreground path must not wrap the exec in nohup or systemd.
+    # Flag gate: foreground path must not wrap the exec in a supervisor.
     exec_idx = text.index("exec python3 -m dev_factory")
     window = text[max(0, exec_idx - 200): exec_idx]
     assert "nohup" not in window
     assert "systemctl" not in window
+    assert "launchctl" not in window
+    assert "respawn" not in window
     assert "foreground" in window.lower() or "FOREGROUND_BAKER" in text[:exec_idx]
 
 
@@ -905,7 +905,8 @@ def test_baker_host_systemd_helpers_are_defined():
     helper = _baker_host_sh_text()
     assert "devcake_baker_systemd_available()" in helper
     assert "devcake_baker_systemd_install()" in helper
-    assert "devcake_baker_unsupervised_gap()" in helper
+    assert "devcake_baker_degraded_gap()" in helper
+    assert "devcake_baker_respawn_install()" in helper
     assert "Restart=on-failure" not in helper  # unit file owns restart policy
     assert "systemctl --user" in helper
     assert "baker.env" in helper
@@ -996,11 +997,12 @@ def test_up_sh_measures_baker_log_baseline_before_launch():
     """Pre-launch baseline avoids racing the startup print into the check."""
     text = _up_sh_text()
     assert "_BAKER_BASELINE" in text
-    # Baseline assignment appears before either launch path (systemd or nohup).
+    # Baseline assignment appears before any supervisor install path.
     base_idx = text.index("_BAKER_BASELINE")
     launch_idx = min(
-        text.index("nohup python3 -m dev_factory"),
         text.index("devcake_baker_systemd_install"),
+        text.index("devcake_baker_launchd_install"),
+        text.index("devcake_baker_respawn_install"),
     )
     assert base_idx < launch_idx
     assert 'devcake_baker_wait_liveness' in text
@@ -1463,6 +1465,108 @@ def test_unhealthy_budget_is_minutes_not_three_strikes():
     assert factory.unhealthy_backoff_s(3) == 20
     assert factory.unhealthy_backoff_s(4) == 30
     assert factory.unhealthy_backoff_s(10) == 30
+
+
+def test_baker_singleton_flock_blocks_second_instance(tmp_path):
+    """Pidfile + flock: a second baker cannot run while the lock is held.
+
+    Exit code 0 on contention so Restart=on-failure / launchd KeepAlive
+    (SuccessfulExit=false) do not restart-storm a healthy peer.
+    """
+    _load_factory()
+    import dev_factory.watch as watch
+
+    factory_dir = tmp_path / ".factory"
+    holder = watch.acquire_baker_singleton(factory_dir)
+    assert holder is not None
+    pidfile = factory_dir / "watch.pid"
+    lockfile = factory_dir / "watch.lock"
+    assert pidfile.is_file()
+    assert lockfile.is_file()
+    assert pidfile.read_text().strip().isdigit()
+
+    # Second acquire must refuse without stealing the lock.
+    with pytest.raises(SystemExit) as excinfo:
+        watch.acquire_baker_singleton(factory_dir)
+    assert excinfo.value.code == 0
+
+    holder.close()
+    # After release, a new holder can take the lock.
+    holder2 = watch.acquire_baker_singleton(factory_dir)
+    assert holder2 is not None
+    holder2.close()
+
+
+def _baker_plist_text() -> str:
+    candidates = [
+        Path(__file__).resolve().parents[2]
+        / "scripts" / "launchd" / "com.devcake.baker.plist",
+        Path("/srv/repo-scripts/launchd/com.devcake.baker.plist"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None, "com.devcake.baker.plist missing"
+    return path.read_text()
+
+
+def test_baker_launchd_plist_keepalive_and_run_at_load():
+    """macOS LaunchAgent must KeepAlive on non-success and RunAtLoad."""
+    plist = _baker_plist_text()
+    assert "com.devcake.baker" in plist
+    assert "RunAtLoad" in plist
+    assert "KeepAlive" in plist
+    assert "SuccessfulExit" in plist
+    # Runner sources baker.env then execs python -m dev_factory (host-side).
+    assert "@RUNNER@" in plist
+    assert "dev_factory" in plist
+    assert "WorkingDirectory" in plist or "@REPO@" in plist
+    # Must never mount docker.sock — baker stays on the host.
+    assert "docker.sock" not in plist
+
+
+def test_baker_host_platform_and_launchd_helpers_are_defined():
+    """Platform routing + launchd install live in baker_host.sh."""
+    helper = _baker_host_sh_text()
+    assert "devcake_baker_platform()" in helper
+    assert "devcake_baker_launchd_available()" in helper
+    assert "devcake_baker_launchd_install()" in helper
+    assert "launchctl" in helper
+    assert "com.devcake.baker" in helper
+
+
+def test_up_sh_routes_supervisors_by_platform():
+    """Detached path: Darwin→launchd, Linux+systemd→unit, else→respawn."""
+    text = _up_sh_text()
+    helper = _baker_host_sh_text()
+    combined = text + "\n" + helper
+    assert "devcake_baker_platform" in combined
+    assert "devcake_baker_launchd_install" in combined
+    assert "devcake_baker_systemd_install" in combined
+    assert "devcake_baker_respawn_install" in combined
+    # Bare unsupervised nohup of the baker is no longer the fallback.
+    assert "devcake_baker_respawn" in combined
+    # Password must not appear on a launch argv line.
+    for line in text.splitlines():
+        if "nohup" in line and "dev_factory" in line:
+            assert "OO_INGEST_PASSWORD" not in line
+
+
+def test_baker_respawn_script_is_flock_guarded_loop():
+    """Degraded path: installed respawn loop with flock — not bare nohup baker."""
+    candidates = [
+        Path(__file__).resolve().parents[2]
+        / "scripts" / "lib" / "baker_respawn.sh",
+        Path("/srv/repo-scripts/lib/baker_respawn.sh"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None, "baker_respawn.sh missing"
+    body = path.read_text()
+    assert "flock" in body
+    assert "dev_factory" in body
+    # Loop / respawn on exit — not a one-shot.
+    assert "while" in body or "respawn" in body.lower()
+    helper = _baker_host_sh_text()
+    assert "devcake_baker_respawn_install()" in helper
+    assert "DEGRADED" in helper or "degraded" in helper
 
 
 def _patch_once_compose(monkeypatch, listed):

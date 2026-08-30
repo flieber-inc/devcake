@@ -7,6 +7,7 @@ app surfaces as baking / ready. The app never talks to Docker.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -14,6 +15,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -52,8 +54,42 @@ RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
 OUTBOX = "harness_outbox"
 PRUNE_REQUEST = "harness_prune_request.json"
-# Host redirect target (up.sh / systemd). Cap keeps idle noise from filling disk.
+# Host redirect target (up.sh / systemd / launchd / respawn). Cap keeps idle
+# noise from filling disk.
 WATCH_LOG_CAP_BYTES = 2 * 1024 * 1024  # 2 MiB
+# Exclusive lock + pidfile so any supervisor combo cannot double-run the baker.
+BAKER_LOCK_NAME = "watch.lock"
+BAKER_PID_NAME = "watch.pid"
+
+
+def acquire_baker_singleton(factory_dir: Path | str) -> IO[str]:
+    """Take an exclusive flock on watch.lock and write watch.pid.
+
+    Holds the lock for the process lifetime (caller must keep the returned
+    file open). On contention exits 0 so Restart=on-failure / launchd
+    KeepAlive (SuccessfulExit=false) do not restart-storm a healthy peer.
+    """
+    dest = Path(factory_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    lock_path = dest / BAKER_LOCK_NAME
+    pid_path = dest / BAKER_PID_NAME
+    fh = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115 — held open for flock lifetime
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        print(
+            "dev_factory: another baker already holds "
+            f"{lock_path} — exiting without stealing the lock",
+            flush=True,
+        )
+        raise SystemExit(0) from None
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    pid_path.write_text(f"{os.getpid()}\n")
+    return fh
 
 
 def compose_read(rel: str) -> str | None:
@@ -522,6 +558,10 @@ def main(argv: list[str] | None = None) -> int:
     work = Path(os.environ.get(
         "DEVCAKE_FACTORY_WORK", str(REPO / ".factory" / "work")))
     work.mkdir(parents=True, exist_ok=True)
+    # Singleton under any supervisor (systemd / launchd / respawn loop).
+    factory_root = work.parent if work.name == "work" else work
+    _singleton = acquire_baker_singleton(
+        Path(os.environ.get("DEVCAKE_FACTORY_DIR", str(factory_root))))
     watch_log = _watch_log_path()
     rotate_watch_log(watch_log)
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "

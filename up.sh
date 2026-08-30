@@ -7,7 +7,7 @@
 #   ./up.sh --bake --no-hello-smoke   # bake/up without the dispatch proof
 #   ./up.sh -- dagu app        # pass service names to compose up
 #   ./up.sh --dry-run          # print discovered GID + planned actions
-#   ./up.sh --foreground-baker # up, then run baker in foreground (no unit/nohup)
+#   ./up.sh --foreground-baker # up, then run baker in foreground (no supervisor)
 #
 # DOCKER_GID is the group of /var/run/docker.sock as a Linux container sees
 # it (CAKE-128). Host-path stat alone is wrong on Docker Desktop (symlink /
@@ -17,10 +17,11 @@
 # DEVCAKE_TAG) into .env so plain `docker compose up -d` works afterwards too.
 # On --bake, after the health gate, a hello dispatch smoke proves Dagu can
 # launch Dev containers (control-plane health ≠ dispatch health).
-# Detached baker: prefer a systemd --user unit (Restart=on-failure); fall
-# back to nohup with a loud UNSUPERVISED gap warning when user systemd is
-# unavailable. Use --foreground-baker in terminals, CI, and automation that
-# reaps detached children.
+# Detached baker (host process — sole docker-socket holder):
+#   macOS            → launchd LaunchAgent (KeepAlive / RunAtLoad)
+#   Linux + systemd  → systemd --user unit (Restart=on-failure; linger)
+#   else             → flock-guarded respawn loop (DEGRADED — never bare nohup)
+# Use --foreground-baker in terminals, CI, and automation that reaps children.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -222,9 +223,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
   if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
-    echo "── would: run host baker in foreground (exec python3 -m dev_factory; no nohup)"
+    echo "── would: run host baker in foreground (exec python3 -m dev_factory; no supervisor)"
   else
-    echo "── would: start host baker detached (systemd --user unit or nohup fallback; .factory/watch.pid) — not a compose service"
+    echo "── would: start host baker detached (launchd / systemd --user / flock respawn; .factory/watch.pid) — not a compose service"
   fi
   exit 0
 fi
@@ -450,6 +451,7 @@ export DEVCAKE_OO_URL="http://127.0.0.1:5080"
 # on the process argv (readable via ps /proc).
 _BAKER_LOG="$_FACTORY_DIR/watch.log"
 _BAKER_PIDFILE="$_FACTORY_DIR/watch.pid"
+export DEVCAKE_FACTORY_DIR="$_FACTORY_DIR"
 if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
   # Foreground mode for terminals / CI / automation that reaps detached
   # children. Write $$ then exec so the pidfile names the baker after replace.
@@ -465,26 +467,45 @@ _BAKER_BASELINE=$(wc -c <"$_BAKER_LOG" 2>/dev/null | tr -d ' ' || echo 0)
 export DEVCAKE_FACTORY_LOG="$_BAKER_LOG"
 _BAKER_LAUNCH=""
 _BAKER_PID=""
-if devcake_baker_systemd_available \
-  && devcake_baker_systemd_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
-  _BAKER_PID="$(cat "$_BAKER_PIDFILE" 2>/dev/null || true)"
-  _BAKER_LAUNCH="systemctl --user start ${DEVCAKE_BAKER_UNIT:-devcake-baker.service}"
-else
-  # Loud gap: no user systemd / linger / probe failed — nohup will not
-  # restart after terminal close. Operators on Mac/CI see this every up.
-  if devcake_baker_systemd_available; then
-    # Keep a previously-enabled unit from racing a nohup baker.
+_BAKER_SUPERVISED=0
+_BAKER_PLAT="$(devcake_baker_platform)"
+# Platform routing: darwin→launchd, linux+systemd→unit, else→respawn.
+if [[ "$_BAKER_PLAT" == "darwin" ]]; then
+  if devcake_baker_launchd_available \
+    && devcake_baker_launchd_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
+    _BAKER_PID="$(cat "$_BAKER_PIDFILE" 2>/dev/null || true)"
+    _BAKER_LAUNCH="launchctl kickstart gui/$(id -u)/${DEVCAKE_BAKER_LAUNCHD_LABEL:-com.devcake.baker}"
+    _BAKER_SUPERVISED=1
+  fi
+elif [[ "$_BAKER_PLAT" == "linux" ]] && devcake_baker_systemd_available; then
+  if devcake_baker_systemd_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
+    _BAKER_PID="$(cat "$_BAKER_PIDFILE" 2>/dev/null || true)"
+    _BAKER_LAUNCH="systemctl --user start ${DEVCAKE_BAKER_UNIT:-devcake-baker.service}"
+    _BAKER_SUPERVISED=1
+  else
     systemctl --user stop "${DEVCAKE_BAKER_UNIT:-devcake-baker.service}" \
       >/dev/null 2>&1 || true
-    devcake_baker_unsupervised_gap "systemd user unit install/start failed"
-  else
-    devcake_baker_unsupervised_gap "user systemd unavailable"
   fi
-  _BAKER_LAUNCH="nohup python3 -m dev_factory >>${_BAKER_LOG} 2>&1 &"
-  nohup python3 -m dev_factory \
-    >>"$_BAKER_LOG" 2>&1 &
-  _BAKER_PID=$!
-  echo "$_BAKER_PID" >"$_BAKER_PIDFILE"
+fi
+if [[ "$_BAKER_SUPERVISED" -eq 0 ]]; then
+  # DEGRADED: flock-guarded respawn loop (never bare nohup of the baker).
+  case "$_BAKER_PLAT" in
+    darwin) devcake_baker_degraded_gap "launchd install/start failed" ;;
+    linux)
+      if devcake_baker_systemd_available; then
+        devcake_baker_degraded_gap "systemd user unit install/start failed"
+      else
+        devcake_baker_degraded_gap "user systemd unavailable"
+      fi
+      ;;
+    *) devcake_baker_degraded_gap "platform ${_BAKER_PLAT} has no native supervisor" ;;
+  esac
+  if ! devcake_baker_respawn_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
+    echo "── failed to install flock-guarded baker respawn supervisor" >&2
+    exit 1
+  fi
+  _BAKER_PID="$(cat "$_BAKER_PIDFILE" 2>/dev/null || true)"
+  _BAKER_LAUNCH="baker_respawn.sh $(pwd) ${_FACTORY_DIR}"
 fi
 devcake_baker_wait_liveness "$_BAKER_PID" "$_BAKER_LOG" "$_BAKER_PIDFILE" \
   "$_BAKER_LAUNCH" 12 "$_BAKER_BASELINE"

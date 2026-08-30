@@ -48,3 +48,4 @@ devcake-data-*.tar.gz
 .env.bak*
 *.env.bak
 *.egg-info/
+build/

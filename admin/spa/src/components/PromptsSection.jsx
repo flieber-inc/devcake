@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { get, send } from "../api.js";
 import Button from "./Button.jsx";
 import { Section } from "./Card.jsx";
-import { ConfirmDialog, Modal } from "./Modal.jsx";
+import { ConfirmDialog, Modal, PromptDialog } from "./Modal.jsx";
 import { Field, Help, Input, Select, Textarea } from "./Field.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import MarkdownBody, {
@@ -58,6 +58,9 @@ function TemplateManagerModal({
   const [err, setErr] = useState(null);
   const [softWarns, setSoftWarns] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicateErr, setDuplicateErr] = useState(null);
+  const [duplicateHint, setDuplicateHint] = useState(null);
 
   // When kind changes, reset type to first available
   useEffect(() => {
@@ -107,6 +110,7 @@ function TemplateManagerModal({
     setViewMode("source");
     setSoftWarns([]);
     setErr(null);
+    setDuplicateHint(null);
   };
 
   const cancelCreate = () => {
@@ -118,6 +122,52 @@ function TemplateManagerModal({
 
   const basePath = kind === "dev" ? "/devtype-prompts" : "/prompt-templates";
   const saveName = creating ? newName.trim() : (entry?.name || "");
+
+  const openDuplicate = () => {
+    if (!entry?.builtin) return;
+    setDuplicateErr(null);
+    setDuplicateOpen(true);
+  };
+
+  const confirmDuplicate = async (name) => {
+    if (!entry?.builtin || !typeKey) return;
+    const body = entry.template || text || "";
+    if (!body.trim()) {
+      setDuplicateErr("Built-in template body is empty — nothing to copy.");
+      return;
+    }
+    setBusy(true);
+    setDuplicateErr(null);
+    setErr(null);
+    try {
+      await send("PUT",
+        `${basePath}/${typeKey}/${encodeURIComponent(name)}`,
+        { template: body });
+      const soft = kind === "mission"
+        ? templateSoftWarnings({
+          missionType: typeKey,
+          templateName: name,
+          text: body,
+          maxDecompositionDepth: cfg?.max_decomposition_depth,
+        })
+        : [];
+      await onChanged();
+      setDuplicateOpen(false);
+      setCreating(false);
+      setNewName("");
+      setSelected(name);
+      setViewMode("source");
+      setSoftWarns(soft);
+      setDuplicateHint(
+        `"${name}" is saved and editable here, but it is not active until you `
+        + "select it in the slim active row and click page Save.",
+      );
+    } catch (e) {
+      setDuplicateErr(String(e.message || e).replace(/^\d+ /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const save = async () => {
     if (!typeKey || !saveName || !text.trim()) return;
@@ -203,6 +253,7 @@ function TemplateManagerModal({
                 setCreating(false);
                 setSoftWarns([]);
                 setErr(null);
+                setDuplicateHint(null);
               }}>
               <option value="mission">Mission Type</option>
               <option value="dev" disabled={!devTypes.length}>Dev Type</option>
@@ -215,6 +266,7 @@ function TemplateManagerModal({
                 setCreating(false);
                 setSoftWarns([]);
                 setErr(null);
+                setDuplicateHint(null);
               }}>
               {typeOptions.map((t) => (
                 <option key={t} value={t}>{t}</option>
@@ -232,6 +284,7 @@ function TemplateManagerModal({
                   setSelected(e.target.value);
                   setSoftWarns([]);
                   setErr(null);
+                  setDuplicateHint(null);
                 }}>
                 {entries.map((t) => (
                   <option key={t.name} value={t.name}>
@@ -261,8 +314,15 @@ function TemplateManagerModal({
 
         {entry?.builtin && !creating && (
           <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
-            Built-in templates are read-only and refreshed on upgrade — create a
-            copy to customize.
+            Built-in templates are read-only and refreshed on upgrade — use
+            {" "}<strong>Duplicate to edit</strong> to create an editable operator
+            copy.
+          </p>
+        )}
+        {duplicateHint && (
+          <p className="mb-3 rounded-md border border-neutral-200 bg-stone-50 px-3 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800/60 dark:text-neutral-200"
+            data-testid="duplicate-active-hint">
+            {duplicateHint}
           </p>
         )}
 
@@ -321,6 +381,15 @@ function TemplateManagerModal({
           </div>
           <div className="flex gap-2">
             <Button kind="ghost" disabled={busy} onClick={onClose}>Close</Button>
+            {entry?.builtin && !creating && (
+              <Button
+                disabled={busy || !typeKey}
+                onClick={openDuplicate}
+                data-testid="duplicate-to-edit"
+              >
+                Duplicate to edit
+              </Button>
+            )}
             {editable && (
               <Button disabled={busy || !saveName || !text.trim()} onClick={save}>
                 {busy ? "Saving…" : creating ? "Create template" : "Save template"}
@@ -329,6 +398,19 @@ function TemplateManagerModal({
           </div>
         </div>
       </Modal>
+      <PromptDialog
+        open={duplicateOpen}
+        title={`Duplicate "${entry?.name || "template"}"`}
+        label="New template name"
+        initial={entry?.name ? `${entry.name}-custom` : ""}
+        placeholder="e.g. Development-custom"
+        hint="Saves immediately as an operator copy. Select it as active on the Prompts page and click page Save for it to take effect."
+        confirmLabel="Create copy"
+        busy={busy}
+        error={duplicateErr}
+        onConfirm={confirmDuplicate}
+        onCancel={() => { if (!busy) { setDuplicateOpen(false); setDuplicateErr(null); } }}
+      />
       <ConfirmDialog open={!!confirmDelete} {...(confirmDelete || {})}
         onConfirm={() => confirmDelete?.action()}
         onCancel={() => setConfirmDelete(null)} />

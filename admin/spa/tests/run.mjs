@@ -47,6 +47,7 @@ const SUITES = [
   "error_surface.mjs",
   "honesty_leftovers.mjs",
   "adapter_rename_ui.mjs",
+  "cake170_templates.mjs",
 ];
 
 // pick up admin credentials from the repo-root .env when not already set

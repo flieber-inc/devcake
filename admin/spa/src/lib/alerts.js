@@ -72,8 +72,9 @@ export default function deriveAlerts(health) {
         dismissable: true, // compliance nag — the operator may accept the risk
         title: `Default branch of repo '${repoName}' is unprotected`,
         body:
-          "A Dev's forge token could merge to it without review. Enable branch " +
-          "protection (require PRs + 1 approval; Dev account must not bypass). " +
+          "Violates the deployment requirement: protect the default branch " +
+          "(require PRs + required status checks; Dev account must not bypass). " +
+          "A Dev's forge token could otherwise merge without review. " +
           "This is advisory — DevCake does not block dispatch on it. " +
           "Auto-merge off only stops the app, not the Dev.",
       });

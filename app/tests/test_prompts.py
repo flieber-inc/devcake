@@ -23,6 +23,33 @@ def test_execute_playbook_binding_rules_inv6():
     assert "result.json" in p
 
 
+def test_execute_and_review_playbooks_forbid_dev_merge():
+    """CAKE-179: Devs never merge / forge-approve / push the default branch.
+    Opening or updating the mission branch + PR is the boundary; merging
+    belongs to the app (auto_merge) or a human — lifecycle gates and
+    receipts live above the Dev. Pinned on Development and Customer Success
+    default EXECUTE + REVIEW templates (stable substrings)."""
+    from devcake.prompts import DEFAULT_PLAYBOOKS
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+    needles = (
+        "never merge pull requests",
+        "never approve them on the forge",
+        "never push to the default branch",
+        "lifecycle gates and receipts live above the Dev",
+    )
+    for pb in (
+        DEFAULT_PLAYBOOKS["EXECUTE"], DEFAULT_PLAYBOOKS["REVIEW"],
+        CS_PLAYBOOKS["EXECUTE"], CS_PLAYBOOKS["REVIEW"],
+    ):
+        flat = _flat(pb)
+        for needle in needles:
+            assert needle in flat, f"missing {needle!r} in playbook"
+    # rendered EXECUTE still carries the rule after {pr_instructions} fill
+    rendered = _flat(execute_prompt("ID", M, "repo", GH_PR))
+    assert "never merge pull requests" in rendered
+    assert "lifecycle gates and receipts live above the Dev" in rendered
+
+
 def test_execute_binding_rule_one_scopes_writes_not_outputs():
     """ADR-0018: rule 1 used to read "Work ONLY inside /workspace/repo/…",
     contradicting rule 7's /workspace/out/result.json — weaker models resolved

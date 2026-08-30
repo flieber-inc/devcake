@@ -107,6 +107,30 @@ check("one Manage templates page action + slim active rows (CAKE-166)", () => {
     "per-group <details> Manage templates disclosures are gone");
 });
 
+// CAKE-173: Policies-style domain cards (Templates / Mission Types / Dev Types).
+check("Prompts page is three domain Section cards (CAKE-173)", () => {
+  assert.match(promptsSrc, /id="prompts"/, "Templates card keeps route-key id");
+  assert.match(promptsSrc, /id="prompts-mission-types"/,
+    "Mission Types card needs a stable anchor id");
+  assert.match(promptsSrc, /id="prompts-dev-types"/,
+    "Dev Types card needs a stable anchor id");
+  assert.match(promptsSrc, /title="Templates"/);
+  assert.match(promptsSrc, /title="Mission Types"/);
+  assert.match(promptsSrc, /title="Dev Types"/);
+  // Single-card wrapper with internal uppercase h4 headings is gone.
+  assert.doesNotMatch(promptsSrc, /title="Prompts"/,
+    "page-level Prompts card title is replaced by domain cards");
+  assert.doesNotMatch(
+    promptsSrc,
+    /uppercase tracking-wide[^>]*>\s*Mission Types\s*</,
+    "internal Mission Types h4 is replaced by the card title",
+  );
+  assert.doesNotMatch(
+    promptsSrc,
+    /uppercase tracking-wide[^>]*>\s*Dev Types\s*</,
+    "internal Dev Types h4 is replaced by the card title",
+  );
+});
 if (failed) {
   console.error(`pmo_prompt_overrides.mjs: ${failed} check(s) failed`);
   process.exit(1);

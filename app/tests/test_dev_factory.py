@@ -799,6 +799,11 @@ def test_up_sh_loud_degraded_gap_on_respawn_fallback():
     assert "respawn" in combined.lower()
     # Gap warning must mention linger / launchd so operators know the prefer path.
     assert "linger" in combined.lower() or "launchd" in combined.lower()
+    # Linux DEGRADED reason must consult the sharper probe — not only the
+    # hard-coded "user systemd unavailable" for every !systemd_available case.
+    assert "devcake_baker_linux_degraded_reason" in text
+    assert "devcake_baker_linux_degraded_reason" in helper
+    assert "devcake_baker_systemd_user_session_missing" in helper
 
 
 def test_up_sh_persists_devcake_tag_into_env():
@@ -991,6 +996,139 @@ main() {{
 """)
     assert result.returncode == 0, result.stderr + result.stdout
     assert "liveness confirmed" in result.stdout
+
+
+def test_baker_host_wait_liveness_resets_baseline_on_log_shrinkage(tmp_path):
+    """Copytruncate mid-wait must reset baseline; post-rotate growth confirms."""
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    # Oversized pre-upgrade log — baseline is this length before launch.
+    old = "OLD" * 1000
+    logfile.write_text(old)
+    baseline = len(old.encode())
+    pidfile.write_text("7\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  return 0
+}}
+_sleeps=0
+sleep() {{
+  _sleeps=$((_sleeps + 1))
+  if [[ "$_sleeps" -eq 1 ]]; then
+    # Copytruncate shrinks below baseline — wait loop resets, does not succeed.
+    : > "{logfile}"
+  elif [[ "$_sleeps" -eq 2 ]]; then
+    # Post-rotate growth past the reset baseline confirms liveness.
+    echo "dev_factory: watching keep-set" >> "{logfile}"
+  fi
+}}
+main() {{
+  # 6s budget (step=2) so sleep1=shrink + sleep2=growth fit before timeout.
+  devcake_baker_wait_liveness 7 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 6 {baseline}
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "liveness confirmed" in result.stdout
+
+
+def test_baker_host_wait_liveness_failure_mentions_rotation_when_log_shrank(tmp_path):
+    """Timeout after shrink must name rotation and still tail the live path."""
+    logfile = tmp_path / "watch.log"
+    pidfile = tmp_path / "watch.pid"
+    old = "OLD" * 1000
+    logfile.write_text(old)
+    baseline = len(old.encode())
+    pidfile.write_text("8\n")
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  return 0
+}}
+_sleeps=0
+sleep() {{
+  _sleeps=$((_sleeps + 1))
+  if [[ "$_sleeps" -eq 1 ]]; then
+    : > "{logfile}"   # shrink only — no growth past the reset baseline
+  fi
+}}
+tail() {{ command tail "$@"; }}
+main() {{
+  set +e
+  devcake_baker_wait_liveness 8 "{logfile}" "{pidfile}" "nohup python3 -m dev_factory &" 4 {baseline}
+  echo "rc=$?"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
+    assert "did not progress its log" in result.stderr
+    assert "rotat" in result.stderr.lower()
+    assert f"last log lines ({logfile}):" in result.stderr
+
+
+def test_baker_host_degraded_reason_distinguishes_no_user_session(tmp_path):
+    """systemctl present + dead user bus → enable-linger remedy, not generic."""
+    # Case A: binary present, user session missing → sharper linger path.
+    result_a = _run_baker_host_driver(tmp_path, """
+command() {
+  if [[ "${1:-}" == "-v" && "${2:-}" == "systemctl" ]]; then
+    echo "/usr/bin/systemctl"
+    return 0
+  fi
+  builtin command "$@"
+}
+systemctl() {
+  if [[ "${1:-}" == "--user" && "${2:-}" == "show-environment" ]]; then
+    return 1
+  fi
+  return 0
+}
+main() {
+  set +e
+  devcake_baker_systemd_user_session_missing
+  echo "missing_rc=$?"
+  reason="$(devcake_baker_linux_degraded_reason)"
+  echo "reason=$reason"
+  # Banner must name enable-linger for this case (stdout+stderr).
+  set +e
+  devcake_baker_degraded_gap "$reason" 2>banner.err
+  echo "banner<<EOF"
+  cat banner.err
+  echo "EOF"
+}
+""")
+    assert result_a.returncode == 0, result_a.stderr + result_a.stdout
+    assert "missing_rc=0" in result_a.stdout
+    reason_line = next(
+        ln for ln in result_a.stdout.splitlines() if ln.startswith("reason=")
+    )
+    reason = reason_line[len("reason=") :]
+    assert "user systemd unavailable" != reason
+    assert "enable-linger" in reason
+    assert "enable-linger" in result_a.stdout.lower() or "enable-linger" in result_a.stderr.lower()
+    # Banner body (captured) also carries the remedy by name.
+    assert "enable-linger" in result_a.stdout
+
+    # Case B: no systemctl at all → generic unavailable; do NOT prescribe linger
+    # as the primary reason (banner tip may still mention it).
+    result_b = _run_baker_host_driver(tmp_path, """
+command() {
+  if [[ "${1:-}" == "-v" && "${2:-}" == "systemctl" ]]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+main() {
+  set +e
+  devcake_baker_systemd_user_session_missing
+  echo "missing_rc=$?"
+  reason="$(devcake_baker_linux_degraded_reason)"
+  echo "reason=$reason"
+}
+""")
+    assert result_b.returncode == 0, result_b.stderr + result_b.stdout
+    assert "missing_rc=1" in result_b.stdout
+    assert "reason=user systemd unavailable" in result_b.stdout
 
 
 def test_up_sh_measures_baker_log_baseline_before_launch():

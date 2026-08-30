@@ -784,9 +784,11 @@ def test_baker_systemd_unit_restarts_on_failure():
     unit = _baker_unit_text()
     assert "Restart=on-failure" in unit
     assert "RestartSec=" in unit
-    # ExecStart uses @DEVCAKE@ (resolved to the console-script path at install).
-    assert "ExecStart=@DEVCAKE@ baker run" in unit
-    assert "@DEVCAKE@" in unit
+    # ExecStart uses @BAKER_EXEC@ — resolved at install to `<devcake> baker run`,
+    # or the deprecated `<python3> -m dev_factory` transition fallback when the
+    # CLI is not installed (ADR-0038 Decision 5).
+    assert "ExecStart=@BAKER_EXEC@" in unit
+    assert "@BAKER_EXEC@" in unit
     assert "ExecStart=" in unit and "-m dev_factory" not in [
         line for line in unit.splitlines() if line.startswith("ExecStart=")
     ][0]
@@ -875,7 +877,7 @@ def test_up_sh_foreground_baker_bypasses_supervisor():
     assert "--foreground-baker" in header
     assert "FOREGROUND_BAKER" in text
     assert "baker run" in text
-    assert "devcake_baker_resolve_cli" in text
+    assert "devcake_baker_resolve_entry" in text
     # Flag gate: foreground path must not wrap the exec in a supervisor.
     exec_idx = text.index("baker run")
     # Prefer the foreground exec site (after FOREGROUND_BAKER gate).
@@ -2005,7 +2007,13 @@ def test_baker_respawn_script_is_flock_guarded_loop():
     body = path.read_text()
     assert "flock" in body
     assert "baker run" in body
-    assert "-m dev_factory" not in body
+    # Transition doctrine (ADR-0038 Decision 5): the CLI path is primary and
+    # the deprecated `-m dev_factory` remains ONLY as the loud fallback branch
+    # when `devcake` is not on PATH — never the unconditional entry.
+    assert "BAKER_EXEC" in body
+    assert "command -v devcake" in body
+    assert "-m dev_factory" in body           # fallback branch present
+    assert "deprecated" in body               # and loudly labeled
     # Loop / respawn on exit — not a one-shot.
     assert "while" in body or "respawn" in body.lower()
     helper = _baker_host_sh_text()

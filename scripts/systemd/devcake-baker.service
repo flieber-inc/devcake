@@ -5,7 +5,8 @@
 #
 # Placeholders filled at install time:
 #   @REPO@          absolute checkout path (WorkingDirectory)
-#   @DEVCAKE@       absolute path to the `devcake` console script (uv/pipx)
+#   @BAKER_EXEC@    full baker command — `<devcake> baker run` (uv/pipx CLI)
+#                   or the deprecated transition fallback `<python3> -m dev_factory`
 #   @PYTHONPATH@    scripts:app path pair matching up.sh exports
 #   @ENV_FILE@      .factory/baker.env (OO ingest + DEVCAKE_* — mode 0600)
 #   @WATCH_LOG@     .factory/watch.log (append stdout/stderr)
@@ -25,7 +26,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=@PYTHONPATH@
 Environment=DEVCAKE_FACTORY_LOG=@WATCH_LOG@
 EnvironmentFile=-@ENV_FILE@
-ExecStart=@DEVCAKE@ baker run
+ExecStart=@BAKER_EXEC@
 Restart=on-failure
 RestartSec=5
 # Bound restart storm during a long outage; budget is minutes-scale in-process.

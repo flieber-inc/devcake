@@ -461,11 +461,11 @@ export DEVCAKE_FACTORY_DIR="$_FACTORY_DIR"
 if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
   # Foreground mode for terminals / CI / automation that reaps detached
   # children. Write $$ then exec so the pidfile names the baker after replace.
-  _DEVCAKE_BIN="$(devcake_baker_resolve_cli)" || exit 1
+  _BAKER_EXEC="$(devcake_baker_resolve_entry)"
   echo "── host baker in foreground (pidfile $_BAKER_PIDFILE; Ctrl-C to stop)"
   echo "── stack up (admin: http://localhost:8080); baker takes this terminal"
   echo $$ >"$_BAKER_PIDFILE"
-  exec "$_DEVCAKE_BIN" baker run
+  exec $_BAKER_EXEC
 fi
 # Ensure the log exists; measure baseline BEFORE launch so the startup
 # print is counted as progress (not raced into the baseline).

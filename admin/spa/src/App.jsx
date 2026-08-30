@@ -77,8 +77,11 @@ function parseHash() {
   }
   const m = window.location.hash.match(/^#\/([^/]+)(?:\/(.+))?/);
   const page = m && PAGES.includes(m[1]) ? m[1] : "overview";
+  // Peel ?query / #fragment off the section segment before allowlist checks
+  // so deep-link flags like #/fleet/skills?add=1 stay on Skills (CAKE-165).
+  const sectionId = (raw) => (raw || "").split(/[?#]/, 1)[0] || "";
   if (page === "fleet") {
-    const sec = m?.[2];
+    const sec = sectionId(m?.[2]);
     if (!sec || !FLEET_IDS.includes(sec)) {
       window.location.replace(`#/fleet/${FLEET_IDS[0]}`);
       return { page: "fleet", section: FLEET_IDS[0] };
@@ -86,7 +89,7 @@ function parseHash() {
     return { page, section: sec };
   }
   if (page === "settings") {
-    const sec = m?.[2];
+    const sec = sectionId(m?.[2]);
     if (!sec || !SETTINGS_IDS.includes(sec)) {
       window.location.replace(`#/settings/${SETTINGS_IDS[0]}`);
       return { page: "settings", section: SETTINGS_IDS[0] };

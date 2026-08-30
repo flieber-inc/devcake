@@ -17,6 +17,21 @@ import { isMarkdownPath, stripYamlFrontmatter } from "../lib/markdown.js";
 
 // ── skill authoring (docs/11 Skills section) ─────────────────────────────────
 
+// CAKE-165 deep-link: #/fleet/skills?add=1 auto-opens Add skill (then clears).
+function hashWantsAddSkill() {
+  const hash = window.location.hash || "";
+  const q = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
+  return new URLSearchParams(q.split("#")[0]).get("add") === "1";
+}
+
+function clearAddSkillFlag() {
+  const hash = window.location.hash || "";
+  if (!hash.includes("?")) return;
+  const next = "#/fleet/skills";
+  if (hash.split("?")[0] !== next && !hash.startsWith("#/fleet/skills")) return;
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${next}`);
+}
+
 // "Add skill" dialog: Write (name + trigger + markdown; the app generates
 // the frontmatter — the operator never sees YAML) or Import (upload a
 // SKILL.md + optional supporting files). 409 flips into an explicit
@@ -125,6 +140,13 @@ function AddSkillDialog({ onClose, onSaved }) {
           {err}
         </p>
       )}
+      <p className="mt-4 text-sm text-neutral-500 dark:text-neutral-400">
+        Skills live in an external repository?{" "}
+        <a href="#/skill-sources"
+          className="font-medium text-accent-700 underline underline-offset-2 dark:text-accent-300">
+          Connect it as a skill source
+        </a>
+      </p>
       <div className="mt-5 flex justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
         {askOverwrite ? (
@@ -358,6 +380,29 @@ export default function SkillsSection({ setPageErr, skillSources = [] }) {
   };
   const [addSkill, setAddSkill] = useState(false);
   const [viewSkill, setViewSkill] = useState(null);
+  // Remember deep-link intent across the async /skills load so we can open
+  // only when the store is enabled, and clear the flag either way.
+  const [pendingAdd, setPendingAdd] = useState(() => hashWantsAddSkill());
+  useEffect(() => {
+    const onHash = () => {
+      if (hashWantsAddSkill()) setPendingAdd(true);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  useEffect(() => {
+    if (!pendingAdd) return;
+    if (skillsErr) {
+      clearAddSkillFlag();
+      setPendingAdd(false);
+      return;
+    }
+    // Wait until store status is known (null = still loading).
+    if (skillsCatalog.store == null) return;
+    clearAddSkillFlag();
+    if (skillsCatalog.store.enabled) setAddSkill(true);
+    setPendingAdd(false);
+  }, [pendingAdd, skillsCatalog.store, skillsErr]);
 
   return (
     <>

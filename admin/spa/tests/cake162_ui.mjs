@@ -157,8 +157,8 @@ await withPage(async (page) => {
 
 await withPage(async (page) => {
   await mockChromeApis(page);
-  await gotoFresh(page, "#/config/skills");
-  await page.waitForSelector('a[href="#/config/skills"]');
+  await gotoFresh(page, "#/fleet/skills");
+  await page.waitForSelector('a[href="#/fleet/skills"]');
 
   await checked("Config chip strip does not scroll horizontally at 390px", async () => {
     const strip = page.locator("main .sticky.top-0").first();

@@ -338,7 +338,27 @@ devcake_baker_cmdline_is_module() {
   return 1
 }
 
-# True when a candidate baker targets factory_abs (env, cwd→repo, or cmdline).
+# Best-effort absolute cwd for a pid.
+# Linux: /proc/<pid>/cwd. Darwin / no-/proc: lsof -d cwd (when available).
+# Prints the path or empty; never fails the caller.
+# Usage: devcake_baker_process_cwd <pid>
+devcake_baker_process_cwd() {
+  local pid="$1" cwd=""
+  if [[ -L "/proc/${pid}/cwd" ]]; then
+    cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)"
+  elif command -v lsof >/dev/null 2>&1; then
+    # lsof -Fn: lines like "p<pid>" / "n/path". Take the first n-record.
+    cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null \
+      | sed -n 's/^n//p' | head -n 1)" || true
+  fi
+  printf '%s' "$cwd"
+}
+
+# True when a candidate baker targets factory_abs.
+# When DEVCAKE_FACTORY_DIR is non-empty it is decisive: equal → match,
+# unequal → no match (do not fall through to cwd/cmdline). When unset/empty,
+# allow cwd (= repo whose .factory is factory_abs) or cmdline containing
+# factory_abs — true pre-env leftovers.
 # Usage: devcake_baker_targets_factory <cmdline> <env_factory> <cwd> <factory_abs> <repo_abs>
 devcake_baker_targets_factory() {
   local c="$1" ef="$2" cw="$3" factory_abs="$4" repo_abs="$5"
@@ -346,6 +366,7 @@ devcake_baker_targets_factory() {
   if [[ -n "$ef" ]]; then
     ef_abs="$(cd "$ef" 2>/dev/null && pwd -P)" || ef_abs="$ef"
     [[ "$ef_abs" == "$factory_abs" ]] && return 0
+    return 1
   fi
   [[ -n "$cw" && -n "$repo_abs" && "$cw" == "$repo_abs" ]] && return 0
   case "$c" in
@@ -357,11 +378,12 @@ devcake_baker_targets_factory() {
 # Enumerate host python -m dev_factory processes targeting THIS factory dir.
 # Prints "pid age" lines (age = ps etime, or "unknown"). Matching rule:
 #   argv looks like `python … -m dev_factory` / `-m dev_factory.…`, AND
-#   either DEVCAKE_FACTORY_DIR (environ) equals the resolved absolute factory
-#   dir, OR the process cwd is the repo whose `.factory` is that dir, OR the
-#   cmdline contains that absolute factory path.
+#   DEVCAKE_FACTORY_DIR (environ) equals the resolved absolute factory dir
+#   when set (decisive — unequal means not this factory); when unset/empty,
+#   the process cwd is the repo whose `.factory` is that dir, OR the cmdline
+#   contains that absolute factory path.
 # Does NOT match baker_respawn.sh / systemd / launchd supervisors — only the
-# Python baker. Linux prefers /proc; Darwin (or no /proc) uses ps.
+# Python baker. Linux prefers /proc; Darwin (or no /proc) uses ps + lsof cwd.
 #
 # Usage: devcake_baker_list_factory_bakers <factory_dir>
 devcake_baker_list_factory_bakers() {
@@ -388,10 +410,7 @@ devcake_baker_list_factory_bakers() {
         env_factory="$(tr '\0' '\n' <"$environ_file" 2>/dev/null \
           | sed -n 's/^DEVCAKE_FACTORY_DIR=//p' | head -n 1)" || true
       fi
-      cwd=""
-      if [[ -L "/proc/${pid}/cwd" ]]; then
-        cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)"
-      fi
+      cwd="$(devcake_baker_process_cwd "$pid")"
       devcake_baker_targets_factory "$cmd" "$env_factory" "$cwd" \
         "$factory_abs" "$repo_abs" || continue
       age="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d '[:space:]')" || age=""
@@ -399,7 +418,8 @@ devcake_baker_list_factory_bakers() {
       printf '%s %s\n' "$pid" "$age"
     done
   else
-    # Darwin / no usable /proc: ps pid + etime + command; best-effort environ.
+    # Darwin / no usable /proc: ps pid + etime + command; best-effort environ
+    # + cwd via lsof (devcake_baker_process_cwd).
     while read -r pid age cmd; do
       [[ "$pid" =~ ^[0-9]+$ ]] || continue
       [[ -n "$cmd" ]] || continue
@@ -410,7 +430,7 @@ devcake_baker_list_factory_bakers() {
         env_factory="$(printf '%s\n' "$eww" \
           | sed -n 's/.*DEVCAKE_FACTORY_DIR=\([^ ]*\).*/\1/p' | head -n 1)"
       fi
-      cwd=""
+      cwd="$(devcake_baker_process_cwd "$pid")"
       devcake_baker_targets_factory "$cmd" "$env_factory" "$cwd" \
         "$factory_abs" "$repo_abs" || continue
       age="$(printf '%s' "$age" | tr -d '[:space:]')"

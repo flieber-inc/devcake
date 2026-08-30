@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1079,6 +1080,182 @@ def test_up_sh_and_baker_host_wire_displace_orphans():
     ):
         assert name in helper
     assert helper.count("devcake_baker_displace_orphans") >= 4  # def + 3 installers
+
+
+def test_baker_targets_factory_env_is_decisive(tmp_path):
+    """When DEVCAKE_FACTORY_DIR is set, it alone decides the factory match.
+
+    env=other + cwd=this → not this factory (do not fall through to cwd).
+    env=this → match. env unset + cwd=this → match via cwd fallback.
+    Exercises targets_factory directly — not a stubbed enumerator.
+    """
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    (repo / ".factory").mkdir(parents=True)
+    (other / ".factory").mkdir(parents=True)
+    factory_abs = str((repo / ".factory").resolve())
+    other_abs = str((other / ".factory").resolve())
+    repo_abs = str(repo.resolve())
+    cmd = "python3 -m dev_factory"
+    result = _run_baker_host_driver(tmp_path, f"""
+main() {{
+  factory_abs="{factory_abs}"
+  other_abs="{other_abs}"
+  repo_abs="{repo_abs}"
+  cmd="{cmd}"
+  # env points elsewhere, cwd is this repo → must NOT match this factory.
+  if devcake_baker_targets_factory "$cmd" "$other_abs" "$repo_abs" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "FAIL env_other_cwd_this matched"
+  else
+    echo "OK env_other_cwd_this"
+  fi
+  # env names this factory → match regardless of cwd.
+  if devcake_baker_targets_factory "$cmd" "$factory_abs" "/tmp" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "OK env_this"
+  else
+    echo "FAIL env_this"
+  fi
+  # env unset: cwd = repo whose .factory is factory_abs → match.
+  if devcake_baker_targets_factory "$cmd" "" "$repo_abs" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "OK cwd_fallback"
+  else
+    echo "FAIL cwd_fallback"
+  fi
+  # env unset: cmdline carries absolute factory path → match.
+  if devcake_baker_targets_factory \\
+      "python3 -m dev_factory --factory $factory_abs" "" "/var/empty" \\
+      "$factory_abs" "$repo_abs"; then
+    echo "OK cmdline_fallback"
+  else
+    echo "FAIL cmdline_fallback"
+  fi
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    out = result.stdout
+    assert "OK env_other_cwd_this" in out
+    assert "FAIL env_other_cwd_this" not in out
+    assert "OK env_this" in out
+    assert "OK cwd_fallback" in out
+    assert "OK cmdline_fallback" in out
+
+
+def _pids_from_block(block: str) -> set[str]:
+    out: set[str] = set()
+    for line in block.splitlines():
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            out.add(parts[0])
+    return out
+
+
+def _stub_dev_factory_pkg(tmp_path: Path) -> Path:
+    """Long-lived `python -m dev_factory` stand-in (argv-shaped, sleeps)."""
+    stub_root = tmp_path / "stub_pkg"
+    (stub_root / "dev_factory").mkdir(parents=True)
+    (stub_root / "dev_factory" / "__init__.py").write_text("")
+    (stub_root / "dev_factory" / "__main__.py").write_text(
+        "import time\ntime.sleep(120)\n"
+    )
+    return stub_root
+
+
+def test_baker_list_factory_bakers_respects_decisive_env(tmp_path):
+    """Live process: env=other must not list under this factory (real enumerator)."""
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    factory = repo / ".factory"
+    other_factory = other / ".factory"
+    factory.mkdir(parents=True)
+    other_factory.mkdir(parents=True)
+    stub_root = _stub_dev_factory_pkg(tmp_path)
+    env = {**os.environ, "PYTHONPATH": str(stub_root)}
+    env["DEVCAKE_FACTORY_DIR"] = str(other_factory.resolve())
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "dev_factory"],
+        cwd=str(repo),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(0.15)
+        assert proc.poll() is None, "stub baker exited early"
+        result = _run_baker_host_driver(tmp_path, f"""
+main() {{
+  echo "LIST_BEGIN"
+  devcake_baker_list_factory_bakers "{factory.resolve()}"
+  echo "LIST_END"
+  echo "OTHER_BEGIN"
+  devcake_baker_list_factory_bakers "{other_factory.resolve()}"
+  echo "OTHER_END"
+}}
+""")
+        assert result.returncode == 0, result.stderr + result.stdout
+        text = result.stdout
+        this_block = text.split("LIST_BEGIN", 1)[1].split("LIST_END", 1)[0]
+        other_block = text.split("OTHER_BEGIN", 1)[1].split("OTHER_END", 1)[0]
+        child = str(proc.pid)
+        assert child not in _pids_from_block(this_block), (
+            f"env=other baker pid {child} listed under this factory:\n{text}"
+        )
+        assert child in _pids_from_block(other_block), (
+            f"env=other baker pid {child} missing from other factory list:\n{text}"
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_baker_list_factory_bakers_cwd_fallback_when_env_unset(tmp_path):
+    """Live process: env unset + cwd=repo → listed for that repo's factory."""
+    repo = tmp_path / "repo"
+    factory = repo / ".factory"
+    factory.mkdir(parents=True)
+    stub_root = _stub_dev_factory_pkg(tmp_path)
+    env = {**os.environ, "PYTHONPATH": str(stub_root)}
+    env.pop("DEVCAKE_FACTORY_DIR", None)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "dev_factory"],
+        cwd=str(repo),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(0.15)
+        assert proc.poll() is None, "stub baker exited early"
+        result = _run_baker_host_driver(tmp_path, f"""
+main() {{
+  echo "LIST_BEGIN"
+  devcake_baker_list_factory_bakers "{factory.resolve()}"
+  echo "LIST_END"
+}}
+""")
+        assert result.returncode == 0, result.stderr + result.stdout
+        text = result.stdout
+        this_block = text.split("LIST_BEGIN", 1)[1].split("LIST_END", 1)[0]
+        child = str(proc.pid)
+        assert child in _pids_from_block(this_block), (
+            f"cwd-only baker pid {child} missing from factory list:\n{text}"
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_baker_host_darwin_cwd_probe_is_wired():
+    """Darwin / no-/proc branch must best-effort resolve cwd (not hard-code empty)."""
+    helper = _baker_host_sh_text()
+    assert "devcake_baker_process_cwd()" in helper
+    # The non-/proc path must call the cwd probe (lsof or shared helper).
+    # Hard-coded cwd="" with no probe is the CAKE-169 REVIEW reject defect.
+    assert "lsof" in helper
+    # Comment / matching rule still documents cwd fallback when env unset.
+    assert "cwd" in helper.lower()
 
 
 def test_baker_host_wait_liveness_succeeds_when_log_grows(tmp_path):

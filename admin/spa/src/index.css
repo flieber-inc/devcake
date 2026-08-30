@@ -19,14 +19,16 @@
   --color-accent-950: #211744;
   --color-accent: #6042cc;
 
-  /* warm surfaces: stone-tinted light, warm near-black dark */
+  /* surfaces: stone-tinted light; dark grounds are cool violet-tinted
+     near-black (CAKE-158) — light warmth is sacred, dark is the exception */
   --color-surface: #faf9f7;
   --color-surface-raised: #ffffff;
-  --color-surface-dark: #141110;
-  --color-surface-raised-dark: #1d1917;
+  --color-surface-dark: #0f0e14;
+  --color-surface-raised-dark: #17161f;
 
-  /* warm greys: neutral-* retuned toward stone, ink lands on espresso —
-     every existing neutral-* class inherits the warmth token-side */
+  /* warm greys (light): neutral-* retuned toward stone, ink lands on espresso —
+     every existing neutral-* class inherits the warmth token-side.
+     html.dark remaps this ramp to a cool violet-tinted scale (below). */
   --color-neutral-50: #fafaf9;
   --color-neutral-100: #f5f4f2;
   --color-neutral-200: #e8e4e0;
@@ -61,4 +63,41 @@
 }
 
 html { color-scheme: light; }
-html.dark { color-scheme: dark; }
+
+/* CAKE-158 — dark temperature exception: cool the ground + neutrals to a
+   faintly violet near-black, lift accent luminance for text/chips, and
+   mute amber so warnings do not glow sickly. Light @theme warmth is untouched.
+   Brand accent 400/500/600 stay the mark gradient identity (not remapped). */
+html.dark {
+  color-scheme: dark;
+
+  --color-surface-dark: #0f0e14;
+  --color-surface-raised-dark: #17161f;
+
+  --color-neutral-50: #f7f6fb;
+  --color-neutral-100: #eeedf4;
+  --color-neutral-200: #d8d6e2;
+  --color-neutral-300: #b5b2c2;
+  --color-neutral-400: #8a8699;
+  --color-neutral-500: #6a6678;
+  --color-neutral-600: #524e5f;
+  --color-neutral-700: #3e3b4a;
+  --color-neutral-800: #2a2834;
+  --color-neutral-900: #1a1822;
+  --color-neutral-950: #12111a;
+
+  --color-accent-200: #e4dcfc;
+  --color-accent-300: #d2c4fa;
+  --color-accent-700: #7a63e0;
+  --color-accent-800: #6550c4;
+  --color-accent-900: #52409e;
+  --color-accent-950: #34265f;
+
+  --color-amber-200: #e8d9a0;
+  --color-amber-300: #dcc878;
+  --color-amber-800: #6a5420;
+  --color-amber-900: #55431c;
+  --color-amber-950: #2c2412;
+
+  --shadow-card: 0 1px 2px rgb(8 6 18 / 0.35), 0 1px 3px rgb(8 6 18 / 0.45);
+}

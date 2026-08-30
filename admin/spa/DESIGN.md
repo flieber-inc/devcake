@@ -19,20 +19,29 @@ The product is an oven that bakes software missions. The UI is warm (stone
 surfaces, espresso ink, frosting-violet accent) but operates with terminal
 precision (mono ids, tabular numerals, dense honest tables).
 
+**Dark is the temperature exception (CAKE-158):** light stays bakery-warm;
+dark re-grounds in a cool, faintly violet-tinted near-black so the cool
+violet brand reads electric instead of muddy. That cool ramp is remapped
+under `html.dark` in `src/index.css` — do **not** cool the shared `@theme`
+light neutrals/surfaces. Dark is not a second brand accent; it is the same
+violet on a cooler ground.
+
 ### Color — tokens only, never raw hex in components
 
-All palette decisions live in `src/index.css` `@theme`. Components use Tailwind
-classes that resolve to those tokens. **Never introduce a raw hex value or a new
-color family in a component.**
+All palette decisions live in `src/index.css` `@theme` (plus `html.dark`
+remaps for the cool-dark exception). Components use Tailwind classes that
+resolve to those tokens. **Never introduce a raw hex value or a new color
+family in a component.** Hex contracts are pinned by
+`tests/design_tokens.mjs` (off-palette class ban **and** light/dark hex pins).
 
 | Register | Classes | Meaning |
 |---|---|---|
-| **Accent** | `accent-*` (brand `#6042cc` at 600; 400/500/600 are the brand mark's frosting-gradient stops) | The ONLY brand accent. Primary buttons, active nav, links, the current StageGlyph layer, InstantZone tint. Don't dilute it with a second accent color. |
-| **Neutrals** | `neutral-*` (warm, stone-tinted; 900 = espresso `#2a2018`) | All text/borders/surfaces. The warmth is token-side — keep using `neutral-*` classes. |
-| **Surfaces** | `bg-surface` / `bg-surface-raised` (+ `-dark`) | Page ground / cards. Cards via the `Card` component, not hand-rolled divs. |
-| **Warning** | `amber-*` (true amber, 600 = `#a1720d`) | Warnings/partial states — a register of its own: never use `accent-*` for a warning or `amber-*` as decoration. |
+| **Accent** | `accent-*` (brand `#6042cc` at 600; 400/500/600 are the brand mark's frosting-gradient stops) | The ONLY brand accent. Primary buttons, active nav, links, the current StageGlyph layer, InstantZone tint. Don't dilute it with a second accent color. Dark lifts mid/deep stops under `html.dark` so chips/text stay electric; 400/500/600 stay identity. |
+| **Neutrals** | `neutral-*` (warm stone on light — 900 = espresso `#2a2018`; cool violet-grey under `html.dark`) | All text/borders/surfaces. Keep using `neutral-*` classes; temperature is token-side. |
+| **Surfaces** | `bg-surface` / `bg-surface-raised` (+ `-dark`) | Page ground / cards. Light = warm stone; dark = cool near-black `#0f0e14` / raised `#17161f`. Cards via the `Card` component, not hand-rolled divs. |
+| **Warning** | `amber-*` (true amber, 600 = `#a1720d`; dark-tuned under `html.dark`) | Warnings/partial states — a register of its own: never use `accent-*` for a warning or `amber-*` as decoration. |
 | **Danger** | `red-*` (stock) | Destructive actions and errors only. |
-| **Success** | `green-*` (stock) | Confirmations only. |
+| **Success** | `green-*` (stock) | Status dots and small success affordances only — not large chrome next to the brand mark. Confirmations/toasts elsewhere stay green. |
 
 ### Type
 
@@ -40,10 +49,10 @@ color family in a component.**
   titles, big numerals — **nowhere else**. Body/UI text stays on the system stack.
   (The wordmark is no longer set in type: the brand mark and wordmark are SVG
   artwork — canonical files in `docs/img/brand/`, bundled copies in
-  `src/assets/` — rendered per theme: black-violet on light, cream-violet on
-  dark. The UI's `accent-*` ramp is anchored on the artwork's violet gradient;
-  the artwork's cream cake layers remain artwork-only — don't promote them
-  into UI classes. UI accents stay `accent-*`.)
+  `src/assets/` — rendered per theme: black-violet on light, **white-violet on
+  dark** (no cream on dark ground). The UI's `accent-*` ramp is anchored on the
+  artwork's violet gradient; cream cake layers remain light/marketing
+  artwork-only — don't promote them into UI classes. UI accents stay `accent-*`.)
 - Mono (`font-mono`) for machine identifiers: run ids, mission keys, env var
   names, InstantZone eyebrow labels.
 - Numerals that line up in columns get `tabular-nums`.

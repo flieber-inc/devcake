@@ -40,6 +40,7 @@ const SUITES = [
   "profiles.mjs",
   "pmo_intake.mjs",
   "markdown.mjs",
+  "prompts_overrides.mjs",
   "repos.mjs",
   "costs.mjs",
   "error_surface.mjs",

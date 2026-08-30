@@ -47,6 +47,34 @@ def test_every_registry_template_is_pinnable_and_not_experimental():
         assert payload[name]["cli_pin_allowed"] is True
 
 
+def test_list_harnesses_projects_cli_arg_examples():
+    """CAKE-172: teaching examples live on the harness registry and project
+    via GET /harnesses — never applied into assignment seeds."""
+    from devcake.api.devtypes_service import list_harnesses
+
+    # Independent literals from docs/08 §1 / docs/15 §2a — not recomputed
+    # from production defaults.
+    expected = {
+        "claude-code": ["--max-turns 15"],
+        "grok-build": ["--max-turns 15"],
+        "qwen-code": ["--max-session-turns 15"],
+        "codex": ["-m <model>"],
+        "pi": ["--model <provider/model>"],
+        "opencode": [],
+    }
+    payload = run_coro(list_harnesses())
+    assert set(payload) == set(HARNESSES) == set(expected)
+    for name, examples in expected.items():
+        assert HARNESSES[name].cli_arg_examples == examples
+        assert payload[name]["cli_arg_examples"] == examples
+        assert all(isinstance(s, str) and s.strip() for s in examples)
+        st = dev_type_status(DevType(name="t", harness_template=name))
+        assert st["harness"]["cli_arg_examples"] == examples
+    # Teaching only — wizard seeds stay empty (no example leaks into staffing)
+    from devcake.config import WIZARD_ASSIGNMENTS
+    assert all(a.extra_cli_args == "" for a in WIZARD_ASSIGNMENTS.values())
+
+
 def test_harness_matrix_is_one_set_of_template_ids():
     """HARNESSES, HOUSE_PINS, LAUNCH_SUPPORTED, and pin maps share one key set.
 

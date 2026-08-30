@@ -48,7 +48,7 @@ await withPage(async (page) => {
       });
       check("an overridden row exposes its own CLI-args input",
         (await page.locator("#mission-types table").nth(1)
-          .locator('input[placeholder="e.g. --max-turns 15"]').count()) >= 1);
+          .locator('input[placeholder="optional"]').count()) >= 1);
 
       // the save review names the override row — then Cancel, never Save
       await page.click('button:has-text("Save changes…")');

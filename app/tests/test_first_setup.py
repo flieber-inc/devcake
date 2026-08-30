@@ -136,7 +136,8 @@ def test_first_setup_creates_three_types_pins_and_wires(
     assert cfg.assignments["ONBOARD"].dev_type == "judge"
     assert cfg.assignments["PLAN"].dev_type == "judge"
     assert cfg.assignments["REVIEW"].dev_type == "judge"
-    assert cfg.assignments["ONBOARD"].extra_cli_args == "--max-turns 15"
+    # CAKE-172: wizard staffs Dev Types only — no vendor-shaped CLI seed
+    assert all(a.extra_cli_args == "" for a in cfg.assignments.values())
     assert cfg.steward.dev_type == "steward"
 
     assert "Judge" in dts["judge"].identifying_prompt

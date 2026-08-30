@@ -744,6 +744,8 @@ def test_default_assignments_are_unstaffed_empty_map():
     wiz = {k: v.model_copy() for k, v in WIZARD_ASSIGNMENTS.items()}
     wiz["EXECUTE"].dev_type = "mutated"
     assert WIZARD_ASSIGNMENTS["EXECUTE"].dev_type == "executor"
+    # CAKE-172: every wizard seed row ships empty extra_cli_args (no vendor flag)
+    assert all(a.extra_cli_args == "" for a in WIZARD_ASSIGNMENTS.values())
 
 
 def test_assignment_for_resolves_override_wholesale_or_global():

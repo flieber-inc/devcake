@@ -26,6 +26,8 @@ devcake_baker_platform() {
 
 # Loud banner when falling back to the flock-guarded respawn loop.
 # Printed to stderr so operators cannot miss the degraded path.
+# When reason names enable-linger (no-user-session path), print the sharper
+# remedy by name so WSL-with-systemd operators are not left on the generic tip.
 devcake_baker_degraded_gap() {
   local reason="${1:-neither systemd nor launchd available}"
   echo "══════════════════════════════════════════════════════════════" >&2
@@ -36,6 +38,14 @@ devcake_baker_degraded_gap() {
   echo "     Linux:  systemd --user + loginctl enable-linger \"\$USER\"" >&2
   echo "     macOS:  launchd LaunchAgent (login session / Docker Desktop)" >&2
   echo "   Then re-run ./up.sh to install the native supervisor." >&2
+  case "$reason" in
+    *enable-linger*)
+      echo "   Sharper fix (systemd present, no user session manager):" >&2
+      echo "     loginctl enable-linger \"\$USER\"" >&2
+      echo "     then restart your session (or the host), then ./up.sh" >&2
+      echo "     — ./up.sh will install the native systemd user unit." >&2
+      ;;
+  esac
   echo "══════════════════════════════════════════════════════════════" >&2
 }
 
@@ -53,6 +63,28 @@ devcake_baker_systemd_available() {
   # show-environment talks to the user manager; fails without a user bus.
   systemctl --user show-environment >/dev/null 2>&1 || return 1
   return 0
+}
+
+# systemctl binary exists but the user session manager is unreachable
+# (typical: WSL systemd=true without linger / no user bus).
+# Usage: → 0 when that is the case, 1 otherwise (incl. no systemctl at all).
+devcake_baker_systemd_user_session_missing() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user show-environment >/dev/null 2>&1 && return 1
+  return 0
+}
+
+# Linux DEGRADED reason for up.sh fallthrough. Distinguishes:
+#   install/start failed | no user session (linger) | binary unavailable.
+# Echoes one reason line on stdout.
+devcake_baker_linux_degraded_reason() {
+  if devcake_baker_systemd_available; then
+    echo "systemd user unit install/start failed"
+  elif devcake_baker_systemd_user_session_missing; then
+    echo "systemd present but no user session — run: loginctl enable-linger \"\$USER\", restart session/host, then ./up.sh"
+  else
+    echo "user systemd unavailable"
+  fi
 }
 
 # macOS launchd is available when we are on Darwin and launchctl exists.
@@ -402,7 +434,7 @@ devcake_baker_wait_liveness() {
   local pid="$1" logfile="$2" pidfile="$3" launch_cmd="$4"
   local seconds="${5:-12}"
   local baseline="${6-}"
-  local size=0 elapsed=0 step=2
+  local size=0 elapsed=0 step=2 rotated=0
   [[ -f "$logfile" ]] || : >"$logfile"
   if [[ -z "$baseline" ]]; then
     baseline=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
@@ -414,6 +446,9 @@ devcake_baker_wait_liveness() {
       echo "── host baker died during launch confirmation (pid ${pid})" >&2
       echo "   launch: ${launch_cmd}" >&2
       echo "   pidfile: ${pidfile}" >&2
+      if [[ "$rotated" -eq 1 ]]; then
+        echo "   note: watch.log was rotated (shrunk) mid-launch — tail is of the current file" >&2
+      fi
       echo "   last log lines (${logfile}):" >&2
       tail -n 40 "$logfile" 2>/dev/null >&2 || true
       echo "   tip: retry with ./up.sh --foreground-baker when the parent reaps detached children" >&2
@@ -421,6 +456,13 @@ devcake_baker_wait_liveness() {
       return 1
     fi
     size=$(wc -c <"$logfile" 2>/dev/null | tr -d ' ' || echo 0)
+    # Copytruncate (rotate_watch_log) shrinks the live inode below the
+    # pre-launch baseline — reset and keep waiting for post-rotate growth.
+    if [[ "$size" -lt "$baseline" ]]; then
+      rotated=1
+      baseline=$size
+      continue
+    fi
     if [[ "$size" -gt "$baseline" ]]; then
       echo "── host baker watching keep-set (pid ${pid} → ${logfile}; liveness confirmed)"
       return 0
@@ -429,6 +471,9 @@ devcake_baker_wait_liveness() {
   echo "── host baker did not progress its log within ~${seconds}s (pid ${pid})" >&2
   echo "   launch: ${launch_cmd}" >&2
   echo "   pidfile: ${pidfile}" >&2
+  if [[ "$rotated" -eq 1 ]]; then
+    echo "   note: watch.log was rotated (shrunk) mid-launch — tail is of the current file" >&2
+  fi
   echo "   last log lines (${logfile}):" >&2
   tail -n 40 "$logfile" 2>/dev/null >&2 || true
   echo "   tip: retry with ./up.sh --foreground-baker when the parent reaps detached children" >&2

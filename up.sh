@@ -491,14 +491,8 @@ if [[ "$_BAKER_SUPERVISED" -eq 0 ]]; then
   # DEGRADED: flock-guarded respawn loop (never bare nohup of the baker).
   case "$_BAKER_PLAT" in
     darwin) devcake_baker_degraded_gap "launchd install/start failed" ;;
-    linux)
-      if devcake_baker_systemd_available; then
-        devcake_baker_degraded_gap "systemd user unit install/start failed"
-      else
-        devcake_baker_degraded_gap "user systemd unavailable"
-      fi
-      ;;
-    *) devcake_baker_degraded_gap "platform ${_BAKER_PLAT} has no native supervisor" ;;
+    linux)  devcake_baker_degraded_gap "$(devcake_baker_linux_degraded_reason)" ;;
+    *)      devcake_baker_degraded_gap "platform ${_BAKER_PLAT} has no native supervisor" ;;
   esac
   if ! devcake_baker_respawn_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
     echo "── failed to install flock-guarded baker respawn supervisor" >&2

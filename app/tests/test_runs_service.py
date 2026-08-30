@@ -455,6 +455,26 @@ def test_csv_empty_store_is_header_only(tmp_path):
     assert len(rows) == 1
 
 
+def test_list_and_detail_expose_team_steward_hover_fields(tmp_path):
+    """CAKE-167: TEAM hover needs pmo_ref + steward_duty + outcome_summary
+    on flat list rows (not just detail/CSV)."""
+    r = Run(run_id="L-TEAM-1-STEWARD-AAAAAA", mission_key="TEAM",
+            mission_type="STEWARD", dev_type="steward", seq=1,
+            pmo_ref="linear", steward_duty="discovery",
+            outcome_summary="5 discoveries shared (0 rejected)",
+            state="finished", created_at=T0, started_at=T0,
+            ended_at=T0 + timedelta(minutes=3))
+    store = _store(tmp_path, [r])
+    row = list_runs_response(store, CostInputs(), limit=25, offset=0)["runs"][0]
+    assert row["pmo_ref"] == "linear"
+    assert row["steward_duty"] == "discovery"
+    assert row["outcome_summary"] == "5 discoveries shared (0 rejected)"
+    detail = run_detail(store.get(r.run_id), CostInputs())
+    assert detail["pmo_ref"] == "linear"
+    assert detail["steward_duty"] == "discovery"
+    assert detail["outcome_summary"] == "5 discoveries shared (0 rejected)"
+
+
 def test_active_only_returns_non_terminal_runs(tmp_path):
     """CAKE-125: Overview Devs card needs a list that cannot omit actives."""
     terminal = _run(1, state="finished")

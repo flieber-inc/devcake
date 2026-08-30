@@ -348,12 +348,6 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ## 8. Runbook
 
-> **Host CLI (forward pointer):** the successor to `./up.sh` is sealed in
-> [ADR-0038](adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md)
-> (`devcake up` / `down` / `status` / `doctor` / `bake` / `baker run` /
-> `setup`). Until that package ships, `./up.sh` remains the live bring-up
-> path documented below.
-
 - **First run (virgin host):** `cp .env.example .env` → strong bootstrap passwords → `./up.sh --bake` (discovers `DOCKER_GID`, computes `DEVCAKE_APP_DIGEST`, bakes **control plane + hello**, `compose up -d`, starts the **host baker**). Open `http://localhost:8080` → **PMO** (`#/pmo`, Connections) + **Repositories** (`#/repos`) for connections and forge tokens, and **Fleet → Dev Types** (`#/fleet/dev-types`) for harness/model credentials → connection tests. Saving Dev Types publishes `/data/harness_keep_set.json`; the host baker compiles those pins, probes them, and writes receipts. **The first mission refuses until that second bake finishes** — the editor says “baking” / “waiting,” not a host command to run. Day-to-day restarts: `./up.sh` (refreshes launchd / systemd `--user` / flock respawn; `./up.sh --foreground-baker` when automation reaps detached children). Absent keep-set = control plane + hello only; the baker never parses Dev Type YAML. `./up.sh --bake all` still compiles the full harness matrix when you ask for it. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`

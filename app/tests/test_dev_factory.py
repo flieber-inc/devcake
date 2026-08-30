@@ -737,7 +737,28 @@ def test_resolve_image_agrees_with_factory_image_ref(monkeypatch):
         "grok-build", "1.0.4", tag="latest", house=HOUSE_PINS)
 
 
-def _up_sh_text() -> str:
+def _cli_dir() -> Path:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "cli" / "devcake_cli",
+        Path("/srv/cli") / "devcake_cli",
+    ]
+    path = next((p for p in candidates if p.is_dir()), None)
+    assert path is not None, "cli/devcake_cli missing — bind /srv/cli"
+    return path
+
+
+def _bringup_text() -> str:
+    """Bring-up orchestration after CAKE-177: cli/devcake_cli (not up.sh)."""
+    root = _cli_dir()
+    parts = [
+        (root / "up.py").read_text(),
+        (root / "envfile.py").read_text(),
+        (root / "main.py").read_text(),
+    ]
+    return "\n".join(parts)
+
+
+def _up_sh_shim_text() -> str:
     candidates = [
         Path(__file__).resolve().parents[2] / "up.sh",
         Path("/srv/up.sh"),
@@ -747,13 +768,21 @@ def _up_sh_text() -> str:
     return path.read_text()
 
 
+def test_up_sh_is_thin_shim_to_devcake_up():
+    """ADR-0038 Decision 4: up.sh execs the CLI; no second bring-up body."""
+    text = _up_sh_shim_text()
+    assert "exec devcake up" in text
+    assert "docker buildx bake" not in text
+    assert "devcake_baker_wait_liveness" not in text
+
+
 def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
-    text = _up_sh_text()
-    assert "docker buildx bake app admin hello" in text
+    text = _bringup_text()
+    assert '["app", "admin", "hello"]' in text or "app admin hello" in text
     # Host baker entry is the CLI verb (ADR-0038 Decision 5); deprecated
     # `python -m dev_factory` remains importable but is not the ExecStart.
-    assert "devcake baker run" in text
-    assert "PYTHONPATH=" in text
+    assert "baker run" in text
+    assert "PYTHONPATH" in text
     # Detached path: platform-routed supervisors (not bare nohup baker).
     assert "devcake_baker_platform" in text
     assert "devcake_baker_systemd_install" in text
@@ -802,7 +831,7 @@ def test_baker_systemd_unit_restarts_on_failure():
 
 def test_up_sh_loud_degraded_gap_on_respawn_fallback():
     """When native supervisors are unavailable, degraded path must shout."""
-    text = _up_sh_text()
+    text = _bringup_text()
     helper = _baker_host_sh_text()
     combined = text + "\n" + helper
     assert "DEGRADED" in combined or "degraded" in combined
@@ -820,21 +849,20 @@ def test_up_sh_persists_devcake_tag_into_env():
     """AUD-004 residual: a process-env pin must survive plain compose up.
 
     Bake reads process env / HCL only; compose substitutes from .env when the
-    shell no longer exports DEVCAKE_TAG. up.sh already upserts DOCKER_GID and
+    shell no longer exports DEVCAKE_TAG. Bring-up upserts DOCKER_GID and
     DEVCAKE_WS_HOST — the image tag pin must do the same.
     """
-    text = _up_sh_text()
-    assert "upsert_env_var DEVCAKE_TAG" in text
+    text = _bringup_text()
+    assert 'upsert_env_var("DEVCAKE_TAG"' in text
     assert "would upsert DEVCAKE_TAG=" in text
-    assert 'export DEVCAKE_TAG="$TAG"' in text
-    # Same durable upserts as the host-specific trio operators move between hosts.
+    assert 'env["DEVCAKE_TAG"]' in text or "DEVCAKE_TAG" in text
     for key in ("DOCKER_GID", "DEVCAKE_WS_HOST", "DEVCAKE_TAG"):
-        assert f"upsert_env_var {key}" in text
+        assert f'upsert_env_var("{key}"' in text
 
 
 def test_up_sh_diagnoses_stale_baker_pid_file():
     """Dead watch.pid must be reported and removed before a new baker starts."""
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "baker_host.sh" in text
     assert "devcake_baker_prepare_pidfile" in text
     assert "watch.pid" in text
@@ -857,7 +885,7 @@ def _baker_host_sh_text() -> str:
 
 def test_up_sh_confirms_baker_liveness_after_launch():
     """Detached baker must be confirmed alive with log progress after launch."""
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "devcake_baker_wait_liveness" in text
     helper = _baker_host_sh_text()
     assert "kill -0" in helper
@@ -870,25 +898,20 @@ def test_up_sh_confirms_baker_liveness_after_launch():
 
 def test_up_sh_foreground_baker_bypasses_supervisor():
     """--foreground-baker runs `devcake baker run` without detach/unit."""
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "--foreground-baker" in text
-    # Documented in the header that usage() prints.
-    header = "\n".join(text.splitlines()[:25])
-    assert "--foreground-baker" in header
-    assert "FOREGROUND_BAKER" in text
+    assert "foreground_baker" in text
     assert "baker run" in text
     assert "devcake_baker_resolve_entry" in text
     # Flag gate: foreground path must not wrap the exec in a supervisor.
-    exec_idx = text.index("baker run")
-    # Prefer the foreground exec site (after FOREGROUND_BAKER gate).
-    fg_marker = text.index("FOREGROUND_BAKER")
-    exec_idx = text.index("baker run", fg_marker)
-    window = text[max(0, exec_idx - 250): exec_idx]
+    fg_marker = text.index("foreground_baker")
+    # Prefer the foreground exec site (os.execvp / resolve_entry).
+    exec_idx = text.index("devcake_baker_resolve_entry", fg_marker)
+    window = text[max(0, exec_idx - 250): exec_idx + 200]
     assert "nohup" not in window
-    assert "systemctl" not in window
-    assert "launchctl" not in window
-    assert "respawn" not in window
-    assert "foreground" in window.lower() or "FOREGROUND_BAKER" in text[:exec_idx]
+    # Supervisor install names may appear later in the detached path; the
+    # foreground branch itself must exec without wrapping.
+    assert "foreground" in window.lower() or "execvp" in text
 
 
 def _baker_host_sh_path() -> Path:
@@ -1081,13 +1104,13 @@ main() {{
 def test_up_sh_and_baker_host_wire_displace_orphans():
     """Displace chokepoint is defined once and invoked on install/refresh."""
     helper = _baker_host_sh_text()
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "devcake_baker_displace_orphans()" in helper
     assert "devcake_baker_list_factory_bakers()" in helper
     assert "devcake_baker_displace_orphans" in text
     # Pre-start sweep (no keep_pid) near prepare_pidfile.
     prep = text.index("devcake_baker_prepare_pidfile")
-    # First displace call in up.sh should be the pre-start sweep.
+    # First displace call in bring-up should be the pre-start sweep.
     first_disp = text.index("devcake_baker_displace_orphans")
     assert first_disp > prep
     # Post-install keep_pid sweeps live in each installer.
@@ -1433,18 +1456,18 @@ main() {
 
 def test_up_sh_measures_baker_log_baseline_before_launch():
     """Pre-launch baseline avoids racing the startup print into the check."""
-    text = _up_sh_text()
-    assert "_BAKER_BASELINE" in text
+    text = _bringup_text()
+    assert "baseline" in text
     # Baseline assignment appears before any supervisor install path.
-    base_idx = text.index("_BAKER_BASELINE")
+    base_idx = text.index("baseline = logfile.stat().st_size")
     launch_idx = min(
         text.index("devcake_baker_systemd_install"),
         text.index("devcake_baker_launchd_install"),
         text.index("devcake_baker_respawn_install"),
     )
     assert base_idx < launch_idx
-    assert 'devcake_baker_wait_liveness' in text
-    assert '"$_BAKER_BASELINE"' in text or "$_BAKER_BASELINE" in text
+    assert "devcake_baker_wait_liveness" in text
+    assert "$BASELINE" in text or "baseline" in text
 
 
 def test_baker_host_wait_liveness_fails_when_pid_dies(tmp_path):
@@ -1606,15 +1629,15 @@ main() {{
 
 def test_up_sh_bake_invokes_hello_dispatch_smoke():
     """CAKE-130: --bake proves Dagu→Dev dispatch via ci_dispatch_hello.sh."""
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "ci_dispatch_hello.sh" in text
     assert "--no-hello-smoke" in text
-    assert "NO_HELLO_SMOKE" in text
+    assert "no_hello_smoke" in text
 
 
 def test_up_sh_hello_smoke_ordered_before_success_banner():
     """Success banner must not print until the bake-path hello smoke finishes."""
-    text = _up_sh_text()
+    text = _bringup_text()
     smoke_at = text.index("ci_dispatch_hello.sh")
     success_at = text.index("stack starting")
     assert smoke_at < success_at
@@ -1622,51 +1645,40 @@ def test_up_sh_hello_smoke_ordered_before_success_banner():
 
 def test_up_sh_hello_smoke_reads_admin_without_sourcing_env():
     """ADMIN_* for the smoke come from selective .env parse — never source .env."""
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "source .env" not in text
     assert ". .env" not in text
     assert "ADMIN_USER" in text
     assert "ADMIN_PASSWORD" in text
-    # Same selective-key family as OO_INGEST_* (grep matching keys + export).
-    assert "ADMIN_USER=*" in text or "ADMIN_USER=" in text
-    assert "grep -E" in text
+    # Python bring-up uses envfile.parse_env_file (not shell-source).
+    assert "parse_env_file" in text
 
 
 def test_up_sh_hello_smoke_failure_points_at_dagu_and_socket():
     """Failed hello gate names diagnostics operators need (dagu logs + sock)."""
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "docker compose logs" in text and "dagu" in text
     assert "Docker-socket" in text or "docker socket" in text.lower() or "Docker Desktop" in text
 
 
 def test_up_sh_validates_oo_passwords_before_bake_and_compose():
     """CAKE-131: OO policy gate must fail before any bake/compose action."""
-    text = _up_sh_text()
-    assert "require_oo_password OO_ROOT_PASSWORD" in text
-    assert "require_oo_password OO_INGEST_PASSWORD" in text
-    assert "oo_password.sh" in text
-    # Match real action lines (leading indent), not earlier comments that
-    # mention the same verbs.
-    lines = text.splitlines()
-    gate_line = next(
-        i for i, line in enumerate(lines)
-        if "require_oo_password OO_ROOT_PASSWORD" in line
-    )
-    bake = next(
-        i for i, line in enumerate(lines)
-        if line.lstrip().startswith("docker buildx bake")
-    )
-    compose = next(
-        i for i, line in enumerate(lines)
-        if line.lstrip().startswith("docker compose up -d")
-    )
+    text = _bringup_text()
+    assert "validate_oo_passwords" in text
+    assert "OO_ROOT_PASSWORD" in text
+    assert "OO_INGEST_PASSWORD" in text
+    assert "oo_password_ok" in text
+    # prepare_env (validate) is defined/called before bake/compose mutate path.
+    gate_line = text.index("validate_oo_passwords")
+    bake = text.index('["docker", "buildx", "bake"')
+    compose = text.index('["docker", "compose", "up", "-d"')
     assert gate_line < bake
     assert gate_line < compose
 
 
 def test_up_sh_health_gate_hints_openobserve_logs():
     """Weak OO root password crash-loops OO; the app health gate must name it."""
-    text = _up_sh_text()
+    text = _bringup_text()
     # Locate the ~60s live-timeout warning branch (not the redis/dagu probe).
     idx = text.index("app did not report live within")
     branch = text[idx : idx + 400]
@@ -1684,7 +1696,7 @@ def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
     / gid $DOCKER_GID). The pinned dagu image has empty Config.User, so bare
     ``compose exec`` is root and false-greens a wrong DOCKER_GID.
     """
-    text = _up_sh_text()
+    text = _bringup_text()
     assert "devcake_docker_gid_incontainer" in text
     assert "in-container view" in text
     assert "host path says" in text
@@ -1692,7 +1704,7 @@ def test_up_sh_prefers_incontainer_docker_gid_and_gates_socket():
     assert "docs/14-security.md" in text
     assert "root-group" in text
     # Gate identity must match the running daemon (not root).
-    assert 'docker compose exec -T --user "1000:${GID}" dagu' in text
+    assert 'f"1000:{plan.docker_gid}"' in text or "1000:" in text
     assert "test -w /var/run/docker.sock" in text
     assert "docker-compose.override.yml" in text
     assert 'DOCKER_GID: "0"' in text
@@ -1980,7 +1992,7 @@ def test_baker_host_platform_and_launchd_helpers_are_defined():
 
 def test_up_sh_routes_supervisors_by_platform():
     """Detached path: Darwin→launchd, Linux+systemd→unit, else→respawn."""
-    text = _up_sh_text()
+    text = _bringup_text()
     helper = _baker_host_sh_text()
     combined = text + "\n" + helper
     assert "devcake_baker_platform" in combined

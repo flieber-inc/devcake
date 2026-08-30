@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
-import AdapterTabs from "../components/AdapterTabs.jsx";
+import ConnectionTabs from "../components/ConnectionTabs.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, SecretField, Input, Select } from "../components/Field.jsx";
 import SettingRow from "../components/SettingRow.jsx";
@@ -393,7 +393,7 @@ export default function ReposPage({ onHealthChange }) {
     if (names.length === 0) {
       setConfirm({
         title: "No unused repositories",
-        body: "Every configured repository is selected as a work, reference, or memory repo on a board or Dev Type. Skill sources are managed separately under Configuration → Skills.",
+        body: "Every configured repository is selected as a work, reference, or memory repo on a board or Dev Type. Skill sources are managed separately under Connections → Skill sources.",
         confirmLabel: "OK",
         action: () => setConfirm(null),
       });
@@ -435,11 +435,11 @@ export default function ReposPage({ onHealthChange }) {
     <div className="space-y-5">
       <PageHeader title="Repositories"
         subtitle="Forge connections, tokens, merge policy, and the internal forge — edits apply on Save" />
-      <AdapterTabs page="repos" />
+      <ConnectionTabs page="repos" />
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
         Sync age &amp; LFS:{" "}
         <a className="font-medium text-accent-700 underline-offset-2 hover:underline dark:text-accent-300"
-          href="#/config/policies">Configuration → Policies → Repository mirrors</a>.
+          href="#/settings/policies">Settings → Policies → Repository mirrors</a>.
         Mirror sync/volume failures also surface as Overview alerts.
       </p>
 
@@ -707,23 +707,6 @@ export default function ReposPage({ onHealthChange }) {
         }}>
           + Add repository
         </Button>
-        <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
-          <SettingRow label="Also attach merged change set to PMO"
-            desc={cfg.attach_merged_changeset_to_pmo
-              ? "ON — after merge, zip PR files onto the PMO feed (configured repos too)."
-              : "OFF (recommended for eng repos) — only zero-repo / internal missions attach a zip."}
-            help={"Zero-repo missions always attach a deliverable zip; this toggle only affects "
-              + "configured work repos. Leave OFF for normal software work: the forge PR is "
-              + "the canonical artifact. When ON, DevCake posts a merge-time file snapshot to "
-              + "the PMO (can omit large files under the attachment size cap; may go stale vs "
-              + "main; repo file bytes become visible to the PMO team). This does not pass work "
-              + "into other missions' workspaces — dependency edges and blocker clones do that."}>
-            <Toggle on={!!cfg.attach_merged_changeset_to_pmo}
-              label="Also attach merged change set to PMO"
-              onClick={() => setField("cfg.attach_merged_changeset_to_pmo",
-                !cfg.attach_merged_changeset_to_pmo)} />
-          </SettingRow>
-        </div>
       </Section>
 
       {clearErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {clearErr}</p>}

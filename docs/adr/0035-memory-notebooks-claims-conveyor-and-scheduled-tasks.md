@@ -102,7 +102,7 @@ seeded by the app.
    is a standing health warning, never a silent skip. Curator runs
    inherit their consumers' `repos ∪ reference_repos` as ordinary
    non-fatal read-only extras. No shipped Curator Dev Type, playbook, or
-   layout. In the UI this is **Configuration → Scheduled Tasks**: the
+   layout. In the UI this is **Settings → Scheduled Tasks**: the
    built-in DevCake tasks (Relations Steward — moved from Traffic
    control — and Memory Curator) over the operator's Custom tasks; the
    word "Cron" never reaches the operator.

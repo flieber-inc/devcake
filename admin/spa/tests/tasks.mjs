@@ -1,11 +1,11 @@
-// Scheduled Tasks (#/config/scheduled-tasks): DevCake tasks (built-in
+// Scheduled Tasks (#/settings/scheduled-tasks): DevCake tasks (built-in
 // Steward + Memory Curator) over Custom tasks (operator cron rows).
 // Iron rules: never confirms a Save, cancels every destructive dialog,
 // and NEVER clicks Run now (it creates real tickets on a live stack).
 import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/scheduled-tasks");
+  await gotoFresh(page, "#/settings/scheduled-tasks");
   await page.waitForSelector("#scheduled-tasks");
   // a backend that predates PLAN_MEMORY serves a config without `crons` —
   // the Curator panel and custom-task flows then have nothing to bind to
@@ -127,9 +127,9 @@ await withPage(async (page) => {
 
 // 7: mobile 390px — chip navigates; wide content scrolls in its own box
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/policies");
+  await gotoFresh(page, "#/settings/policies");
   await page.waitForSelector("#policies");
-  await page.locator('a[href="#/config/scheduled-tasks"]:visible').first().click();
+  await page.locator('a[href="#/settings/scheduled-tasks"]:visible').first().click();
   await page.waitForSelector("#scheduled-tasks");
   check("mobile chip navigates to Scheduled Tasks",
     (await page.locator("#scheduled-tasks-custom").count()) === 1);

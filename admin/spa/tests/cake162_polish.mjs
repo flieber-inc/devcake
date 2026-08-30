@@ -11,8 +11,9 @@ const read = (rel) => readFileSync(join(root, rel), "utf8");
 const reposSrc = read("src/pages/ReposPage.jsx");
 const pmoSrc = read("src/components/PmoSection.jsx");
 const settingRowSrc = read("src/components/SettingRow.jsx");
-const configSrc = read("src/pages/ConfigPage.jsx");
-const tabsSrc = read("src/components/AdapterTabs.jsx");
+const fleetSrc = read("src/pages/FleetPage.jsx");
+const settingsSrc = read("src/pages/SettingsPage.jsx");
+const tabsSrc = read("src/components/ConnectionTabs.jsx");
 const chipsSrc = read("src/components/SelectionChips.jsx");
 const docs11 = readFileSync(
   join(root, "../../docs/11-admin-panel.md"),
@@ -70,14 +71,19 @@ check("SettingRow keeps the control adjacent to the label (no full-row justify-b
   );
 });
 
-check("Config mobile section chips wrap instead of horizontal scroll", () => {
-  const chipRow = configSrc.match(
-    /sticky top-0[\s\S]*?CONFIG_SECTIONS\.map/,
-  );
-  assert.ok(chipRow, "ConfigPage must still render the mobile chip row");
-  assert.match(chipRow[0], /flex-wrap/);
-  assert.doesNotMatch(chipRow[0], /overflow-x-auto/);
-  assert.doesNotMatch(chipRow[0], /shrink-0/);
+check("Fleet/Settings mobile section chips wrap instead of horizontal scroll", () => {
+  for (const [src, sections, who] of [
+    [fleetSrc, "FLEET_SECTIONS", "FleetPage"],
+    [settingsSrc, "SETTINGS_SECTIONS", "SettingsPage"],
+  ]) {
+    const chipRow = src.match(
+      new RegExp(String.raw`sticky top-0[\s\S]*?` + sections + String.raw`\.map`),
+    );
+    assert.ok(chipRow, who + " must still render the mobile chip row");
+    assert.match(chipRow[0], /flex-wrap/);
+    assert.doesNotMatch(chipRow[0], /overflow-x-auto/);
+    assert.doesNotMatch(chipRow[0], /shrink-0/);
+  }
 });
 
 check("AdapterTabs wrap instead of horizontal scroll", () => {

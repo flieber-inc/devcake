@@ -3,11 +3,11 @@ import { get } from "../api.js";
 import useConfigDraft from "./useConfigDraft.js";
 import { makeReqSeq } from "./reqSeq.js";
 
-// ONE unified draft over {cfg, devTypes, assignments}, shared by the
-// Configuration, Repositories and PMO pages (v0.1.1 B4 + 2026-08-02 nav
-// reorg): switching between them keeps the draft; the DirtyBar /
-// SaveReviewDialog / NavGuard live once, in DraftChrome. Mounted at App
-// level so the provider outlives page switches.
+// ONE unified draft over {cfg, devTypes, assignments}, shared by
+// Connections (Repos / PMO / Skill sources), Fleet, and Settings
+// (v0.1.1 B4 + 2026-08-02 + CAKE-159): switching between them keeps the
+// draft; the DirtyBar / SaveReviewDialog / NavGuard live once, in
+// DraftChrome. Mounted at App level so the provider outlives page switches.
 const Ctx = createContext(null);
 
 export function ConfigDraftProvider({ children, health }) {
@@ -23,8 +23,8 @@ export function ConfigDraftProvider({ children, health }) {
   // an internal Set would be lost and the card born name-locked.
   const pmoNewNamesState = useState(() => new Set());
   const repoNewNamesState = useState(() => new Set());
-  // skill sources live under Config → Skills (section unmounts on switch);
-  // same D5 #12 survival rule as PMO/repo name tracking
+  // skill sources live under Connections → Skill sources (page unmounts on
+  // switch); same D5 #12 survival rule as PMO/repo name tracking
   const skillSourceNewNamesState = useState(() => new Set());
 
   const reload = async () => {

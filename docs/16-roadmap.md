@@ -45,7 +45,7 @@
 Exit criteria — **all verified 2026-07-11 (M0 complete)**:
 - [x] `docker compose up -d` from a fresh clone + `.env` → all services healthy.
 - [x] `app` emits a stub `poll.cycle` trace visible in OpenObserve (verified via `_search?type=traces`).
-- [x] Admin panel serves the three tabs *(M0-era layout; current SPA is seven pages — Overview, Missions, Runs, Repositories + PMO (under Adapters), Config, Consoles — `11-admin-panel.md`)*; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
+- [x] Admin panel serves the three tabs *(M0-era layout; current SPA is Overview, Missions, Runs, Connections (Repositories + PMO + Skill sources), Fleet, Settings, Consoles — `11-admin-panel.md`)*; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
 - [x] Container stdout of `dagu`/`redis` searchable in OpenObserve (`container_logs` stream, via fluent-bit + fluentd logging driver).
 
 **Demo:** open the admin panel, click through the three tabs, show the trace.

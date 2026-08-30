@@ -300,7 +300,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             </div>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Identifying prompt is managed in the{" "}
-              <a className="underline" href="#/config/prompts">Prompts section</a>.
+              <a className="underline" href="#/fleet/prompts">Prompts section</a>.
             </p>
             <Field
               label="Entrypoint script"

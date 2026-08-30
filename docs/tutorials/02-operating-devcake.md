@@ -63,11 +63,11 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
 
 ## The three big switches
 
-- **`adoption_mode`** (the PMO page, under Adapters) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
+- **`adoption_mode`** (the PMO page, under Connections) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** (per repo card on the Repositories page, under Adapters) — off (default): the
+- **`auto_merge`** (per repo card on the Repositories page, under Connections) — off (default): the
   **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
   On: after REVIEW approves, the **app** merges and missions go straight to
   Done. Off does **not** strip merge rights from Dev tokens — **branch
@@ -75,7 +75,7 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   **reviewer token** (app-only formal approval), and eyes open. REVIEW always
   runs as a pipeline stage; which Dev Type staffs it is a performance choice
   (skills / identifying prompt), not a security control.
-- **`memory_auto_merge`** (Configuration → Policies, Memory card) — off
+- **`memory_auto_merge`** (Settings → Policies, Memory card) — off
   (default): every note a Memory Curator proposes for a team-memory
   notebook becomes official only through **your** merge. On means two
   models in a row — a Curator wrote it and a Reviewer approved it; not a
@@ -85,7 +85,7 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
 
 ## Config profiles — save and switch whole setups
 
-Configuration → **Profiles & Export** snapshots your entire saved setup — connections, repos,
+Settings → **Profiles & Export** snapshots your entire saved setup — connections, repos,
 Dev Types, prompt templates, limits, **and every stored secret value** — under
 a name, and applies one back in a single click (ADR-0013):
 

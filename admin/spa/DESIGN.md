@@ -75,20 +75,26 @@ Nothing else.
 
 ### Settings model (Cursor/Codex style)
 
-Configuration renders **one section per view**, routed as `#/config/<section>`
-(bare `#/config` redirects to the first section). `ConfigPage.jsx` is a thin
-dispatcher: it owns the page header, the page-level error line (`pageErr`,
-passed as `setPageErr` to sections that report async failures), the mobile
-section chip row, and the scroll-to-top on section change — then switches on
-the route to exactly ONE section view (sections, in order: `dev-types`,
-`mission-types`, `skills`, `prompts`, `policies`, `scheduled-tasks`,
-`profiles`). Every section is a component in `src/components/`:
-`DevTypesSection`, `SkillsSection`, `AssignmentsSection`, `PromptsSection`,
-`ProfilesSection`, `PoliciesSection`, `ScheduledTasksSection` (DevCake tasks —
-Relations Steward + Memory Curator — over Custom tasks; the card split is
-the built-in-vs-operator segregation). `PmoSection` renders on its own page
-(`#/pmo`, Adapters item) — same shared draft, not a Config section. Most
-sections pull the shared draft themselves via
+Nav regroup (CAKE-159): **Connections** (credentials + Test connection),
+**Fleet** (who does the work), **Settings** (how the system behaves). Fleet
+and Settings each render **one section per view**, routed as
+`#/fleet/<section>` and `#/settings/<section>` (bare `#/fleet` /
+`#/settings` land on the first section; legacy `#/config/*` redirects).
+`FleetPage.jsx` / `SettingsPage.jsx` are thin dispatchers: each owns the
+page header (with a **per-section save-regime subtitle** — Profiles is
+immediate; Limits/Scheduled Tasks are draft; Dev Types/Prompts state their
+mixed regimes honestly), the page-level error line where needed, the mobile
+section chip row, and scroll-to-top on section change — then switches on the
+route to exactly ONE section view.
+
+Fleet sections (from `nav.js`): `dev-types`, `mission-types`, `prompts`,
+`skills` (catalog only). Settings sections: `limits`, `scheduled-tasks`,
+`profiles`. Connections pages: `#/repos`, `#/pmo`, `#/skill-sources`
+(mobile chips via `ConnectionTabs`). Every section is a component in
+`src/components/`: `DevTypesSection`, `SkillsSection`, `SkillSourcesSection`,
+`AssignmentsSection`, `PromptsSection`, `ProfilesSection`, `LimitsSection`,
+`ScheduledTasksSection` (DevCake tasks — Relations Steward + Memory Curator —
+over Custom tasks). Most sections pull the shared draft via
 `useSharedDraft()` (ConfigDraftContext); `PromptsSection` is the exception —
 it takes `cfg`/`setField`/`devTypeNames` as props from the dispatcher. Either
 wiring is acceptable, but new sections use `useSharedDraft()`. A section
@@ -97,13 +103,13 @@ etc. — closed dialogs render null, so this stays invisible in the DOM);
 anything cross-page (the draft itself, Save/DirtyBar/NavGuard in `DraftChrome`)
 stays at App/context level. **Caveat (audit D5 #12):** section-local state
 resets on a section *switch* (the section component unmounts) — state that must
-survive switching within Config (e.g. session name-tracking spanning cards)
-belongs at the dispatcher or context level, not inside a section. Shared
-sub-components used by more than one section get their own file (e.g.
-`RepoChips.jsx`); a new config section means a new `<Name>Section.jsx`, not
-inline JSX in ConfigPage. Sidebar sub-nav active state is route-driven —
-there is no scrollspy; don't reintroduce one. On section change, `<main>`
-scrolls to top.
+survive switching within Fleet/Settings (e.g. session name-tracking spanning
+cards) belongs at the dispatcher or context level, not inside a section.
+Shared sub-components used by more than one section get their own file (e.g.
+`RepoChips.jsx`); a new section means a new `<Name>Section.jsx`, not inline
+JSX in the dispatcher. Sidebar sub-nav active state is route-driven — there
+is no scrollspy; don't reintroduce one. On section change, `<main>` scrolls
+to top.
 
 ### SettingRow — the default for scalar settings
 

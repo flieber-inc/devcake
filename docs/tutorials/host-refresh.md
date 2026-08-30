@@ -27,7 +27,7 @@ if you want them. Repeat per host.
 
 ## Phase 1 — full backups (password-export tier)
 
-1. **Settings bundle** — admin UI → Configuration → export the encrypted
+1. **Settings bundle** — admin UI → Settings → Profiles & Export → export the encrypted
    settings bundle (ADR-0013). This is the re-onboard accelerator: config,
    profiles, and secrets in one file.
 2. `scripts/backup_data.sh` — the `/data` volume, secrets included.

@@ -28,7 +28,7 @@ export function nextFreeName(base, draftRows, serverRows) {
 // OUTLIVES this hook's caller (audit D5 #12): the Config section components
 // unmount on every section switch, so a section holding this state internally
 // would lose in-progress "new card" tracking the moment the operator visits
-// another section. The dispatcher (ConfigPage) stays mounted, so it owns the
+// another section. The dispatcher (FleetPage/SettingsPage) stays mounted, so it owns the
 // Set and threads it down. Falls back to internal state when unmanaged.
 export function useNewNames(serverRows, draftRows, external) {
   const internal = useState(() => new Set());

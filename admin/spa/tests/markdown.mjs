@@ -5,7 +5,7 @@ import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
   // ── Skills View ──────────────────────────────────────────────────────────
-  await gotoFresh(page, "#/config/skills");
+  await gotoFresh(page, "#/fleet/skills");
   await page.waitForSelector("#skills");
   // catalog may take a tick after mount
   await page.waitForTimeout(400);
@@ -62,7 +62,7 @@ await withPage(async (page) => {
   }
 
   // ── Prompts View ─────────────────────────────────────────────────────────
-  await gotoFresh(page, "#/config/prompts");
+  await gotoFresh(page, "#/fleet/prompts");
   await page.waitForSelector("#prompts");
   // wait for templates to load (section shell is always present)
   try {

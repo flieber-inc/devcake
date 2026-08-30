@@ -41,14 +41,14 @@ export default function deriveAlerts(health) {
         id: "pmo-intake",
         severity: "info",
         title: `Intake paused for ${pausedPmos[0]}`,
-        body: `PMO '${pausedPmos[0]}' dispatches no new runs. Other PMOs keep baking. Resume on Configuration → PMO.`,
+        body: `PMO '${pausedPmos[0]}' dispatches no new runs. Other PMOs keep baking. Resume on Connections → PMO.`,
       });
     } else if (pausedPmos.length > 1) {
       alerts.push({
         id: "pmo-intake",
         severity: "info",
         title: `Intake paused for ${pausedPmos.length} PMOs`,
-        body: `${pausedPmos.join(", ")} dispatch no new runs. Resume on Configuration → PMO.`,
+        body: `${pausedPmos.join(", ")} dispatch no new runs. Resume on Connections → PMO.`,
       });
     }
   }
@@ -107,7 +107,7 @@ export default function deriveAlerts(health) {
       severity: "warning",
       dismissable: true,
       title: `Memory notebook ${card} is full of unreviewed leads`,
-      body: "New leads are being refused. Run the Memory Curator (Configuration → Scheduled Tasks) to review the queue, or raise the cap under Policies → Counting budgets — old leads are never deleted automatically.",
+      body: "New leads are being refused. Run the Memory Curator (Settings → Scheduled Tasks) to review the queue, or raise the cap under Settings → Policies → Counting budgets — old leads are never deleted automatically.",
     });
   }
 
@@ -172,7 +172,7 @@ export default function deriveAlerts(health) {
       body:
         degraded.map(([name, msg]) => `${name}: ${msg}`).join(" · ") +
         " — no new missions from this instance until it recovers. " +
-        "Check the API key in Configuration → PMO; DevCake auto-heals when the " +
+        "Check the API key in Connections → PMO; DevCake auto-heals when the " +
         "next segment succeeds.",
     });
   }

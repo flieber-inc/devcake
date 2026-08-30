@@ -7,7 +7,7 @@ import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mj
 import { MISSION_STAGES as MTS } from "../src/lib/missionStages.js";
 
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/mission-types");
+  await gotoFresh(page, "#/fleet/mission-types");
   await page.waitForSelector("#mission-types");
 
   for (const mt of MTS) {

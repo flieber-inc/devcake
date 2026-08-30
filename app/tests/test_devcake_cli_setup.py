@@ -133,7 +133,8 @@ class _FakeHttp:
     """Callable HTTP fake: records calls; returns scripted (status, body)."""
 
     def __init__(self, script: dict[tuple[str, str], tuple[int, object]] | None = None):
-        self.calls: list[tuple[str, str, dict | None]] = []
+        # (method, path, body, headers) — headers recorded so intent-gate regressions fail.
+        self.calls: list[tuple[str, str, dict | None, dict]] = []
         self.script = script or {}
         self.secret_bodies: list[dict] = []
 
@@ -144,7 +145,7 @@ class _FakeHttp:
             path = "/" + path.split("/", 1)[1]
         else:
             path = "/"
-        self.calls.append((method, path, body))
+        self.calls.append((method, path, body, dict(headers or {})))
         if body and isinstance(body, dict) and "value" in body:
             self.secret_bodies.append(body)
         key = (method, path)
@@ -241,7 +242,67 @@ def test_setup_first_setup_conflict_exits_5(monkeypatch, tmp_path, capsys):
     assert "TestPassword1!" not in blob
 
 
-# ── Slice 2: connections ──────────────────────────────────────────────────────
+def test_setup_mutating_requests_send_intent_header(monkeypatch, tmp_path, capsys):
+    """Live control plane requires X-DevCake-Request: 1 on POST/PUT (auth.py).
+
+    Without it every write returns 403 missing request intent header — the
+    defect that rejected CAKE-178 @ f774e20.
+    """
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+    import devcake_cli.setup as setup_mod
+
+    sock = _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKER_SOCK", str(sock))
+    monkeypatch.setenv("LINEAR_KEY", "lin_secret_value_xyz")
+    _patch_doctor_ok(monkeypatch)
+
+    cfg = {"pmos": [], "repos": [], "assignments": {}}
+    http = _FakeHttp(
+        {
+            ("POST", "/api/v1/dev-types/first-setup"): (
+                200,
+                {"created": ["judge", "executor", "steward"]},
+            ),
+            ("GET", "/api/v1/config"): (200, cfg),
+            ("PUT", "/api/v1/config"): (200, cfg),
+            ("PUT", "/api/v1/secrets/pmo/acme/api_key"): (200, {"present": True}),
+        }
+    )
+    monkeypatch.setattr(setup_mod, "default_http", http)
+
+    rc = cli_main.main(
+        [
+            "--json",
+            "setup",
+            "--same-harness",
+            "claude-code",
+            "--pmo-name",
+            "acme",
+            "--pmo-system",
+            "linear",
+            "--pmo-team-key",
+            "ACME",
+            "--pmo-api-key-env",
+            "LINEAR_KEY",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err + captured.out
+
+    mutating = [c for c in http.calls if c[0] in {"POST", "PUT", "PATCH", "DELETE"}]
+    assert mutating, "expected at least one mutating API call"
+    for method, path, _body, headers in mutating:
+        assert headers.get("X-DevCake-Request") == "1", (
+            f"{method} {path} missing X-DevCake-Request: 1 (got {headers!r})"
+        )
+        assert "Authorization" in headers
+        # Authorization is Basic from checkout .env — value must not leak to stdout.
+        assert "TestPassword1!" not in (captured.out + captured.err)
+        # Sanity: Basic token encodes admin:TestPassword1!
+        expected = "Basic " + base64.b64encode(b"admin:TestPassword1!").decode()
+        assert headers["Authorization"] == expected
 
 
 def test_setup_pmo_and_repo_upsert_and_secrets(monkeypatch, tmp_path, capsys):

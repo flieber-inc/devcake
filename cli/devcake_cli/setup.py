@@ -384,7 +384,18 @@ def _api(
     auth_header: str,
 ) -> tuple[int, Any]:
     url = base.rstrip("/") + path
-    return http(method, url, body, {"Authorization": auth_header})
+    # Control-plane auth requires X-DevCake-Request: 1 on every mutating
+    # method (POST/PUT/PATCH/DELETE); without it the app returns 403
+    # "missing request intent header". Send on all setup calls (SPA does too).
+    return http(
+        method,
+        url,
+        body,
+        {
+            "Authorization": auth_header,
+            "X-DevCake-Request": "1",
+        },
+    )
 
 
 def _build_roles_body(opts: SetupOptions) -> dict[str, dict[str, str]]:

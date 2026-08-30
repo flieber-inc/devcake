@@ -39,12 +39,14 @@ await withPage(async (page) => {
     check("skill Rendered does not start with YAML name:",
       renderedText.length > 0 && !renderedText.startsWith("name:"));
 
-    // Source = stored bytes (leading --- for SKILL.md)
+    // Source = stored bytes (leading --- for SKILL.md). Store skills use an
+    // editable textarea; bundled/external stay on <pre> (CAKE-166).
     await dlg.locator('button:text-is("Source")').click();
     check("skill Source control is pressed after click",
       (await dlg.locator('button:text-is("Source")').getAttribute("aria-pressed")) === "true");
-    await dlg.locator("pre").waitFor({ timeout: 5000 });
-    const src = await dlg.locator("pre").innerText();
+    const skillSrc = dlg.locator("pre, textarea[aria-label='Skill source']").first();
+    await skillSrc.waitFor({ timeout: 5000 });
+    const src = await skillSrc.inputValue().catch(async () => skillSrc.innerText());
     check("skill Source includes leading frontmatter fence",
       src.trimStart().startsWith("---"));
     check("skill Source is not empty", src.trim().length > 20);

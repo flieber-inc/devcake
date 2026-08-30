@@ -78,7 +78,7 @@ export function Help({ text }) {
         <span
           id={id}
           role="tooltip"
-          className="absolute left-1/2 top-full z-40 mt-1.5 w-64 max-w-[min(16rem,calc(100vw-2rem))] -translate-x-1/2 rounded-md bg-neutral-950 p-2 text-left text-xs font-normal leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800"
+          className="absolute left-1/2 top-full z-40 mt-1.5 w-72 max-w-[min(18rem,calc(100vw-2rem))] -translate-x-1/2 whitespace-pre-line rounded-md bg-neutral-950 p-2 text-left text-xs font-normal leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800"
         >
           {text}
         </span>

@@ -46,6 +46,10 @@ class Harness(BaseModel):
     # True = ships in-tree but has not passed a live operator battery.
     # The admin picker surfaces this so experimental is not prose-only.
     experimental: bool = False
+    # Teaching-only Extra CLI args examples for the Mission Types UI
+    # (CAKE-172). Never applied at dispatch or into assignment seeds —
+    # flags are harness-specific (docs/08 §1, docs/15 §2a).
+    cli_arg_examples: list[str] = Field(default_factory=list)
 
 
 # Dispatch must use the same tag the operator baked (AGENTS.md pin workflow:
@@ -63,6 +67,7 @@ HARNESSES: dict[str, Harness] = {
         credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
         # CLI 2.1.210 reads ONLY ~/.claude/skills (cli.js-verified)
         skills_dir=".claude/skills",
+        cli_arg_examples=["--max-turns 15"],
     ),
     "grok-build": Harness(
         image=f"devcake/dev-grok-build:{_TAG}",
@@ -77,6 +82,7 @@ HARNESSES: dict[str, Harness] = {
         # ~/.claude/skills (claude-compat; `grok inspect`-verified) —
         # .agents is canonical; writing two dirs would double-list skills
         skills_dir=".agents/skills",
+        cli_arg_examples=["--max-turns 15"],
     ),
     "codex": Harness(
         image=f"devcake/dev-codex:{_TAG}",
@@ -92,6 +98,8 @@ HARNESSES: dict[str, Harness] = {
         # /etc/codex/skills (developers.openai.com/codex/skills + binary
         # strings); repo-level is unused here — never write into the clone
         skills_dir=".agents/skills",
+        # No turn-cap flag (docs/15 §2a); model override is the useful example
+        cli_arg_examples=["-m <model>"],
     ),
     "pi": Harness(
         image=f"devcake/dev-pi:{_TAG}",
@@ -102,6 +110,7 @@ HARNESSES: dict[str, Harness] = {
         # Reads ~/.pi/agent/skills AND ~/.agents/skills; .agents is the
         # Agent Skills standard the other templates already use.
         skills_dir=".agents/skills",
+        cli_arg_examples=["--model <provider/model>"],
     ),
     "opencode": Harness(
         image=f"devcake/dev-opencode:{_TAG}",
@@ -112,6 +121,8 @@ HARNESSES: dict[str, Harness] = {
         # Also reads ~/.claude/skills and ~/.config/opencode/skills;
         # .agents is the shared Agent Skills dir.
         skills_dir=".agents/skills",
+        # No turn-cap / no useful Mission-Type tuning flag (docs/15 §2a)
+        cli_arg_examples=[],
     ),
     "qwen-code": Harness(
         image=f"devcake/dev-qwen-code:{_TAG}",
@@ -124,6 +135,7 @@ HARNESSES: dict[str, Harness] = {
         # Personal skills: ~/.qwen/skills (project .qwen/skills is unused —
         # never write into the clone).
         skills_dir=".qwen/skills",
+        cli_arg_examples=["--max-session-turns 15"],
     ),
 }
 
@@ -184,6 +196,7 @@ def dev_type_status(dt) -> dict:
             "oauth_available": h.oauth is not None,
             "skills_dir": h.skills_dir,
             "experimental": h.experimental,
+            "cli_arg_examples": list(h.cli_arg_examples),
         },
         "secrets_present": present,
         # ✓/✗ per declared secret env var (DevType.secret_env) — presence

@@ -30,7 +30,7 @@ ONBOARD never implements — it holds no write token whenever the recommended RO
 ### 1.2 Normal path
 No code changes. `result.json`: `outcome: "plan_needed"` with a one-paragraph `summary` of the assessment.
 
-**Bounded effort:** ONBOARD is a triage pass, not an exploration — the playbook prompt says "assess, don't deep-dive," and operators can cap it mechanically via the per-Mission-Type extra CLI args (`02-domain-model.md` §9; the first-setup wizard's ONBOARD row carries `--max-turns 15` — admin-editable data, never hardcoded).
+**Bounded effort:** ONBOARD is a triage pass, not an exploration — the playbook prompt says "assess, don't deep-dive," and operators can cap it mechanically via the per-Mission-Type extra CLI args (`02-domain-model.md` §9). First-setup leaves Extra CLI args empty; operators set a harness-appropriate flag themselves (Mission Types Help lists labeled examples — e.g. `--max-turns 15` on claude-code / grok-build).
 
 **Opportunistic plan:** if, in the course of assessing, the Dev has already effectively formed the complete plan, it may write it to `/workspace/out/PLAN.md`. This is optional and confidence-gated — never forced; assessment and planning remain separate jobs by default.
 

@@ -144,8 +144,9 @@ skill_sources: []                    # dedicated skills connections (ADR-0016 ad
 assignments:                         # fresh install: omit or {} (unstaffed) until first-setup / manual edit.
   ONBOARD:                           # after first-setup (example names): judge / executor (02 §6).
     dev_type: judge                  #   extra_cli_args are appended verbatim to the harness invocation —
-    extra_cli_args: "--max-turns 15" #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
-                                     #   wizard keeps --max-turns 15 on ONBOARD; edit/clear freely.
+    extra_cli_args: ""               #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
+                                     #   wizard staffs Dev Types only — Extra CLI args start empty (CAKE-172);
+                                     #   operators learn flags from labeled per-harness examples in Mission Types Help.
                                      #   --max-turns is claude-code + grok-build only; codex 0.147.0 has NO
                                      #   turn cap, so no args value bounds a codex Dev (08 §1, 15 §2a).
   PLAN:

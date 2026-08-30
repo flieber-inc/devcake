@@ -1,7 +1,7 @@
 """Console entry for the ``devcake`` command.
 
-Phase 1b (CAKE-177 / ADR-0038): ``baker run``, ``up``, ``down``, ``status``,
-and ``doctor``. ``bake`` / ``setup`` remain sibling issues (exit usage 2).
+Phase 1c (CAKE-178 / ADR-0038): ``baker run``, ``up``, ``down``, ``status``,
+``doctor``, and ``setup``. ``bake`` remains a sibling stub (exit usage 2).
 Universal ``--help`` / ``--json`` are accepted on the CLI surface.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from typing import Sequence
 
-from . import baker, doctor, down, status, up
+from . import baker, doctor, down, setup, status, up
 
 
 _USAGE = """\
@@ -23,9 +23,10 @@ Implemented:
   down          Stop the compose stack (no volume wipe)
   status        Compose + baker readiness snapshot
   doctor        Named preflight checks (+ remedies; --json)
+  setup         First-setup / connections / settings-bundle import
 
 Not yet implemented (ADR-0038 v1 — sibling issues):
-  bake, setup
+  bake
 
 Install: uv tool install .   OR   pipx install .
 Docs:    docs/adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md
@@ -182,7 +183,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         parsed.as_json = as_json
         return up.run_up(parsed)
 
-    # bake / setup — registered but not yet implemented
+    if verb == "setup":
+        parsed = setup.parse_setup_flags(rest)
+        if isinstance(parsed, int):
+            return parsed
+        parsed.as_json = as_json
+        return setup.run_setup(parsed)
+
+    # bake — registered but not yet implemented (sibling issue)
     if rest and rest[0] in ("-h", "--help"):
         sys.stdout.write(
             f"usage: devcake {verb}\n"

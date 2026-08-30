@@ -133,7 +133,7 @@ await withPage(async (page) => {
   await page.waitForSelector('span:has-text("Unsaved changes")');
   check("edit on the PMO page marks the draft dirty (1)", (await dirtyCount()) === "1");
   await page.click('aside a[href="#/settings"]');        // pmo → settings: no guard
-  await page.waitForSelector("#limits");
+  await page.waitForSelector("#policies");
   check("pmo → settings hop raises no nav guard",
     (await page.locator("text=unsaved change").count()) === 0 ||
     (await page.locator('[role="dialog"]').count()) === 0);

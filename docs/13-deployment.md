@@ -363,28 +363,32 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ### 8a. Protect the default branch (DEPLOYMENT REQUIREMENT — docs/14 §2 zone C)
 
-**Branch protection with required status checks** is a **DEPLOYMENT REQUIREMENT**
-for any forge hosting work repos — not optional hardening. It is a policy you
-set **on the forge** (GitHub / GitLab / Gitea) for a branch name — in DevCake,
-the repo’s `default_branch` (usually `main`). The forge refuses direct pushes
-and merges that do not meet your rules (PR required, ≥1 approval, required
-checks, no force-push, no bypass for the Dev account). DevCake does not
-implement those rules; it only **warns** when the branch looks unprotected and
-does not hard-block dispatch (`14` §8). The honest missing-protection surface
-is `/health` `forge_protection` → Overview **critical** (dismissable) alert.
+**Branch protection** (PR + ≥1 approval + **required status checks**) is a
+**DEPLOYMENT REQUIREMENT** for any forge hosting work repos — not optional
+hardening. It is a policy you set **on the forge** (GitHub / GitLab / Gitea)
+for a branch name — in DevCake, the repo’s `default_branch` (usually `main`).
+The forge refuses direct pushes and merges that do not meet your rules (PR
+required, ≥1 approval, required checks, no force-push, no bypass for the Dev
+account). DevCake does not implement those rules; it only **warns** when the
+branch looks unprotected and does not hard-block dispatch (`14` §8). The honest
+missing-protection surface is `/health` `forge_protection` → Overview
+**critical** (dismissable) alert.
 
 Why it is mandatory: Dev containers hold a write-capable forge token, and token
 scoping cannot separate “push a feature branch” from “merge to the default
 branch” (both are often `contents: write`). **Per-repo `auto_merge` off only
 stops the app from merging that repo** — it does not change what the Dev token
-can do (`14` §2 zone C). Playbooks hard-forbid Dev merge / forge-approve /
-push-to-default; forge protection is the structural stop. Full actor/token
-walkthrough: `14` §2 and the README “How forge merges are controlled.”
+can do (`14` §2 zone C). Required status checks alone stop premature merges but
+not a patient Dev self-merge after green CI; the complete forge-side stop needs
+required reviews plus a distinct reviewer token. Playbooks hard-forbid Dev
+merge / forge-approve / push-to-default and are the operative belt until that
+setup lands. Full actor/token walkthrough: `14` §2 and the README “How forge
+merges are controlled.”
 
 Recommended operator setup:
 
-1. **Protect `default_branch`** on every work repo (PR + required checks; Dev
-   account must not bypass).
+1. **Protect `default_branch`** on every work repo (PR + ≥1 approval + required
+   checks; Dev account must not bypass).
 2. **Write token** for EXECUTE (push + open PR); app reuses it for merge if
    that repo's `auto_merge` is later enabled (Repos page, per card — ADR-0020).
 3. **RO token** for non-EXECUTE (recommended).

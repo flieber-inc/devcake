@@ -97,6 +97,9 @@ check("unprotected default branch is a dismissable advisory, not a dispatch gate
   assert.match(hit.body, /does not block dispatch/i);
   assert.match(hit.body, /deployment requirement/i);
   assert.match(hit.body, /required status checks/i);
+  // Required reviews (≥1 approval) are part of the deployment-requirement shape —
+  // checks alone do not stop a patient Dev self-merge after green CI (CAKE-179).
+  assert.match(hit.body, /1 approval|≥1 approval|reviews/i);
 });
 
 // CAKE-89: unused-repos alert names memory + skill-source separation

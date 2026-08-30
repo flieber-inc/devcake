@@ -109,14 +109,20 @@ def test_baker_run_dispatches_to_watch_main(monkeypatch):
     assert called == [1]
 
 
-def test_baker_run_is_only_implemented_verb():
-    """Unimplemented v1 verbs return usage exit 2; baker run is the phase-1a verb."""
+def test_phase1b_verbs_are_registered_and_bake_setup_still_stubbed():
+    """Phase 1b implements up/down/status/doctor; bake/setup remain exit 2."""
     _ensure_cli_importable()
     import devcake_cli.main as cli_main
 
-    assert cli_main.main(["up"]) == 2
     assert cli_main.main([]) == 2
-    assert cli_main.main(["doctor"]) == 2
+    assert cli_main.main(["bake"]) == 2
+    assert cli_main.main(["setup"]) == 2
+    # Implemented verbs must not return the old "not implemented" usage stub.
+    # up without a checkout is preflight 3; doctor runs the catalog (0 or 3).
+    assert cli_main.main(["up", "--help"]) == 0
+    assert cli_main.main(["down", "--help"]) == 0
+    assert cli_main.main(["status", "--help"]) == 0
+    assert cli_main.main(["doctor", "--help"]) == 0
 
 
 def test_deprecated_dev_factory_module_entry_still_imports():

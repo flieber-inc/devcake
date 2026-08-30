@@ -222,15 +222,11 @@ real EXECUTE: §9.
 ```bash
 # Clone the remote or fork you intend to run:
 git clone <this-repo-url> && cd devcake
-cp .env.example .env
-# Edit .env: strong ADMIN_*, REDIS_PASSWORD, DAGU_PASSWORD, OO_ROOT_PASSWORD,
-# OO_INGEST_PASSWORD, GITEA_ADMIN_PASSWORD; also set OO_INGEST_EMAIL (blank refuses boot).
-# Leave DOCKER_GID blank. Empty/change-me* passwords refuse boot unless
-# DEVCAKE_ALLOW_INSECURE=1 (local sandbox only). Operator secrets
-# (PMO / forge / model) go in the admin Config UI after up — not in .env.
-
-./up.sh --bake            # DOCKER_GID + control plane + hello + host baker
-# Later restarts (images already baked):  ./up.sh
+uv tool install .          # or: pipx install .  → console script `devcake`
+devcake doctor             # named preflight + one-time remedies (--json ok)
+devcake up --bake          # auto-inits .env secrets, DOCKER_GID, control plane + hello + baker
+# Shim still works during the transition window: ./up.sh --bake
+# Later restarts (images already baked):  devcake up
 # Configure Dev Types in the admin UI — the host baker compiles those pins.
 
 # In a browser: http://localhost:8080  — basic auth → Connections / Fleet / Settings → secrets + connection tests
@@ -238,11 +234,13 @@ cp .env.example .env
 # Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
 ```
 
-`./up.sh` is the supported start path: it reads the docker socket’s group id
-into `.env`, optionally bakes, then runs compose. Control ports bind
-`127.0.0.1`. Images are **Bake-only** — compose never builds them.
+`devcake up` is the supported start path (ADR-0038): it auto-generates missing
+bootstrap secrets into a mode-600 `.env`, upserts the docker socket group id,
+optionally bakes, then runs compose and installs the host baker. `./up.sh` is a
+thin shim that `exec`s `devcake up`. Control ports bind `127.0.0.1`. Images are
+**Bake-only** — compose never builds them.
 
-**macOS / Docker Desktop:** see [`docs/13-deployment.md`](docs/13-deployment.md) §8b before first `./up.sh --bake` — socket gid, install gates, and the nested-engine probe.
+**macOS / Docker Desktop:** see [`docs/13-deployment.md`](docs/13-deployment.md) §8b before first `devcake up --bake` — socket gid, install gates, and the nested-engine probe.
 
 **Before the first real mission:**
 
@@ -262,7 +260,8 @@ into `.env`, optionally bakes, then runs compose. Control ports bind
 After upgrades or changes under `app/`, `admin/`, or `images/`:
 
 ```bash
-./up.sh --bake
+devcake up --bake
+# or: ./up.sh --bake
 ```
 
 More detail: [`AGENTS.md`](AGENTS.md) · [`docs/13-deployment.md`](docs/13-deployment.md).

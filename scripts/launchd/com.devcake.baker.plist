@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DevCake host baker — macOS LaunchAgent template.
+  Installed by ./up.sh via scripts/lib/baker_host.sh (placeholders replaced).
+  The baker stays a HOST process (sole docker-socket holder). Do not convert
+  this into a container or grant any compose service the socket.
+
+  Placeholders filled at install time:
+    @REPO@      absolute checkout path (WorkingDirectory)
+    @RUNNER@    .factory/baker-run.sh (sources baker.env, execs python -m dev_factory)
+    @WATCH_LOG@ .factory/watch.log
+
+  KeepAlive SuccessfulExit=false → restart unless the baker exits 0
+  (including singleton-lock contention, which exits 0 on purpose).
+  RunAtLoad → start at login; user scope matches Docker Desktop.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.devcake.baker</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>@RUNNER@</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>@REPO@</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>@WATCH_LOG@</string>
+	<key>StandardErrorPath</key>
+	<string>@WATCH_LOG@</string>
+</dict>
+</plist>

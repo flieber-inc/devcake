@@ -7,6 +7,7 @@ app surfaces as baking / ready. The app never talks to Docker.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -14,6 +15,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -39,9 +41,10 @@ from .core import (
 from .run import tee_run
 from .liveness import (
     SENTINEL,
-    UNHEALTHY_NEED,
+    UNHEALTHY_BUDGET_S,
     classify_app,
     tick_decision,
+    unhealthy_backoff_s,
     unhealthy_verdict,
 )
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
@@ -51,6 +54,42 @@ RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
 OUTBOX = "harness_outbox"
 PRUNE_REQUEST = "harness_prune_request.json"
+# Host redirect target (up.sh / systemd / launchd / respawn). Cap keeps idle
+# noise from filling disk.
+WATCH_LOG_CAP_BYTES = 2 * 1024 * 1024  # 2 MiB
+# Exclusive lock + pidfile so any supervisor combo cannot double-run the baker.
+BAKER_LOCK_NAME = "watch.lock"
+BAKER_PID_NAME = "watch.pid"
+
+
+def acquire_baker_singleton(factory_dir: Path | str) -> IO[str]:
+    """Take an exclusive flock on watch.lock and write watch.pid.
+
+    Holds the lock for the process lifetime (caller must keep the returned
+    file open). On contention exits 0 so Restart=on-failure / launchd
+    KeepAlive (SuccessfulExit=false) do not restart-storm a healthy peer.
+    """
+    dest = Path(factory_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    lock_path = dest / BAKER_LOCK_NAME
+    pid_path = dest / BAKER_PID_NAME
+    fh = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115 — held open for flock lifetime
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        print(
+            "dev_factory: another baker already holds "
+            f"{lock_path} — exiting without stealing the lock",
+            flush=True,
+        )
+        raise SystemExit(0) from None
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    pid_path.write_text(f"{os.getpid()}\n")
+    return fh
 
 
 def compose_read(rel: str) -> str | None:
@@ -354,13 +393,39 @@ def keep_set_mtime() -> float | None:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "stat", "-c", "%Y", f"/data/{KEEP_SET}"],
-            cwd=REPO, text=True, timeout=15)
+            cwd=REPO, text=True, timeout=15,
+            stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     try:
         return float(out.strip())
     except ValueError:
         return None
+
+
+def rotate_watch_log(path: Path | str, *,
+                     cap: int = WATCH_LOG_CAP_BYTES) -> bool:
+    """Copytruncate when the live log exceeds *cap*.
+
+    Returns True when rotation happened. Truncates the same inode so an
+    open stdout/stderr redirect (nohup or systemd append) keeps writing.
+    """
+    dest = Path(path)
+    try:
+        size = dest.stat().st_size
+    except OSError:
+        return False
+    if size <= cap:
+        return False
+    bak = dest.with_name(dest.name + ".1")
+    try:
+        import shutil
+        shutil.copy2(dest, bak)
+        with dest.open("r+b") as fh:
+            fh.truncate(0)
+    except OSError:
+        return False
+    return True
 
 
 def once(*, work: Path, tag: str, house: dict[str, str],
@@ -481,6 +546,11 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     return status
 
 
+def _watch_log_path() -> Path:
+    return Path(os.environ.get(
+        "DEVCAKE_FACTORY_LOG", str(REPO / ".factory" / "watch.log")))
+
+
 def main(argv: list[str] | None = None) -> int:
     del argv  # reserved
     tag = os.environ.get("DEVCAKE_TAG", "latest")
@@ -488,21 +558,28 @@ def main(argv: list[str] | None = None) -> int:
     work = Path(os.environ.get(
         "DEVCAKE_FACTORY_WORK", str(REPO / ".factory" / "work")))
     work.mkdir(parents=True, exist_ok=True)
+    # Singleton under any supervisor (systemd / launchd / respawn loop).
+    factory_root = work.parent if work.name == "work" else work
+    _singleton = acquire_baker_singleton(
+        Path(os.environ.get("DEVCAKE_FACTORY_DIR", str(factory_root))))
+    watch_log = _watch_log_path()
+    rotate_watch_log(watch_log)
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
     down_streak = 0
+    down_elapsed = 0.0
     last_state: str | None = None
     last_trees: float | None = None
     last_keep: float | None = None
     cached_digest: str | None = None
     cached_trees: float | None = None
     while True:
+        rotate_watch_log(watch_log)
         healthy = probe_app_live()
         if not healthy:
             down_streak += 1
-            print(f"dev_factory: app /health/live failed "
-                  f"({down_streak}/{UNHEALTHY_NEED})", flush=True)
-            if unhealthy_verdict(down_streak):
+            remaining = UNHEALTHY_BUDGET_S - down_elapsed
+            if remaining <= 0 or unhealthy_verdict(elapsed_s=down_elapsed):
                 rec = emit_event(work, {
                     "event": "down",
                     "detail": "app /health/live failed — baker exiting",
@@ -511,9 +588,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("dev_factory: app is not healthy — exiting "
                       "(restart with ./up.sh)", flush=True)
                 return 1
-            time.sleep(INTERVAL)
+            delay = min(unhealthy_backoff_s(down_streak), remaining)
+            print(f"dev_factory: app /health/live failed "
+                  f"(streak={down_streak}, ~{remaining:.0f}s budget left; "
+                  f"backoff {delay:.0f}s)", flush=True)
+            time.sleep(delay)
+            down_elapsed += delay
             continue
         down_streak = 0
+        down_elapsed = 0.0
         trees = trees_mtime(REPO)
         keep_m = keep_set_mtime()
         prune_pending = compose_read(PRUNE_REQUEST) is not None

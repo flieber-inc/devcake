@@ -1,8 +1,9 @@
 """App-health chokepoint for the host baker.
 
-The baker's own 5s loop calls classify_app / tick_decision — the same
-shape as require_staffed, not a second supervisor thread. Down → exit.
-Sentinel → heartbeat only. Ready → reconcile.
+The baker's own loop calls classify_app / tick_decision — the same
+shape as require_staffed, not a second supervisor thread. Down → wait
+with backoff for a minutes-scale budget, then exit. Sentinel →
+heartbeat only. Ready → reconcile.
 """
 
 from __future__ import annotations
@@ -13,7 +14,12 @@ from pathlib import Path
 from typing import Mapping
 
 SENTINEL = "DEVCAKE_APP_DIGEST_UNSET"
-UNHEALTHY_NEED = 3
+# Minutes-scale budget so a short app restart / deploy window does not
+# kill the baker. Under systemd Restart=on-failure the final exit is
+# recoverable; the point is not to exit during every bounce.
+UNHEALTHY_BUDGET_S = 300
+UNHEALTHY_BACKOFF_START_S = 5
+UNHEALTHY_BACKOFF_CAP_S = 30
 
 
 def classify_app(*, healthy: bool, digest: str | None,
@@ -35,8 +41,18 @@ def tick_decision(kind: str) -> str:
     return "reconcile"
 
 
-def unhealthy_verdict(streak: int) -> bool:
-    return streak >= UNHEALTHY_NEED
+def unhealthy_backoff_s(streak: int) -> float:
+    """Backoff grows from START toward CAP. *streak* is 1-based fail count."""
+    if streak < 1:
+        streak = 1
+    delay = UNHEALTHY_BACKOFF_START_S * (2 ** (streak - 1))
+    return float(min(delay, UNHEALTHY_BACKOFF_CAP_S))
+
+
+def unhealthy_verdict(*, elapsed_s: float,
+                      budget_s: float = UNHEALTHY_BUDGET_S) -> bool:
+    """True when the app-down wait budget is exhausted (baker should exit)."""
+    return elapsed_s >= budget_s
 
 
 def stamp_heartbeat(payload: Mapping, *, now: datetime | None = None,

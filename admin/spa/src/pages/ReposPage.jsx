@@ -436,6 +436,12 @@ export default function ReposPage({ onHealthChange }) {
       <PageHeader title="Repositories"
         subtitle="Forge connections, tokens, merge policy, and the internal forge — edits apply on Save" />
       <AdapterTabs page="repos" />
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        Sync age &amp; LFS:{" "}
+        <a className="font-medium text-accent-700 underline-offset-2 hover:underline dark:text-accent-300"
+          href="#/config/policies">Configuration → Policies → Repository mirrors</a>.
+        Mirror sync/volume failures also surface as Overview alerts.
+      </p>
 
       <Section id="repository" title="Repositories"
         description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait."

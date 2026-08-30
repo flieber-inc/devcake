@@ -15,10 +15,10 @@ await withPage(async (page) => {
       .then((c) => Array.isArray(c.crons)).catch(() => false));
 
   // 1: both cards render; nothing else does
-  check("view renders DevCake tasks + Custom tasks, not Limits",
+  check("view renders DevCake tasks + Custom tasks, not Policies",
     (await page.locator("#scheduled-tasks").count()) === 1 &&
     (await page.locator("#scheduled-tasks-custom").count()) === 1 &&
-    (await page.locator("#limits").count()) === 0);
+    (await page.locator("#policies").count()) === 0);
 
   // 2: built-ins — both panels, no Delete anywhere in card 1
   if (hasCrons)
@@ -127,8 +127,8 @@ await withPage(async (page) => {
 
 // 7: mobile 390px — chip navigates; wide content scrolls in its own box
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/limits");
-  await page.waitForSelector("#limits");
+  await gotoFresh(page, "#/config/policies");
+  await page.waitForSelector("#policies");
   await page.locator('a[href="#/config/scheduled-tasks"]:visible').first().click();
   await page.waitForSelector("#scheduled-tasks");
   check("mobile chip navigates to Scheduled Tasks",

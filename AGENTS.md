@@ -24,9 +24,10 @@ copy voice, evidence loop). Read it before touching the SPA. Iron rules:
   hex or new color families in components. `accent-*` is the only brand accent.
 - Scalar settings are `SettingRow`s; record lists are real tables styled like
   the Runs table; config renders one section per `#/config/<section>` view
-  (the `limits` view carries the merged Limits + Traffic cards); Repositories
-  and PMO are draft-editing pages under the sidebar's Adapters item, not
-  Config sections.
+  (the `policies` view carries fleet bounds, attempt/retry, budgets, result
+  recovery, mirrors, and memory — formerly Limits, with Traffic dissolved);
+  Repositories and PMO are draft-editing pages under the sidebar's Adapters
+  item, not Config sections.
 - One primary action per header/card; secondary/rare/destructive actions go in
   a `MoreMenu` (⋯) with honest one-line consequence descriptions — but never a
   one-item menu when it's the element's only action.

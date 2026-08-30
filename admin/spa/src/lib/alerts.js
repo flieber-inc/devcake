@@ -107,7 +107,7 @@ export default function deriveAlerts(health) {
       severity: "warning",
       dismissable: true,
       title: `Memory notebook ${card} is full of unreviewed leads`,
-      body: "New leads are being refused. Run the Memory Curator (Configuration → Scheduled Tasks) to review the queue, or raise the cap under Limits → Counting budgets — old leads are never deleted automatically.",
+      body: "New leads are being refused. Run the Memory Curator (Configuration → Scheduled Tasks) to review the queue, or raise the cap under Policies → Counting budgets — old leads are never deleted automatically.",
     });
   }
 

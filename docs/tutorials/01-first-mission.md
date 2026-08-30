@@ -90,7 +90,7 @@ Six top-level sidebar items (Adapters expands to two pages — seven surfaces to
 - **Missions** — pipeline strip (stage counts) + grouped mission list of the poll snapshot; **Poll now**; row MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
 - **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
 - **Adapters** — sidebar group with two pages: **Repositories** (external forge repos + bundled internal Gitea operator repos + merge posture toggles) and **PMO** (instances + adoption mode). Both edit the same shared config draft; connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
-- **Configuration** — sections: Dev Types, Mission Types, Skills, Prompts, Limits, Scheduled Tasks, Profiles & Export.
+- **Configuration** — sections: Dev Types, Mission Types, Skills, Prompts, Policies, Scheduled Tasks, Profiles & Export.
   Secrets are VALUES here (never echoed back).
 - **Consoles** — the external UIs: OpenObserve (traces/costs), Dagu (execution history), Gitea (internal forge, when enabled). One Dev run = one trace.
 

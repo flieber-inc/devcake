@@ -22,7 +22,7 @@
 
 ## Decision
 
-### 1 — `attempt_reset` (global, Limits & Traffic)
+### 1 — `attempt_reset` (global, Policies)
 
 What grants a step fresh attempts. Two anchors are policy-independent:
 removing `DEVCAKE-FAILED` (the give-up watermark) and a later step
@@ -50,7 +50,7 @@ Breakers (`DEV_AUTH`, `DEV_FORGE_AUTH`, repo latches) still act, and
 `DEVCAKE-SKIP` still stops everything — `unlimited` removes only the
 attempt ceiling, not the safety machinery.
 
-### 2 — `brake_on_bad_output` (global, Limits & Traffic, default off)
+### 2 — `brake_on_bad_output` (global, Policies, default off)
 
 Off keeps ADR-0018 exactly: only `DEV_HARNESS_FAULT` (exit 15) is brake
 evidence. On widens the evidence set to `{DEV_HARNESS_FAULT,
@@ -75,7 +75,7 @@ experimental/self-hosted backends where the cascade shape is a live risk.
 
 ### 3 — Admin UX is part of the contract
 
-Both knobs render as first-class `SettingRow`s (Limits & Traffic — the
+Both knobs render as first-class `SettingRow`s (Policies — the
 section name is capitalized as of this ADR) with long-form `help` text
 explaining the failure modes: the chatty-integration hole for
 `any-comment`, what `unlimited` really forfeits, and the brake's two arms —

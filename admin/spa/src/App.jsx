@@ -24,7 +24,8 @@ const SECTION_IDS = CONFIG_SECTIONS.map((s) => s.id);
 const REDIRECTS = [
   [/^#\/config\/repository$/, "#/repos", { page: "repos", section: null }],
   [/^#\/config\/pmo$/, "#/pmo", { page: "pmo", section: null }],
-  [/^#\/config\/traffic$/, "#/config/limits", { page: "config", section: "limits" }],
+  [/^#\/config\/traffic$/, "#/config/policies", { page: "config", section: "policies" }],
+  [/^#\/config\/limits$/, "#/config/policies", { page: "config", section: "policies" }],
   [/^#\/config\/cron$/, "#/config/scheduled-tasks",
     { page: "config", section: "scheduled-tasks" }],
   [/^#\/config\/assignments$/, "#/config/mission-types",

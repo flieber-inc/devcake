@@ -1132,14 +1132,13 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
 
 ### Deferred (later / conditional)
 
-- **Host CLI (ADR-0038, accepted):** userspace `devcake` command surface
-  (`up` / `down` / `status` / `doctor` / `bake` / `baker run` / `setup`),
-  agent-operability contract, thin `up.sh` shim, supervisor migration off
-  `python -m dev_factory`, default `.env` auto-init on `up`, ADR-0013
-  bundle import on `setup --import`. Design sealed in
-  [ADR-0038](adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md);
-  implementation issues may proceed once they cite the ADR (CAKE-175). Not
-  started.
+- **Host CLI (ADR-0038, accepted):** userspace `devcake` command surface.
+  **Shipped:** `baker run` (CAKE-176), `up` / `down` / `status` / `doctor`
+  with thin `up.sh` shim + `.env` auto-init (CAKE-177), and `setup`
+  (CAKE-178) — first-setup roster, PMO/repo connections + secrets via
+  env/file/stdin, ADR-0013 `--import` → profile → apply + host `.env`
+  section C, JSON receipt. **Still later:** standalone `bake` verb.
+  Design: [ADR-0038](adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md).
 - **2026-08 evaluation candidates** (recorded with the campaign entry above;
   file:line evidence in the evaluation ledger): **per-run Dev networks**
   (closes cross-Dev reachability incl. the post-ADR-0023 DevTools scenario —

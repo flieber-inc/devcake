@@ -350,20 +350,26 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 ## 8. Runbook
 
 > **Host CLI:** [ADR-0038](adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md)
-> (**accepted**). Phase 1b (CAKE-177) ships **`devcake up` / `down` / `status` /
-> `doctor`** on the installable `devcake-cli` package (`cli/` → import
-> `devcake_cli`; `uv tool install .` / `pipx install .` from this checkout),
-> plus **`devcake baker run`** (phase 1a) under all three supervisors.
-> `./up.sh` is a thin shim that `exec`s `devcake up "$@"` when `devcake` is on
-> `PATH` (loud install hint otherwise). **`devcake up` auto-generates** missing
-> bootstrap secrets into a mode-600 `.env` by default (ADR Decision 1) — no
-> manual password inventing on a virgin host. Preflight: `devcake doctor`
-> (and `devcake doctor --json`) names every failed check with a one-time
-> remedy and never runs sudo/usermod/linger. Still later: `bake` / `setup`
-> (sibling issues). Deprecated alias `python -m dev_factory` remains
+> (**accepted**). Phase 1c (CAKE-178) ships **`devcake setup`** on the
+> installable `devcake-cli` package (`cli/` → import `devcake_cli`;
+> `uv tool install .` / `pipx install .` from this checkout), alongside
+> **`up` / `down` / `status` / `doctor`** (phase 1b) and **`devcake baker run`**
+> (phase 1a) under all three supervisors. `./up.sh` is a thin shim that
+> `exec`s `devcake up "$@"` when `devcake` is on `PATH` (loud install hint
+> otherwise). **`devcake up` auto-generates** missing bootstrap secrets into a
+> mode-600 `.env` by default (ADR Decision 1) — no manual password inventing on
+> a virgin host. Preflight: `devcake doctor` (and `devcake doctor --json`)
+> names every failed check with a one-time remedy and never runs
+> sudo/usermod/linger. **`devcake setup … --json`** configures an
+> already-reachable control plane (first-setup roster, PMO/repo connections +
+> secrets via env/file/stdin, ADR-0013 settings-bundle `--import` →
+> profile → apply + host `.env` for section C) and emits the ADR Decision 2
+> receipt — it does **not** bake, compose-up, or hello-smoke (Decision 8:
+> `devcake up --bake && devcake setup … --json`). Still later: standalone
+> `bake` verb (sibling). Deprecated alias `python -m dev_factory` remains
 > import-compatible during the transition (Decision 5).
 
-- **First run (virgin host):** install the CLI (`uv tool install .` or `pipx install .`) → `devcake doctor` (fix host preconditions) → `devcake up --bake` (auto-inits `.env` bootstrap secrets, discovers `DOCKER_GID`, computes `DEVCAKE_APP_DIGEST`, bakes **control plane + hello**, `compose up -d`, starts the **host baker**). `./up.sh --bake` remains valid via the shim. Open `http://localhost:8080` → **PMO** (`#/pmo`, Connections) + **Repositories** (`#/repos`) for connections and forge tokens, and **Fleet → Dev Types** (`#/fleet/dev-types`) for harness/model credentials → connection tests. Saving Dev Types publishes `/data/harness_keep_set.json`; the host baker compiles those pins, probes them, and writes receipts. **The first mission refuses until that second bake finishes** — the editor says “baking” / “waiting,” not a host command to run. Day-to-day restarts: `devcake up` / `./up.sh` (refreshes launchd / systemd `--user` / flock respawn; `--foreground-baker` when automation reaps detached children). Absent keep-set = control plane + hello only; the baker never parses Dev Type YAML. `devcake up --bake all` still compiles the full harness matrix when you ask for it. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
+- **First run (virgin host):** install the CLI (`uv tool install .` or `pipx install .`) → `devcake doctor` (fix host preconditions) → `devcake up --bake` (auto-inits `.env` bootstrap secrets, discovers `DOCKER_GID`, computes `DEVCAKE_APP_DIGEST`, bakes **control plane + hello**, `compose up -d`, starts the **host baker**) → optionally `devcake setup --same-harness <template> --json` (and/or connection / `--import` flags) to seed the Executor/Judge/Steward roster and wire connections non-interactively. `./up.sh --bake` remains valid via the shim. Open `http://localhost:8080` → **PMO** (`#/pmo`, Connections) + **Repositories** (`#/repos`) for connections and forge tokens, and **Fleet → Dev Types** (`#/fleet/dev-types`) for harness/model credentials → connection tests (SPA first-setup remains valid when you prefer the wizard). Saving Dev Types publishes `/data/harness_keep_set.json`; the host baker compiles those pins, probes them, and writes receipts. **The first mission refuses until that second bake finishes** — the editor says “baking” / “waiting,” not a host command to run. Day-to-day restarts: `devcake up` / `./up.sh` (refreshes launchd / systemd `--user` / flock respawn; `--foreground-baker` when automation reaps detached children). Absent keep-set = control plane + hello only; the baker never parses Dev Type YAML. `devcake up --bake all` still compiles the full harness matrix when you ask for it. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 

@@ -84,6 +84,13 @@ export default function SkillSourcesSection({
       {refreshMsg && (
         <p className="mb-3 text-sm text-green-700 dark:text-green-400">{refreshMsg}</p>
       )}
+      <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        Keeping skills in DevCake itself?{" "}
+        <a href="#/fleet/skills?add=1"
+          className="font-medium text-accent-700 underline underline-offset-2 dark:text-accent-300">
+          Add them to the built-in store
+        </a>
+      </p>
       {sources.length === 0 && (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           No skill sources yet — Fleet → Skills lists the bundled

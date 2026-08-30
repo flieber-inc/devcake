@@ -26,7 +26,10 @@ await withPage(async (page) => {
     }
     // Expanded editors visible without summary rows — assert selects exist
     // for at least one board and stop (cannot prove collapse on this fixture).
-    const selects = page.locator('#prompts select[aria-label$=" template"]');
+    // CAKE-173: override editors live under the Mission Types domain card.
+    const selects = page.locator(
+      '#prompts-mission-types select[aria-label$=" template"]',
+    );
     check("override editors present when summaries absent",
       (await selects.count()) >= 4);
     summary("prompts_overrides");
@@ -39,14 +42,14 @@ await withPage(async (page) => {
   // Collapsed summaries must not expose the four Mission-Type override selects
   // for that board — count Inherit options only after expand.
   const inheritBefore = await page.locator(
-    '#prompts select[aria-label$=" template"] option[value=""]',
+    '#prompts-mission-types select[aria-label$=" template"] option[value=""]',
   ).count();
 
   await summaries.first().click();
   await page.waitForTimeout(200);
 
   const inheritAfter = await page.locator(
-    '#prompts select[aria-label$=" template"] option[value=""]',
+    '#prompts-mission-types select[aria-label$=" template"] option[value=""]',
   ).count();
   check("expanding a summary reveals Inherit selects for that board",
     inheritAfter >= inheritBefore + 4);
@@ -55,7 +58,9 @@ await withPage(async (page) => {
   // (same idiom as tasks.mjs for Scheduled Tasks custom table).
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
-  const wrapCount = await page.locator("#prompts .overflow-x-auto").count();
+  const wrapCount = await page.locator(
+    "#prompts-mission-types .overflow-x-auto",
+  ).count();
   check("mobile: override editor has an overflow-x-auto scrollport", wrapCount >= 1);
 });
 

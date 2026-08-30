@@ -23,6 +23,7 @@ import { templateSoftWarnings } from "../lib/templateSoftWarnings.js";
 // IMMEDIATELY (modal Save); only the ACTIVE selection rides the unified
 // config draft. CAKE-150: per-PMO overrides on cfg.pmos[i].active_prompt_templates.
 // CAKE-166: slim active rows + one Manage-templates modal (no Workflow switcher).
+// CAKE-173: three Policies-style domain cards (Templates / Mission Types / Dev Types).
 
 function TemplateManagerModal({
   data,
@@ -490,143 +491,157 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
     }
   };
 
+  // CAKE-173: three Policies-style domain cards (Templates / Mission Types /
+  // Dev Types). Hooks, actives, overrides, and the modal stay at this root —
+  // only the JSX shell splits. First card id matches the Fleet route key.
   return (
-    <Section id="prompts" title="Prompts"
-      description="The playbook DevCake sends a Dev for each Mission Type."
-      help="The built-in default is read-only and refreshed on upgrade — open Manage templates to create a copy, then select it as active."
-      actions={
-        <>
-          <ImmediateBadge text="templates apply immediately; the active selection saves with the page" />
-          <Button data-testid="manage-templates"
-            disabled={!data}
-            onClick={() => setManagerOpen(true)}>
-            Manage templates
-          </Button>
-        </>
-      }>
-      {!data && (loadFailed ? (
-        <p className="text-sm text-red-700 dark:text-red-300">
-          Couldn&apos;t load the prompt templates.{" "}
-          <button type="button" onClick={refresh}
-            className="font-medium underline underline-offset-2">
-            Retry
-          </button>
-        </p>
-      ) : (
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading templates…</p>
-      ))}
-      {data && (
-        <h4 className="border-b border-neutral-200 pb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-          Mission Types
-        </h4>
-      )}
-      {data && Object.keys(data.templates || {}).map((mt) => (
-        <SlimActiveRow key={mt} name={mt}
-          active={activeOf(mt)}
-          entries={data.templates?.[mt] || []}
-          onChange={(v) => setField(`cfg.active_prompt_templates.${mt}`, v)} />
-      ))}
-      {data && pmos.length > 0 && (
-        <>
-          <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-            Per-PMO overrides
-          </h4>
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            Exceptions only — boards that inherit all four globals stay
-            collapsed. Inherit follows the global active above (live: a later
-            global edit applies here too).
+    <>
+      <Section id="prompts" title="Templates"
+        description="Create, edit, or delete playbook copies. The built-in default stays read-only."
+        help="The built-in default is read-only and refreshed on upgrade — open Manage templates to create a copy, then select it as active on the cards below."
+        actions={
+          <>
+            <ImmediateBadge text="template edits apply immediately" />
+            <Button data-testid="manage-templates"
+              disabled={!data}
+              onClick={() => setManagerOpen(true)}>
+              Manage templates
+            </Button>
+          </>
+        }>
+        {!data && (loadFailed ? (
+          <p className="text-sm text-red-700 dark:text-red-300">
+            Couldn&apos;t load the prompt templates.{" "}
+            <button type="button" onClick={refresh}
+              className="font-medium underline underline-offset-2">
+              Retry
+            </button>
           </p>
-          {pmos.map((p, i) => {
-            const label = p.name || `PMO #${i + 1}`;
-            const overrides = p.active_prompt_templates || {};
-            const hasOverride = pmoHasPromptOverride(p);
-            const open = expandedOverrides.has(i);
-            if (!open) {
+        ) : (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading templates…</p>
+        ))}
+      </Section>
+
+      <Section id="prompts-mission-types" title="Mission Types"
+        description="Global active template per Mission Type, plus optional per-PMO exceptions. Active selection saves with the page.">
+        {data && Object.keys(data.templates || {}).map((mt) => (
+          <SlimActiveRow key={mt} name={mt}
+            active={activeOf(mt)}
+            entries={data.templates?.[mt] || []}
+            onChange={(v) => setField(`cfg.active_prompt_templates.${mt}`, v)} />
+        ))}
+        {data && pmos.length > 0 && (
+          <>
+            <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+              Per-PMO overrides
+            </h4>
+            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+              Exceptions only — boards that inherit all four globals stay
+              collapsed. Inherit follows the global active above (live: a later
+              global edit applies here too).
+            </p>
+            {pmos.map((p, i) => {
+              const label = p.name || `PMO #${i + 1}`;
+              const overrides = p.active_prompt_templates || {};
+              const hasOverride = pmoHasPromptOverride(p);
+              const open = expandedOverrides.has(i);
+              if (!open) {
+                return (
+                  <div key={p.name || i}
+                    className="flex items-stretch rounded-card border border-neutral-200 dark:border-neutral-800">
+                    <button type="button"
+                      data-testid="pmo-prompt-override-summary"
+                      aria-label={`Expand prompt overrides for ${label}`}
+                      onClick={() => toggleOverrideCard(i)}
+                      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-neutral-900">
+                      <span className="font-mono text-sm font-semibold">{label}</span>
+                      <span className={`text-xs ${hasOverride
+                        ? "text-neutral-600 dark:text-neutral-300"
+                        : "text-neutral-400 dark:text-neutral-500"}`}>
+                        {pmoOverrideSummaryText(overrides)}
+                      </span>
+                      <span aria-hidden className="ml-auto shrink-0 text-xs text-neutral-400">▸</span>
+                    </button>
+                  </div>
+                );
+              }
               return (
                 <div key={p.name || i}
-                  className="flex items-stretch rounded-card border border-neutral-200 dark:border-neutral-800">
-                  <button type="button"
-                    data-testid="pmo-prompt-override-summary"
-                    aria-label={`Expand prompt overrides for ${label}`}
-                    onClick={() => toggleOverrideCard(i)}
-                    className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-neutral-900">
-                    <span className="font-mono text-sm font-semibold">{label}</span>
-                    <span className={`text-xs ${hasOverride
-                      ? "text-neutral-600 dark:text-neutral-300"
-                      : "text-neutral-400 dark:text-neutral-500"}`}>
-                      {pmoOverrideSummaryText(overrides)}
+                  className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <button type="button"
+                        aria-label={`Collapse prompt overrides for ${label}`}
+                        title="Collapse to a summary row"
+                        onClick={() => toggleOverrideCard(i)}
+                        className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
+                        ▾
+                      </button>
+                      <h4 className="text-sm font-semibold">
+                        Overrides — <span className="font-mono">{label}</span>
+                        <Help text="A row set here replaces the global active template for this PMO instance only. Inherit rows follow the global Mission Types actives above." />
+                      </h4>
                     </span>
-                    <span aria-hidden className="ml-auto shrink-0 text-xs text-neutral-400">▸</span>
-                  </button>
+                  </div>
+                  <div className="w-full min-w-0 max-w-full overflow-x-auto">
+                    <table className="w-full min-w-[28rem] text-sm">
+                      <tbody>
+                        {MISSION_TYPES.map((mt) => {
+                          const entries = data.templates?.[mt] || [];
+                          const override = overrides[mt] || "";
+                          return (
+                            <tr key={mt}
+                              className="border-t border-neutral-100 dark:border-neutral-800">
+                              <td className="w-32 py-2 font-mono text-xs font-semibold">{mt}</td>
+                              <td className="py-2">
+                                <Select value={override}
+                                  aria-label={`${label} ${mt} template`}
+                                  onChange={(e) => setPmoOverride(i, p, mt, e.target.value)}>
+                                  <option value="">
+                                    Inherit (global: {activeOf(mt)})
+                                  </option>
+                                  {entries.map((t) => (
+                                    <option key={t.name} value={t.name}>
+                                      {t.name}{t.builtin ? " (built-in)" : ""}
+                                    </option>
+                                  ))}
+                                </Select>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               );
-            }
-            return (
-              <div key={p.name || i}
-                className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="flex items-center gap-2">
-                    <button type="button"
-                      aria-label={`Collapse prompt overrides for ${label}`}
-                      title="Collapse to a summary row"
-                      onClick={() => toggleOverrideCard(i)}
-                      className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
-                      ▾
-                    </button>
-                    <h4 className="text-sm font-semibold">
-                      Overrides — <span className="font-mono">{label}</span>
-                      <Help text="A row set here replaces the global active template for this PMO instance only. Inherit rows follow the global Mission Types table above." />
-                    </h4>
-                  </span>
-                </div>
-                <div className="w-full min-w-0 max-w-full overflow-x-auto">
-                  <table className="w-full min-w-[28rem] text-sm">
-                    <tbody>
-                      {MISSION_TYPES.map((mt) => {
-                        const entries = data.templates?.[mt] || [];
-                        const override = overrides[mt] || "";
-                        return (
-                          <tr key={mt}
-                            className="border-t border-neutral-100 dark:border-neutral-800">
-                            <td className="w-32 py-2 font-mono text-xs font-semibold">{mt}</td>
-                            <td className="py-2">
-                              <Select value={override}
-                                aria-label={`${label} ${mt} template`}
-                                onChange={(e) => setPmoOverride(i, p, mt, e.target.value)}>
-                                <option value="">
-                                  Inherit (global: {activeOf(mt)})
-                                </option>
-                                {entries.map((t) => (
-                                  <option key={t.name} value={t.name}>
-                                    {t.name}{t.builtin ? " (built-in)" : ""}
-                                  </option>
-                                ))}
-                              </Select>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            );
-          })}
-        </>
-      )}
-      {data && (
-        <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-          Dev Types
-        </h4>
-      )}
-      {data && Object.keys(data.dev_types || {}).map((n) => (
-        <SlimActiveRow key={`dev-${n}`} name={n}
-          subtitle="(Dev Type identifying prompt)"
-          active={activeDevOf(n)}
-          entries={data.dev_types?.[n] || []}
-          onChange={(v) => setField(`cfg.active_devtype_prompts.${n}`, v)}
-          ariaLabel={`${n} active Dev Type prompt`} />
-      ))}
+            })}
+          </>
+        )}
+        {!data && (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            Waiting for templates to load…
+          </p>
+        )}
+      </Section>
+
+      <Section id="prompts-dev-types" title="Dev Types"
+        description="Identifying-prompt active per Dev Type. Active selection saves with the page.">
+        {data && Object.keys(data.dev_types || {}).map((n) => (
+          <SlimActiveRow key={`dev-${n}`} name={n}
+            subtitle="(Dev Type identifying prompt)"
+            active={activeDevOf(n)}
+            entries={data.dev_types?.[n] || []}
+            onChange={(v) => setField(`cfg.active_devtype_prompts.${n}`, v)}
+            ariaLabel={`${n} active Dev Type prompt`} />
+        ))}
+        {!data && (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            Waiting for templates to load…
+          </p>
+        )}
+      </Section>
+
       {managerOpen && data && (
         <TemplateManagerModal
           data={data}
@@ -634,6 +649,6 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
           onClose={() => setManagerOpen(false)}
           onChanged={refresh} />
       )}
-    </Section>
+    </>
   );
 }

@@ -448,9 +448,11 @@ class Steward(BaseModel):
     and discovery routing (ADR-0033). Manual-only by default
     (enabled=False → the admin "Run now" button); the periodic service is
     opt-in. dev_type must name an existing Dev Type whenever enabled — the
-    seeded steward (EXECUTE-grade / Opus-class) is the default vehicle."""
+    wizard-created ``steward`` (EXECUTE-grade) is the usual vehicle."""
     enabled: bool = False
     interval_minutes: int = Field(60, ge=1)
+    # Name hint only until first-setup / operator create; validation runs
+    # when enabled (empty roster + disabled steward is a legal first boot).
     dev_type: str | None = "steward"
     # operator-owned instruction text; `{mission_table}` marks where the
     # live mission list lands (appended automatically when omitted)
@@ -671,7 +673,7 @@ class DevType(BaseModel):
     # Card names; deduped, order preserved. Empty default.
     memory_repos: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
-    model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
+    model: str = ""  # harness model override; "" = harness default
     # OpenAI-compatible / Anthropic-compatible backend. Empty = vendor
     # default (no aim). Non-empty → entrypoint aim() writes env/argv/files.
     backend_base_url: str = ""
@@ -814,12 +816,26 @@ class DevType(BaseModel):
         return v
 
 
-DEFAULT_ASSIGNMENTS = {
-    "ONBOARD": Assignment(dev_type="judgment", extra_cli_args="--max-turns 15"),
-    "PLAN": Assignment(dev_type="judgment"),
-    "EXECUTE": Assignment(dev_type="implementer"),
-    "REVIEW": Assignment(dev_type="judgment"),
+# Mission types that appear in a complete (staffed) global assignment map.
+ASSIGNMENT_MISSION_TYPES = ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")
+
+# Fresh install: unstaffed until first-setup wizard (or manual assignments).
+# Deleting the `assignments:` key restores this empty map — not vendor-named
+# house seeds (CAKE-164).
+DEFAULT_ASSIGNMENTS: dict[str, Assignment] = {}
+
+# Written only by POST /dev-types/first-setup — never a boot seeder.
+WIZARD_ASSIGNMENTS = {
+    "ONBOARD": Assignment(dev_type="judge", extra_cli_args="--max-turns 15"),
+    "PLAN": Assignment(dev_type="judge"),
+    "EXECUTE": Assignment(dev_type="executor"),
+    "REVIEW": Assignment(dev_type="judge"),
 }
+
+
+class AssignmentUnstaffed(LookupError):
+    """Global assignment map has no row for this mission type (fresh install
+    before first-setup, or operator cleared assignments)."""
 
 
 def validate_assignment_map(rows: dict[str, Assignment], *,
@@ -830,12 +846,16 @@ def validate_assignment_map(rows: dict[str, Assignment], *,
     per-instance override validator, and PUT /assignments. The old split —
     endpoint-only completeness, no model rule — let a hand-edited
     config.yaml boot green and KeyError inside the poll cycle at
-    assignment_for()."""
-    unknown = set(rows) - set(DEFAULT_ASSIGNMENTS)
+    assignment_for().
+
+    Empty map is legal when require_complete (unstaffed first boot /
+    CAKE-164). A non-empty map must still staff every mission type.
+    """
+    unknown = set(rows) - set(ASSIGNMENT_MISSION_TYPES)
     if unknown:
         raise ValueError(
             f"{context}: unknown mission type(s) {sorted(unknown)} — "
-            f"valid keys: {sorted(DEFAULT_ASSIGNMENTS)}")
+            f"valid keys: {sorted(ASSIGNMENT_MISSION_TYPES)}")
     empty = sorted(mt for mt, a in rows.items() if not a.dev_type)
     if empty:
         if require_complete:
@@ -845,13 +865,13 @@ def validate_assignment_map(rows: dict[str, Assignment], *,
         raise ValueError(
             f"{context}[{', '.join(empty)}]: an override must name a "
             f"Dev Type — remove the key to inherit the global assignment")
-    if require_complete:
-        missing = sorted(set(DEFAULT_ASSIGNMENTS) - set(rows))
+    if require_complete and rows:
+        missing = sorted(set(ASSIGNMENT_MISSION_TYPES) - set(rows))
         if missing:
             raise ValueError(
                 f"{context}: unassigned mission types {missing} — add rows "
                 f"for them, or delete the `assignments:` key entirely to "
-                f"restore the defaults")
+                f"restore the unstaffed empty map")
 
 
 def assignment_for(config: "AppConfig", instance: PMOInstance,
@@ -859,9 +879,18 @@ def assignment_for(config: "AppConfig", instance: PMOInstance,
     """The Assignment staffing `mission_type` on `instance` (ADR-0019): the
     instance's override row wholesale when present, else the global row.
     Never mixes fields across the two — extra_cli_args are harness-specific
-    and belong to whichever row named the Dev Type."""
+    and belong to whichever row named the Dev Type. Unstaffed global map
+    raises AssignmentUnstaffed (never a bare KeyError mid-poll)."""
     override = instance.assignments.get(mission_type)
-    return override if override is not None else config.assignments[mission_type]
+    if override is not None:
+        return override
+    try:
+        return config.assignments[mission_type]
+    except KeyError as e:
+        raise AssignmentUnstaffed(
+            f"{mission_type} has no assignment — run first setup or set "
+            f"assignments under Fleet → Mission Types"
+        ) from e
 
 
 def validate_active_prompt_template_map(rows: dict[str, str] | None, *,
@@ -899,17 +928,18 @@ def active_prompt_template_for(config: "AppConfig", instance: PMOInstance,
         return override
     return (config.active_prompt_templates or {}).get(mission_type)
 
-# docs/03 §7 — canonical identifying prompts (seed data; admin-editable)
-JUDGMENT_PROMPT = (
-    "You are **Judgment**, DevCake's judgment-heavy engineer. You assess, plan, and "
+# docs/03 §7 — canonical identifying prompts for wizard-created roles
+# (admin-editable after create). Not a boot seeder (CAKE-164).
+JUDGE_PROMPT = (
+    "You are **Judge**, DevCake's judgment-heavy engineer. You assess, plan, and "
     "review software work with the skepticism of a staff engineer who has been burned "
     "before. You are precise about scope: you do exactly what your current mission "
     "playbook asks — no more. You never invent requirements, you flag what you cannot "
     "verify, and you write conclusions that a teammate can act on without asking "
     "follow-up questions."
 )
-IMPLEMENTER_PROMPT = (
-    "You are **Implementer**, DevCake's implementation engineer. You turn plans into "
+EXECUTOR_PROMPT = (
+    "You are **Executor**, DevCake's implementation engineer. You turn plans into "
     "working, tested code. You follow the plan you are given; where reality contradicts "
     "the plan, you implement the smallest sound deviation and document it prominently "
     "in your summary. You match the conventions of the codebase you are in, you run "
@@ -925,22 +955,10 @@ STEWARD_PROMPT = (
     "propose nothing. Do exactly what your current mission playbook asks."
 )
 
-DEFAULT_DEV_TYPES = [
-    DevType(name="judgment", harness_template="claude-code",
-            identifying_prompt=JUDGMENT_PROMPT, max_concurrency=2,
-            model="claude-fable-5"),  # founder decision 2026-07-12: judgment runs on Fable
-    DevType(name="implementer", harness_template="grok-build",
-            identifying_prompt=IMPLEMENTER_PROMPT, max_concurrency=2),
-    # EXECUTE-grade for BOTH steward duties (ADR-0033 D10, founder ruling):
-    # a wrong blocked_by edge silently reorders a family's execution, and
-    # discovery routing is family-wide relevance judgment — the steward
-    # class carries at least the bar EXECUTE demands. Same harness/
-    # credentials as judgment; fresh boots only (existing deployments keep
-    # their configured staffing and upgrade via the admin UI).
-    DevType(name="steward", harness_template="claude-code",
-            identifying_prompt=STEWARD_PROMPT, max_concurrency=1,
-            model="claude-opus-5"),
-]
+# Empty on purpose (CAKE-164): fresh installs ship no vendor-named roster.
+# The first-setup wizard creates executor / judge / steward on demand.
+# Existing YAML under /data/config/dev_types/ still loads; never renamed.
+DEFAULT_DEV_TYPES: list[DevType] = []
 
 
 class AppConfig(BaseModel):
@@ -954,18 +972,15 @@ class AppConfig(BaseModel):
     schema_version: int = 4
     pmos: list[PMOInstance] = Field(default_factory=list)
     repos: list[RepoInstance] = Field(default_factory=list)
-    # deep copy: rename_dev_type edits rows IN PLACE, so shared Assignment
-    # objects would write through to DEFAULT_ASSIGNMENTS for the process
-    # lifetime and leak into every later AppConfig()
-    assignments: dict[str, Assignment] = Field(
-        default_factory=lambda: {k: v.model_copy()
-                                 for k, v in DEFAULT_ASSIGNMENTS.items()})
+    # Fresh install is unstaffed (CAKE-164). WIZARD_ASSIGNMENTS is applied by
+    # first-setup only; deep-copy there — rename_dev_type edits rows in place.
+    assignments: dict[str, Assignment] = Field(default_factory=dict)
 
     @field_validator("assignments")
     @classmethod
     def _assignments_valid(cls, v):
-        # the global map must staff EVERY mission type with a named Dev Type
-        # (SEC-3: assignment_for indexes it directly on the dispatch path)
+        # Empty = unstaffed (legal). Non-empty must staff every mission type
+        # (SEC-3: assignment_for raises AssignmentUnstaffed on a miss).
         validate_assignment_map(v, require_complete=True,
                                 context="assignments")
         return v
@@ -1606,10 +1621,9 @@ def load_dev_types() -> dict[str, DevType]:
             _atomic_yaml(target, DevType.model_validate(data).model_dump())
             log.info("config: migrated dev type mapper → steward")
         legacy.unlink()
-    # name-based top-up: a default Dev Type is (re-)seeded whenever its file is
-    # missing, so existing deployments gain new defaults on boot. Customize
-    # defaults by EDITING them — a deleted default returns next boot (docs/02 §6).
-    for dt in DEFAULT_DEV_TYPES:
+    # CAKE-164: no house Dev Type top-up. Fresh volumes stay empty until the
+    # first-setup wizard (or manual create). Existing YAML still loads.
+    for dt in DEFAULT_DEV_TYPES:  # kept as an empty extension hook
         p = dt_dir / f"{dt.name}.yaml"
         if not p.exists():
             _atomic_yaml(p, dt.model_dump())

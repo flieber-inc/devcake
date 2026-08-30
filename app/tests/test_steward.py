@@ -150,7 +150,7 @@ def test_config_defaults():
     assert cfg.intake_paused is False
     assert cfg.steward.enabled is False           # manual-only by default
     assert cfg.steward.interval_minutes == 60
-    assert cfg.steward.dev_type == "steward"   # seeded cheap vehicle
+    assert cfg.steward.dev_type == "steward"   # name hint until first-setup
     # merge doctrine lives on RepoInstance (ADR-0020 / docs/03 §4.1)
     repo = RepoInstance(name="main", url="https://github.com/o/r")
     assert repo.auto_merge is False

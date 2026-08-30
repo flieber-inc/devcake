@@ -19,11 +19,13 @@ Every step mirrors the project's integration-test shape.
   `contents` and `pull_requests` read/write. Prefer also a **read-only PAT** for
   non-EXECUTE stages. Enable **branch protection** on the default branch before
   production-ish use (`13` §8a).
-- **Both default-staffing credentials** — default Mission Types send
-  ONBOARD / PLAN / REVIEW to Dev Type **`judgment`** (`claude-code`) and
-  EXECUTE to **`implementer`** (`grok-build`). A literal reader needs **both**
-  before creating the mission; missing Claude fails judgment stages, missing
-  Grok fails EXECUTE. Registry table: [`08-harness-templates.md`](../08-harness-templates.md) §4.
+- **Credentials for the harnesses you staff** — a fresh install ships an
+  empty Dev Type roster. Run **First setup** on Fleet → Dev Types (or
+  Overview) to create `judge` / `executor` / `steward` and wire assignments,
+  then store credentials for each harness you chose. If you keep the common
+  split (Judge/Steward on `claude-code`, Executor on `grok-build`), you need
+  both Claude and Grok credentials before creating the mission. Registry
+  table: [`08-harness-templates.md`](../08-harness-templates.md) §4.
   - Claude Code: `claude setup-token` → paste `CLAUDE_CODE_OAUTH_TOKEN` in
     Fleet → Dev Types (or `ANTHROPIC_API_KEY`).
   - Grok Build: device-code OAuth via DevCake in step 3 (or `XAI_API_KEY`).
@@ -73,9 +75,9 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
    missions take the **zero-repo** path: bundled internal Gitea with forced
    auto-merge — not a GitHub PR ([operator-drill](operator-drill.md) §3;
    ADR-0010 / `docs/06`).
-4. **Fleet → Dev Types** — set **both** harness credentials from
-   *What you need* (Claude for `judgment`, Grok OAuth or key for
-   `implementer`).
+4. **Fleet → Dev Types** — if the roster is empty, run **First setup**; then
+   set harness credentials from *What you need* on each created Dev Type
+   (e.g. Claude for `judge`/`steward`, Grok OAuth or key for `executor`).
 5. On **Repositories**, leave the **external** card's **`auto_merge` OFF** for
    this tutorial (after REVIEW approve you expect `DEVCAKE-MERGE` and merge
    with `gh` yourself).
@@ -97,9 +99,10 @@ Top-level sidebar items (Connections expands to three pages):
 
 ## Step 3 — Log Grok in (one time)
 
-On Fleet → Dev Types, **implementer** → **Connect via OAuth…** — dialog shows URL + code.
-(Or `./scripts/grok_login.sh` — defaults to the seeded `implementer`; override with
-`DEVCAKE_DEV_TYPE` or a positional Dev Type name.) Session is DevCake's own. Device-code OAuth
+On Fleet → Dev Types, open the grok-build Dev Type (often `executor` after
+first-setup) → **Connect via OAuth…** — dialog shows URL + code.
+(Or `./scripts/grok_login.sh <dev-type>` — pass the operator-chosen name;
+`DEVCAKE_DEV_TYPE` also works.) Session is DevCake's own. Device-code OAuth
 rides the operator's **xAI account billing / subscription quota** (same trust
 as pasting an `XAI_API_KEY`). Grok's feed cost is an **app-side rate-card
 estimate** (`08` §5 / ADR-0021) — the harness does not report billed USD.

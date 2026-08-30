@@ -365,29 +365,29 @@ def test_devtype_prompt_store_seed_resolve_roundtrip(monkeypatch, tmp_path):
     trio, resolution falls back Development → the stored field."""
     from devcake.config import DevType
     t = _tpl(monkeypatch, tmp_path)
-    dts = {"judgment": DevType(name="judgment", harness_template="claude-code",
-                               identifying_prompt="You are judgment."),
+    dts = {"judge": DevType(name="judge", harness_template="claude-code",
+                            identifying_prompt="You are judge."),
            "customdev": DevType(name="customdev", harness_template="codex",
                                 identifying_prompt="Custom prefix.")}
     t.seed_devtype_prompts(dts)
     listing = t.list_devtype_prompts(dts)
-    assert {e["name"] for e in listing["judgment"]} == {"Development",
-                                                        "Customer Success"}
+    assert {e["name"] for e in listing["judge"]} == {"Development",
+                                                     "Customer Success"}
     assert {e["name"] for e in listing["customdev"]} == {"Development"}
     # seeded once from live prompt; NOT re-canonicalized on reseed
-    t.save_devtype_prompt("judgment", "Development", "Edited by operator.")
+    t.save_devtype_prompt("judge", "Development", "Edited by operator.")
     t.seed_devtype_prompts(dts)
-    assert t.resolve_devtype_prompt("judgment", None, "fb")[0] == "Edited by operator."
+    assert t.resolve_devtype_prompt("judge", None, "fb")[0] == "Edited by operator."
     # CS resolves; a ghost name falls back to Development with a warning
-    text, warn = t.resolve_devtype_prompt("judgment", "Customer Success", "fb")
+    text, warn = t.resolve_devtype_prompt("judge", "Customer Success", "fb")
     assert "customer-success" in text and warn is None
-    text, warn = t.resolve_devtype_prompt("judgment", "ghost", "fb")
+    text, warn = t.resolve_devtype_prompt("judge", "ghost", "fb")
     assert text == "Edited by operator." and "ghost" in warn
     # unknown dev type dir → straight to the stored-field fallback
     assert t.resolve_devtype_prompt("nodir", "Development", "fb")[0] == "fb"
     from devcake.config import AppConfig
     cfg = AppConfig()
-    cfg.active_devtype_prompts = {"judgment": "ghost"}
+    cfg.active_devtype_prompts = {"judge": "ghost"}
     assert len(t.devtype_prompt_warnings(cfg, dts)) == 1
 
 

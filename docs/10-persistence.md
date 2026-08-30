@@ -141,20 +141,21 @@ skill_sources: []                    # dedicated skills connections (ADR-0016 ad
                                      # VALUES are GUI-stored: /data/secrets/connections/
                                      # skill-{name}.json (token_ro preferred, token fallback)
 
-assignments:                         # every Mission Type must be assigned to exactly one Dev Type.
-  ONBOARD:                           #   extra_cli_args are appended verbatim to the harness invocation —
-    dev_type: judgment               #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
-    extra_cli_args: "--max-turns 15" # seeded default: bounded-effort triage for claude-code; edit/clear freely
+assignments:                         # fresh install: omit or {} (unstaffed) until first-setup / manual edit.
+  ONBOARD:                           # after first-setup (example names): judge / executor (02 §6).
+    dev_type: judge                  #   extra_cli_args are appended verbatim to the harness invocation —
+    extra_cli_args: "--max-turns 15" #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
+                                     #   wizard keeps --max-turns 15 on ONBOARD; edit/clear freely.
                                      #   --max-turns is claude-code + grok-build only; codex 0.147.0 has NO
                                      #   turn cap, so no args value bounds a codex Dev (08 §1, 15 §2a).
   PLAN:
-    dev_type: judgment
+    dev_type: judge
     extra_cli_args: ""
   EXECUTE:
-    dev_type: implementer
+    dev_type: executor
     extra_cli_args: ""
   REVIEW:
-    dev_type: judgment
+    dev_type: judge
     extra_cli_args: ""
 
 concurrency:

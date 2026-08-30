@@ -734,41 +734,46 @@ def test_pmo_assignment_override_keys_validated():
     assert PMOInstance(name="x", team_key="T").assignments == {}
 
 
-def test_default_assignments_are_copies_not_shared_objects():
-    """The assignments default factory must DEEP-copy DEFAULT_ASSIGNMENTS:
-    with shared Assignment objects, an in-place edit (rename_dev_type does
-    `a.dev_type = new`) on one defaults-shaped config writes through to the
-    module constant and every later AppConfig() for the process lifetime."""
-    from devcake.config import DEFAULT_ASSIGNMENTS
-    a = AppConfig()
-    assert a.assignments["EXECUTE"] is not DEFAULT_ASSIGNMENTS["EXECUTE"]
-    a.assignments["EXECUTE"].dev_type = "mutated"
-    assert DEFAULT_ASSIGNMENTS["EXECUTE"].dev_type == "implementer"
-    assert AppConfig().assignments["EXECUTE"].dev_type == "implementer"
+def test_default_assignments_are_unstaffed_empty_map():
+    """CAKE-164: fresh AppConfig() ships an empty assignment map; the wizard
+    constant is the only judge/executor staffing template (deep-copied on
+    apply so rename_dev_type in-place edits cannot leak into it)."""
+    from devcake.config import DEFAULT_ASSIGNMENTS, WIZARD_ASSIGNMENTS
+    assert DEFAULT_ASSIGNMENTS == {}
+    assert AppConfig().assignments == {}
+    wiz = {k: v.model_copy() for k, v in WIZARD_ASSIGNMENTS.items()}
+    wiz["EXECUTE"].dev_type = "mutated"
+    assert WIZARD_ASSIGNMENTS["EXECUTE"].dev_type == "executor"
 
 
 def test_assignment_for_resolves_override_wholesale_or_global():
-    from devcake.config import assignment_for
+    from devcake.config import Assignment, assignment_for
     base = _base()
-    # global ONBOARD carries harness-specific args; the cs instance overrides
-    # ONBOARD to another dev type with NO args
+    # Staff a global map (fresh default is unstaffed); cs overrides ONBOARD.
+    base["assignments"] = {
+        "ONBOARD": {"dev_type": "judge", "extra_cli_args": "--max-turns 15"},
+        "PLAN": {"dev_type": "judge", "extra_cli_args": ""},
+        "EXECUTE": {"dev_type": "executor", "extra_cli_args": ""},
+        "REVIEW": {"dev_type": "judge", "extra_cli_args": ""},
+    }
     base["pmos"] = [dict(base["pmos"][0], name="eng", team_key="ENG"),
                     dict(base["pmos"][0], name="cs", team_key="CS",
-                         assignments={"ONBOARD": {"dev_type": "implementer",
+                         assignments={"ONBOARD": {"dev_type": "executor",
                                                   "extra_cli_args": ""}})]
     cfg = AppConfig.model_validate(base)
     eng, cs = cfg.pmos
     # no override → the global row, args included
     a = assignment_for(cfg, eng, "ONBOARD")
-    assert (a.dev_type, a.extra_cli_args) == ("judgment", "--max-turns 15")
+    assert (a.dev_type, a.extra_cli_args) == ("judge", "--max-turns 15")
     # override → the override row WHOLESALE: empty args stay empty, never
     # inherited from the global row (flags are harness-specific — mixing a
-    # judgment-harness flag into an implementer run is the exact mismatch
+    # judge-harness flag into an executor run is the exact mismatch
     # the admin UI warns about)
     a = assignment_for(cfg, cs, "ONBOARD")
-    assert (a.dev_type, a.extra_cli_args) == ("implementer", "")
+    assert (a.dev_type, a.extra_cli_args) == ("executor", "")
     # non-overridden type on the overriding instance still inherits
-    assert assignment_for(cfg, cs, "EXECUTE").dev_type == "implementer"
+    assert assignment_for(cfg, cs, "EXECUTE").dev_type == "executor"
+    assert isinstance(cfg.assignments["EXECUTE"], Assignment)
 
 
 def test_active_prompt_template_for_inherits_global_or_override():
@@ -844,11 +849,11 @@ def test_global_assignments_validated_at_the_model(tmp_path):
         "DEPLOY": {"dev_type": "judgment", "extra_cli_args": ""}}
     with pytest.raises(Exception, match="unknown mission type"):
         AppConfig.model_validate(base)
-    # deleting the key restores the default factory — the remediation is real
+    # deleting the key restores the unstaffed empty map (CAKE-164)
     base["assignments"] = None
     del base["assignments"]
     cfg = AppConfig.model_validate(base)
-    assert set(cfg.assignments) == {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"}
+    assert cfg.assignments == {}
 
 
 def test_put_assignments_rejects_unknown_mission_type_key(

@@ -10,6 +10,7 @@ import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "./ClearSecretsDialog.js
 import DevTypeAvatar, { useCredsReady, clearCredsCache } from "./DevTypeAvatar.jsx";
 import DevTypeEditor from "./DevTypeEditor.jsx";
 import NewDevTypeDialog from "./NewDevTypeDialog.jsx";
+import FirstSetupDialog from "./FirstSetupDialog.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // ── OAuth wizard (docs/16 M6): device-code flow driven from the UI ──────────
@@ -152,6 +153,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
   const [oauthFor, setOauthFor] = useState(null);
   const [editFor, setEditFor] = useState(null);
   const [addDev, setAddDev] = useState(false);
+  const [firstSetup, setFirstSetup] = useState(false);
   const [clearSecrets, setClearSecrets] = useState(false);
   const [secretsEpoch, setSecretsEpoch] = useState(0);
   const [renameFor, setRenameFor] = useState(null);
@@ -197,6 +199,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
   // editFor at any moment — the editor only mounts while the name exists
   const editing = editFor && dr.draft.devTypes[editFor] && dr.server.devTypes[editFor]
     ? editFor : null;
+  const rosterEmpty = names.length === 0;
 
   return (
     <>
@@ -216,6 +219,23 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
             ]} />
           </>
         }>
+        {rosterEmpty && (
+          <div className="mb-4 rounded-card border border-accent-200 bg-accent-50/60 p-4 dark:border-accent-900 dark:bg-accent-950/30">
+            <p className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+              First setup? Auto-create your first Devs.
+            </p>
+            <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
+              A fresh install ships with an empty roster. One click creates
+              Executor, Judge, and Steward, pins CLI versions, and wires
+              Mission Type assignments — then add credentials on each row.
+            </p>
+            <div className="mt-3">
+              <Button onClick={() => setFirstSetup(true)}>
+                Auto-create your first Devs
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[36rem] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
@@ -323,6 +343,11 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
       {addDev && <NewDevTypeDialog harnesses={harnesses}
         onClose={() => setAddDev(false)}
         onCreated={async (nm) => { await reload(); setEditFor(nm); }} />}
+      {firstSetup && (
+        <FirstSetupDialog harnesses={harnesses}
+          onClose={() => setFirstSetup(false)}
+          onCreated={async () => { await reload(); }} />
+      )}
       {clearSecrets && (
         <ClearSecretsDialog
           context="dev-types"

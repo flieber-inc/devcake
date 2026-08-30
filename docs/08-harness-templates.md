@@ -16,14 +16,17 @@ another crosses the registry, Bake/image, a dialect module, captures, tests,
 and this document (§9); config accepts registry ids automatically (docs/16 H2).
 Changing a Dev Type's model does not add a template.
 
-| Template id | Harness CLI | Empty `DevType.model` resolves to | Seeded Dev Types |
+| Template id | Harness CLI | Empty `DevType.model` resolves to | Notes |
 |---|---|---|---|
-| `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-opus-5` (ADR-0033 D10) |
-| `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
-| `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
-| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | *(none seeded)* |
-| `opencode` | OpenCode (`opencode`, `opencode-ai` 1.18.18) | CLI default (multi-provider) | *(none seeded)* |
-| `qwen-code` | Qwen Code (`qwen`, `@qwen-code/qwen-code` 0.21.12) | CLI default (multi-provider) | *(none seeded)* |
+| `claude-code` | Claude Code (`claude`) | CLI default | First-setup leaves model blank unless the operator fills it |
+| `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | Same — empty model → registry default |
+| `codex` | Codex CLI (`codex`) | CLI default | |
+| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | |
+| `opencode` | OpenCode (`opencode`, `opencode-ai` 1.18.18) | CLI default (multi-provider) | |
+| `qwen-code` | Qwen Code (`qwen`, `@qwen-code/qwen-code` 0.21.12) | CLI default (multi-provider) | |
+
+Fresh installs ship **no** seeded Dev Types; the first-setup wizard creates
+`judge` / `executor` / `steward` with operator-chosen harnesses (`02` §6).
 
 Every registry template is **launch-supported**. The bake verb is the same
 for all six: compile the image, run the hermetic probe matrix, write a

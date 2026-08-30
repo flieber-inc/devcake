@@ -202,7 +202,12 @@ class FakeForge:
 
 def make_mgr(tmp_path, m, forge=None):
     from fakes import make_mission_manager
-    cfg = AppConfig()
+    from devcake.config import Assignment
+    # Staff the test vehicle explicitly — fresh AppConfig() is unstaffed
+    # (CAKE-164); dispatch reads assignments via assignment_for.
+    cfg = AppConfig(assignments={
+        mt: Assignment(dev_type="senior-dev")
+        for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")})
     fake = FakePMO(m)
     mgr = make_mission_manager(
         tmp_path, pmo=fake, forge=forge, config=cfg,

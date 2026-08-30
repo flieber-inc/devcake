@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from ...config import assignment_for
+from ...config import AssignmentUnstaffed, assignment_for
 from .. import backend_health
 from ..model import (LABEL_FAILED, LABEL_SKIP, Mission,
                      PRIORITY_RANK, derive, find_cycles)
@@ -104,8 +104,12 @@ async def schedule(mgr, missions: list[Mission],
             continue
         if mission.repo in mgr.forges.breakers:
             continue  # this repo's breaker is latched (docs/15 §4)
-        assignment = assignment_for(mgr.config, mgr.instance,
-                                    d.mission_type.value)
+        try:
+            assignment = assignment_for(mgr.config, mgr.instance,
+                                        d.mission_type.value)
+        except AssignmentUnstaffed as e:
+            mgr.blocked_reasons[mission.pmo_id] = str(e)
+            continue
         dev_type = mgr.dev_types.get(assignment.dev_type)
         if dev_type is None:
             # surface WHY (M10 repo-gate precedent): overrides skip PUT-time

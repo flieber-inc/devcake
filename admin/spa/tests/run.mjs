@@ -28,6 +28,7 @@ const SUITES = [
   "list_window_helpers.mjs",
   "cake162_polish.mjs",
   "cake162_ui.mjs",
+  "skill_sources_links.mjs",
   "settings.mjs",
   "tasks.mjs",
   "hierarchy.mjs",

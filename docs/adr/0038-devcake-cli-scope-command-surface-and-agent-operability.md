@@ -1,8 +1,9 @@
 # ADR-0038 — The DevCake CLI: scope, command surface, and agent-operability contract
 
-- **Status:** proposed (2026-08-30) — awaiting founder ratification before
-  sibling implementation issues are fed to the fleet; adversarial review of
-  this draft is at the founder's option (CAKE-175)
+- **Status:** accepted (2026-08-30) — founder ratification on CAKE-175
+  amended the draft (env auto-init default, settings-bundle import slice,
+  verb orthogonality) and flipped this ADR to accepted; sibling
+  implementation issues may proceed once they cite this ADR
 - **Context:** Host bring-up today is `./up.sh` plus `python -m dev_factory`
   under systemd / launchd / flock respawn (`docs/13-deployment.md`). There is
   no first-class `down` / `status` / `doctor` / `setup` verb, no installable
@@ -21,6 +22,15 @@
    group membership; possibly `loginctl enable-linger` for systemd `--user`)
    is **detected and PRINTED** by `doctor` / `setup`, never executed by the
    CLI.
+4. **`.env` auto-init is the default** (ratification 2026-08-30) — when
+   required bootstrap values are missing, bring-up generates strong secrets
+   into a mode-600 `.env` with no opt-in flag (Decision 1 / `up`).
+5. **Settings-bundle import is a first-class `setup` slice** (ratification
+   2026-08-30) — restore a previously exported DevCake settings bundle via
+   the existing ADR-0013 path (Decision 1 / `setup`).
+6. **Verb orthogonality** (ratification 2026-08-30) — `setup` does not
+   orchestrate the stack; the clean-host story is
+   `devcake up --bake && devcake setup … --json` (Decision 8).
 
 ## Decision
 
@@ -57,6 +67,26 @@ Mirrors current `./up.sh` flag surface:
 stay inside this verb — same chokepoint policy as `scripts/lib/stack_env.sh`
 (ADR-0034). Deploy lockstep (`stop dagu` before multi-minute bake, pin
 export for bake **and** compose) stays inside this verb.
+
+**`.env` bootstrap auto-init (default, not an option):** when required
+bootstrap values are missing (usernames/passwords such as `ADMIN_USER` /
+`ADMIN_PASSWORD`, internal-forge `GITEA_ADMIN_*`, Dagu / Redis / OpenObserve
+ingest credentials, and any other field `.env.example` marks required for
+boot), `devcake up` **auto-generates** strong values into a **mode-600**
+`.env` by default — **no flag required and no flag to disable**. Precedence:
+
+1. Explicitly provided values always win (process env, existing `.env`
+   entries, or documented file/flag inputs that feed the same upsert path).
+2. Only **missing** required keys are generated.
+3. Generated material is **never echoed** (stdout, stderr, or `--json`
+   receipts). Receipts / human summaries report **presence only** (e.g.
+   `env_generated: ["ADMIN_PASSWORD", …]` as key names, never values).
+4. Creating `.env` from `.env.example` (when no `.env` exists) remains the
+   seed step; auto-init then fills empty required secrets before compose.
+
+This is a deliberate upgrade over today's `./up.sh`, which copies
+`.env.example` and leaves passwords empty for the operator to fill. The CLI
+must not require a human to invent bootstrap secrets on a virgin host.
 
 #### `devcake down`
 
@@ -95,7 +125,9 @@ scripts target this verb once the CLI ships (Decision 5).
 
 #### `devcake setup`
 
-Bootstrap slices an agent or operator can assert on. Seal:
+Bootstrap slices an agent or operator can assert on. **`setup` does not
+start, stop, bake, or wait on the compose stack** (Decision 8) — the control
+plane must already be reachable (typically after `devcake up --bake`). Seal:
 
 **(a) Dev Type first-setup** — creates `executor` / `judge` / `steward` on an
 empty roster via the same shape as `POST /api/v1/dev-types/first-setup`
@@ -125,13 +157,40 @@ sealed patterns (names illustrative): `--pmo-api-key-env`,
 `--pmo-api-key-file`, `--pmo-api-key-stdin`; repo token equivalents. Align
 with ADR-0011 never-echo: receipts report presence/counts, never values.
 
-**(d) Idempotent re-run rules**
+**(d) Settings-bundle import (first-class slice)** — restore a previously
+exported DevCake settings bundle. A thin deploy CLI that cannot restore an
+export is incomplete; this is not optional sugar.
+
+| Flag | Semantics |
+|---|---|
+| `--import <bundle.yaml>` | Import path to a `kind: devcake-settings-bundle` file. |
+| `--import-passphrase-env <VAR>` | Passphrase for an encrypted envelope (B/C) from env. |
+| `--import-passphrase-file <path>` | Passphrase from file. |
+| `--import-passphrase-stdin` | Passphrase from stdin. |
+
+Rules:
+
+- Rides the **existing ADR-0013** serializer / `unprotect_bundle` /
+  import→profile→apply path and validation — **never a second schema**.
+- Encrypted bundles follow the existing export contract (scrypt + AESGCM
+  envelope for sections B/C; section A plaintext YAML).
+- Secrets handled per never-echo: passphrase and secret values never appear
+  on argv, in logs, or in receipts.
+- Host-side `setup_env` (section C) from a bundle is applied to the checkout
+  `.env` (mode 600) when the import includes C; compose restart remains the
+  operator's follow-up (`devcake up` / Decision 8) — `setup` does not
+  restart the stack itself.
+- The receipt reports **what the bundle applied** (sections present, profile
+  name if landed, counts / key names) — never values.
+
+**(e) Idempotent re-run rules**
 
 | Slice | Re-run rule |
 |---|---|
 | Dev Type first-setup | Create-once; conflict if roster non-empty. |
 | Connections | Upsert by instance name (safe re-run). |
 | Secrets | Upsert / replace by key id (safe re-run; never echo). |
+| Settings-bundle import | Re-apply through ADR-0013 apply semantics (replace-the-world for carried sections; runs-active guard honored). |
 | Doctor subset inside setup | Always re-checks; prints `next_steps` only. |
 
 ### 2 — Agent-operability contract
@@ -180,21 +239,36 @@ with ADR-0011 never-echo: receipts report presence/counts, never values.
     "repo_token_count": 1,
     "harness_key_count": 0
   },
+  "bundle_import": {
+    "applied": true,
+    "path": "…",
+    "sections": ["config", "secrets", "setup_env"],
+    "profile": "imported-…",
+    "setup_env_keys": ["ADMIN_PASSWORD", "GITEA_ADMIN_PASSWORD"],
+    "secret_key_counts": {"connections": 2, "harness": 1}
+  },
   "doctor": {
     "ok": false,
     "checks": [{"id": "docker_group", "ok": false, "detail": "…"}]
   },
   "next_steps": [
     "add this user to the docker group (printed only; CLI will not run it)",
-    "loginctl enable-linger <user>  # Linux systemd --user hosts"
+    "loginctl enable-linger <user>  # Linux systemd --user hosts",
+    "devcake up   # if bundle setup_env changed host .env and compose must reload"
   ]
 }
 ```
 
-`secrets_received` carries booleans / counts only (ADR-0011). Omitted slices
-the operator did not request are absent or empty arrays — never fabricated
+`secrets_received` and `bundle_import.setup_env_keys` /
+`bundle_import.secret_key_counts` carry booleans / counts / **key names
+only** (ADR-0011) — never values or fingerprints. Omitted slices the
+operator did not request are absent or empty arrays — never fabricated
 success. Partial failure sets `ok: false` and a non-zero exit from the table
 above.
+
+`devcake up --json` similarly reports env auto-init presence without values,
+e.g. `"env_generated": ["ADMIN_PASSWORD", "REDIS_PASSWORD"]` (key names
+only; empty array when nothing was generated).
 
 ### 3 — Where it lives
 
@@ -264,27 +338,43 @@ exists.
   the same roster seed.
 - brew / AUR / deb packaging (phase 2).
 - Implementing any verb in this ADR's landing PR (docs seal only).
+- Having `setup` orchestrate bake/compose/up (rejected — Decision 8).
+
+### 8 — Verb orthogonality (clean-host story)
+
+`setup` configures an already-reachable control plane. It does **not**
+bake images, run `compose up`, start the baker, or block on health beyond
+calling the live API. The sealed clean-host chain is:
+
+```bash
+devcake up --bake && devcake setup … --json
+```
+
+Agents and runbooks compose verbs; they do not get a hidden mega-command.
+Sibling acceptance criteria that assumed `setup` would bring the stack up
+are wrong — follow this chain instead (CAKE-178 ratification note).
 
 ## Consequences
 
-- Implementers may start the three sibling CLI implementation issues **only
-  after** founder ratification flips this ADR to `accepted` (and those issues
-  cite this ADR). Until then the design is sealed for review but not a license
-  to ship code.
+- Founder ratification is recorded; sibling CLI implementation issues may
+  start **once they cite this ADR**. Design is the license to implement.
 - `./up.sh` and `python -m dev_factory` remain the live operators until an
   implementation PR lands the package + shim + supervisor refresh.
 - Agents gain a stable exit-code and setup-receipt contract to assert on;
-  operators gain `doctor` / `setup` without privilege escalation.
-- Forbidden until ratification + implementation: rewriting bake/receipt in
-  the CLI, putting secrets on argv, auto-running sudo/linger, volume-wipe
-  defaults, or expanding the v1 verb set.
+  operators gain `doctor` / `setup` without privilege escalation, default
+  `.env` auto-init on `up`, and ADR-0013 bundle restore on `setup --import`.
+- Still forbidden: rewriting bake/receipt in the CLI, putting secrets on
+  argv, auto-running sudo/linger, volume-wipe defaults, expanding the v1
+  verb set, or teaching `setup` to orchestrate the stack.
 
 ## Related
 
 - CAKE-175 (this ADR)
+- Sibling implementation issues in the same Linear project (must reference
+  this ADR before fleet feed)
 - ADR-0011 (never-echo secrets)
-- ADR-0013 (settings bundle / setup_env — setup must not invent a second
-  secret schema)
+- ADR-0013 (settings bundle / setup_env — `setup --import` reuses this path;
+  never a second schema)
 - ADR-0025 / ADR-0034 (deploy lockstep + stack-env chokepoint)
 - `docs/13-deployment.md` (current `./up.sh` / baker runbook)
 - `docs/14-security.md` (product security contract — CLI must not claim a

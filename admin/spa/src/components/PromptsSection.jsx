@@ -13,6 +13,11 @@ import MarkdownBody, {
 } from "./MarkdownBody.jsx";
 import { stripYamlFrontmatter } from "../lib/markdown.js";
 import { MISSION_TYPES } from "../lib/missionStages.js";
+import {
+  pmoHasPromptOverride,
+  pmoOverrideExpandIndexes,
+  pmoOverrideSummaryText,
+} from "../lib/pmoPromptOverrides.js";
 
 // Per-Mission-Type prompt templates (v0.1.1). Template bodies create/edit/
 // delete IMMEDIATELY (the dev-type precedent — the modal has its own explicit
@@ -92,7 +97,33 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
   const [switchNote, setSwitchNote] = useState("");
   const [err, setErr] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
+  // CAKE-160: collapse fully-inheriting PMO override cards; seed open any
+  // board that already has a non-empty override. Index-keyed so a rename
+  // mid-edit never collapses the card being typed in.
+  const [expandedOverrides, setExpandedOverrides] = useState(() => new Set());
   const pmos = cfg.pmos || [];
+  const overrideSeedKey = pmos
+    .map((p, i) => `${i}:${Object.entries(p.active_prompt_templates || {})
+      .filter(([, v]) => !!v).map(([k]) => k).sort().join(",")}`)
+    .join("|");
+  useEffect(() => {
+    const mustOpen = pmoOverrideExpandIndexes(pmos);
+    if (mustOpen.length === 0) return;
+    setExpandedOverrides((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const i of mustOpen) {
+        if (!next.has(i)) { next.add(i); changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  // overrideSeedKey tracks length + which Mission Types are overridden
+  }, [overrideSeedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleOverrideCard = (i) => setExpandedOverrides((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
   const refresh = () =>
     get("/prompt-templates")
       .then((d) => { setData(d); setLoadFailed(false); })
@@ -182,7 +213,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
         <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading templates…</p>
       ))}
       {data && (
-        <div className="rounded-card border border-accent-200 bg-accent-50/40 px-4 py-1 dark:border-accent-900 dark:bg-accent-950/20">
+        <div className="rounded-card border border-neutral-200 px-4 py-1 dark:border-neutral-800">
           <SettingRow label="Workflow switcher"
             desc="Set every group below to one stored template name in a single click."
             help="e.g. Development ↔ Customer Success. Groups without a template of that name are skipped. Drafted — nothing applies until Save.">
@@ -192,7 +223,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
               <option value="">choose a workflow…</option>
               {allNames.map((n) => <option key={n} value={n}>{n}</option>)}
             </Select>
-            <Button disabled={!workflow} onClick={applyWorkflow}>Apply to all</Button>
+            <Button kind="ghost" disabled={!workflow} onClick={applyWorkflow}>Apply to all</Button>
           </SettingRow>
           {switchNote && <p className="pb-2 text-xs text-amber-600 dark:text-amber-400">{switchNote}</p>}
         </div>
@@ -264,49 +295,86 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
             Per-PMO overrides
           </h4>
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            Each PMO can pick a different playbook for the same Mission Type.
-            Inherit follows the global active above (live: a later global edit
-            applies here too).
+            Exceptions only — boards that inherit all four globals stay
+            collapsed. Inherit follows the global active above (live: a later
+            global edit applies here too).
           </p>
-          {pmos.map((p, i) => (
-            <div key={p.name || i}
-              className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
-              <h4 className="text-sm font-semibold">
-                Overrides — <span className="font-mono">{p.name || `PMO #${i + 1}`}</span>
-                <Help text="A row set here replaces the global active template for this PMO instance only. Inherit rows follow the global Mission Types table above." />
-              </h4>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[28rem] text-sm">
-                  <tbody>
-                    {MISSION_TYPES.map((mt) => {
-                      const entries = data.templates?.[mt] || [];
-                      const override = (p.active_prompt_templates || {})[mt] || "";
-                      return (
-                        <tr key={mt}
-                          className="border-t border-neutral-100 dark:border-neutral-800">
-                          <td className="w-32 py-2 font-mono text-xs font-semibold">{mt}</td>
-                          <td className="py-2">
-                            <Select value={override}
-                              aria-label={`${p.name || `PMO #${i + 1}`} ${mt} template`}
-                              onChange={(e) => setPmoOverride(i, p, mt, e.target.value)}>
-                              <option value="">
-                                Inherit (global: {activeOf(mt)})
-                              </option>
-                              {entries.map((t) => (
-                                <option key={t.name} value={t.name}>
-                                  {t.name}{t.builtin ? " (built-in)" : ""}
+          {pmos.map((p, i) => {
+            const label = p.name || `PMO #${i + 1}`;
+            const overrides = p.active_prompt_templates || {};
+            const hasOverride = pmoHasPromptOverride(p);
+            const open = expandedOverrides.has(i);
+            if (!open) {
+              return (
+                <div key={p.name || i}
+                  className="flex items-stretch rounded-card border border-neutral-200 dark:border-neutral-800">
+                  <button type="button"
+                    data-testid="pmo-prompt-override-summary"
+                    aria-label={`Expand prompt overrides for ${label}`}
+                    onClick={() => toggleOverrideCard(i)}
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-neutral-900">
+                    <span className="font-mono text-sm font-semibold">{label}</span>
+                    <span className={`text-xs ${hasOverride
+                      ? "text-neutral-600 dark:text-neutral-300"
+                      : "text-neutral-400 dark:text-neutral-500"}`}>
+                      {pmoOverrideSummaryText(overrides)}
+                    </span>
+                    <span aria-hidden className="ml-auto shrink-0 text-xs text-neutral-400">▸</span>
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <div key={p.name || i}
+                className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <button type="button"
+                      aria-label={`Collapse prompt overrides for ${label}`}
+                      title="Collapse to a summary row"
+                      onClick={() => toggleOverrideCard(i)}
+                      className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
+                      ▾
+                    </button>
+                    <h4 className="text-sm font-semibold">
+                      Overrides — <span className="font-mono">{label}</span>
+                      <Help text="A row set here replaces the global active template for this PMO instance only. Inherit rows follow the global Mission Types table above." />
+                    </h4>
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[28rem] text-sm">
+                    <tbody>
+                      {MISSION_TYPES.map((mt) => {
+                        const entries = data.templates?.[mt] || [];
+                        const override = overrides[mt] || "";
+                        return (
+                          <tr key={mt}
+                            className="border-t border-neutral-100 dark:border-neutral-800">
+                            <td className="w-32 py-2 font-mono text-xs font-semibold">{mt}</td>
+                            <td className="py-2">
+                              <Select value={override}
+                                aria-label={`${label} ${mt} template`}
+                                onChange={(e) => setPmoOverride(i, p, mt, e.target.value)}>
+                                <option value="">
+                                  Inherit (global: {activeOf(mt)})
                                 </option>
-                              ))}
-                            </Select>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                                {entries.map((t) => (
+                                  <option key={t.name} value={t.name}>
+                                    {t.name}{t.builtin ? " (built-in)" : ""}
+                                  </option>
+                                ))}
+                              </Select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </>
       )}
       {data && (

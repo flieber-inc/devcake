@@ -39,9 +39,10 @@ from .core import (
 from .run import tee_run
 from .liveness import (
     SENTINEL,
-    UNHEALTHY_NEED,
+    UNHEALTHY_BUDGET_S,
     classify_app,
     tick_decision,
+    unhealthy_backoff_s,
     unhealthy_verdict,
 )
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
@@ -51,6 +52,8 @@ RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
 OUTBOX = "harness_outbox"
 PRUNE_REQUEST = "harness_prune_request.json"
+# Host redirect target (up.sh / systemd). Cap keeps idle noise from filling disk.
+WATCH_LOG_CAP_BYTES = 2 * 1024 * 1024  # 2 MiB
 
 
 def compose_read(rel: str) -> str | None:
@@ -354,13 +357,39 @@ def keep_set_mtime() -> float | None:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "stat", "-c", "%Y", f"/data/{KEEP_SET}"],
-            cwd=REPO, text=True, timeout=15)
+            cwd=REPO, text=True, timeout=15,
+            stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     try:
         return float(out.strip())
     except ValueError:
         return None
+
+
+def rotate_watch_log(path: Path | str, *,
+                     cap: int = WATCH_LOG_CAP_BYTES) -> bool:
+    """Copytruncate when the live log exceeds *cap*.
+
+    Returns True when rotation happened. Truncates the same inode so an
+    open stdout/stderr redirect (nohup or systemd append) keeps writing.
+    """
+    dest = Path(path)
+    try:
+        size = dest.stat().st_size
+    except OSError:
+        return False
+    if size <= cap:
+        return False
+    bak = dest.with_name(dest.name + ".1")
+    try:
+        import shutil
+        shutil.copy2(dest, bak)
+        with dest.open("r+b") as fh:
+            fh.truncate(0)
+    except OSError:
+        return False
+    return True
 
 
 def once(*, work: Path, tag: str, house: dict[str, str],
@@ -481,6 +510,11 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     return status
 
 
+def _watch_log_path() -> Path:
+    return Path(os.environ.get(
+        "DEVCAKE_FACTORY_LOG", str(REPO / ".factory" / "watch.log")))
+
+
 def main(argv: list[str] | None = None) -> int:
     del argv  # reserved
     tag = os.environ.get("DEVCAKE_TAG", "latest")
@@ -488,21 +522,24 @@ def main(argv: list[str] | None = None) -> int:
     work = Path(os.environ.get(
         "DEVCAKE_FACTORY_WORK", str(REPO / ".factory" / "work")))
     work.mkdir(parents=True, exist_ok=True)
+    watch_log = _watch_log_path()
+    rotate_watch_log(watch_log)
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
     down_streak = 0
+    down_elapsed = 0.0
     last_state: str | None = None
     last_trees: float | None = None
     last_keep: float | None = None
     cached_digest: str | None = None
     cached_trees: float | None = None
     while True:
+        rotate_watch_log(watch_log)
         healthy = probe_app_live()
         if not healthy:
             down_streak += 1
-            print(f"dev_factory: app /health/live failed "
-                  f"({down_streak}/{UNHEALTHY_NEED})", flush=True)
-            if unhealthy_verdict(down_streak):
+            remaining = UNHEALTHY_BUDGET_S - down_elapsed
+            if remaining <= 0 or unhealthy_verdict(elapsed_s=down_elapsed):
                 rec = emit_event(work, {
                     "event": "down",
                     "detail": "app /health/live failed — baker exiting",
@@ -511,9 +548,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("dev_factory: app is not healthy — exiting "
                       "(restart with ./up.sh)", flush=True)
                 return 1
-            time.sleep(INTERVAL)
+            delay = min(unhealthy_backoff_s(down_streak), remaining)
+            print(f"dev_factory: app /health/live failed "
+                  f"(streak={down_streak}, ~{remaining:.0f}s budget left; "
+                  f"backoff {delay:.0f}s)", flush=True)
+            time.sleep(delay)
+            down_elapsed += delay
             continue
         down_streak = 0
+        down_elapsed = 0.0
         trees = trees_mtime(REPO)
         keep_m = keep_set_mtime()
         prune_pending = compose_read(PRUNE_REQUEST) is not None

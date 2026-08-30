@@ -7,7 +7,7 @@
 #   ./up.sh --bake --no-hello-smoke   # bake/up without the dispatch proof
 #   ./up.sh -- dagu app        # pass service names to compose up
 #   ./up.sh --dry-run          # print discovered GID + planned actions
-#   ./up.sh --foreground-baker # up, then run baker in foreground (no nohup)
+#   ./up.sh --foreground-baker # up, then run baker in foreground (no unit/nohup)
 #
 # DOCKER_GID is the group of /var/run/docker.sock as a Linux container sees
 # it (CAKE-128). Host-path stat alone is wrong on Docker Desktop (symlink /
@@ -17,8 +17,10 @@
 # DEVCAKE_TAG) into .env so plain `docker compose up -d` works afterwards too.
 # On --bake, after the health gate, a hello dispatch smoke proves Dagu can
 # launch Dev containers (control-plane health ≠ dispatch health).
-# Use --foreground-baker in terminals, CI, and automation that reaps
-# detached children.
+# Detached baker: prefer a systemd --user unit (Restart=on-failure); fall
+# back to nohup with a loud UNSUPERVISED gap warning when user systemd is
+# unavailable. Use --foreground-baker in terminals, CI, and automation that
+# reaps detached children.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -222,7 +224,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   if [[ "$FOREGROUND_BAKER" -eq 1 ]]; then
     echo "── would: run host baker in foreground (exec python3 -m dev_factory; no nohup)"
   else
-    echo "── would: start host baker detached (.factory/watch.pid) — not a compose service"
+    echo "── would: start host baker detached (systemd --user unit or nohup fallback; .factory/watch.pid) — not a compose service"
   fi
   exit 0
 fi
@@ -460,11 +462,30 @@ fi
 # print is counted as progress (not raced into the baseline).
 [[ -f "$_BAKER_LOG" ]] || : >"$_BAKER_LOG"
 _BAKER_BASELINE=$(wc -c <"$_BAKER_LOG" 2>/dev/null | tr -d ' ' || echo 0)
-_BAKER_LAUNCH="nohup python3 -m dev_factory >>${_BAKER_LOG} 2>&1 &"
-nohup python3 -m dev_factory \
-  >>"$_BAKER_LOG" 2>&1 &
-_BAKER_PID=$!
-echo "$_BAKER_PID" >"$_BAKER_PIDFILE"
+export DEVCAKE_FACTORY_LOG="$_BAKER_LOG"
+_BAKER_LAUNCH=""
+_BAKER_PID=""
+if devcake_baker_systemd_available \
+  && devcake_baker_systemd_install "$(pwd)" "$_FACTORY_DIR" "$_BAKER_LOG" "$_BAKER_PIDFILE"; then
+  _BAKER_PID="$(cat "$_BAKER_PIDFILE" 2>/dev/null || true)"
+  _BAKER_LAUNCH="systemctl --user start ${DEVCAKE_BAKER_UNIT:-devcake-baker.service}"
+else
+  # Loud gap: no user systemd / linger / probe failed — nohup will not
+  # restart after terminal close. Operators on Mac/CI see this every up.
+  if devcake_baker_systemd_available; then
+    # Keep a previously-enabled unit from racing a nohup baker.
+    systemctl --user stop "${DEVCAKE_BAKER_UNIT:-devcake-baker.service}" \
+      >/dev/null 2>&1 || true
+    devcake_baker_unsupervised_gap "systemd user unit install/start failed"
+  else
+    devcake_baker_unsupervised_gap "user systemd unavailable"
+  fi
+  _BAKER_LAUNCH="nohup python3 -m dev_factory >>${_BAKER_LOG} 2>&1 &"
+  nohup python3 -m dev_factory \
+    >>"$_BAKER_LOG" 2>&1 &
+  _BAKER_PID=$!
+  echo "$_BAKER_PID" >"$_BAKER_PIDFILE"
+fi
 devcake_baker_wait_liveness "$_BAKER_PID" "$_BAKER_LOG" "$_BAKER_PIDFILE" \
   "$_BAKER_LAUNCH" 12 "$_BAKER_BASELINE"
 

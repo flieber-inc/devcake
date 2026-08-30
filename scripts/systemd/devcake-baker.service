@@ -1,0 +1,35 @@
+# DevCake host baker — systemd user unit template.
+# Installed by ./up.sh via scripts/lib/baker_host.sh (placeholders replaced).
+# The baker stays a HOST process (sole docker-socket holder). Do not convert
+# this into a container unit or grant any compose service the socket.
+#
+# Placeholders filled at install time:
+#   @REPO@          absolute checkout path (WorkingDirectory)
+#   @PYTHON@        absolute python3 interpreter
+#   @PYTHONPATH@    scripts:app path pair matching up.sh exports
+#   @ENV_FILE@      .factory/baker.env (OO ingest + DEVCAKE_* — mode 0600)
+#   @WATCH_LOG@     .factory/watch.log (append stdout/stderr)
+
+[Unit]
+Description=DevCake host baker (keep-set compile + probe)
+Documentation=file://@REPO@/docs/13-deployment.md
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=@PYTHONPATH@
+Environment=DEVCAKE_FACTORY_LOG=@WATCH_LOG@
+EnvironmentFile=-@ENV_FILE@
+ExecStart=@PYTHON@ -m dev_factory
+Restart=on-failure
+RestartSec=5
+# Bound restart storm during a long outage; budget is minutes-scale in-process.
+StartLimitIntervalSec=600
+StartLimitBurst=20
+StandardOutput=append:@WATCH_LOG@
+StandardError=append:@WATCH_LOG@
+
+[Install]
+WantedBy=default.target

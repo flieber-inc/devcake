@@ -18,10 +18,13 @@ if _APP not in sys.path:
 
 from .liveness import (
     SENTINEL,
-    UNHEALTHY_NEED,
+    UNHEALTHY_BACKOFF_CAP_S,
+    UNHEALTHY_BACKOFF_START_S,
+    UNHEALTHY_BUDGET_S,
     append_baker_event,
     classify_app,
     tick_decision,
+    unhealthy_backoff_s,
     unhealthy_verdict,
 )
 from .core import (
@@ -69,9 +72,12 @@ __all__ = [
     "prune_keep_list",
     "receipt_fail_detail",
     "SENTINEL",
-    "UNHEALTHY_NEED",
+    "UNHEALTHY_BACKOFF_CAP_S",
+    "UNHEALTHY_BACKOFF_START_S",
+    "UNHEALTHY_BUDGET_S",
     "append_baker_event",
     "classify_app",
+    "unhealthy_backoff_s",
     "unhealthy_verdict",
     "reconcile",
     "release_inbox",

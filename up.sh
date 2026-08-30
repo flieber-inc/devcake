@@ -434,6 +434,12 @@ fi
 _FACTORY_DIR="$(pwd)/.factory"
 mkdir -p "$_FACTORY_DIR"
 devcake_baker_prepare_pidfile "$_FACTORY_DIR/watch.pid"
+# Displace any leftover python -m dev_factory for THIS factory dir (orphans the
+# pidfile does not name — pre-upgrade bakers, hand-launched, crashed sessions).
+# Must run BEFORE the supervised child starts: a surviving flock-holder would
+# make the new baker exit 0 on contention, and Restart=on-failure / launchd
+# KeepAlive (SuccessfulExit=false) would not bring it back.
+devcake_baker_displace_orphans "$_FACTORY_DIR"
 # Ingest creds so the baker can ship a dying word to OO if the app is
 # already gone (the app's push_oo_log chokepoint cannot run then).
 # Read only those keys — do not shell-source the env file into this process.

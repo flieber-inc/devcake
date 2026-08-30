@@ -825,8 +825,10 @@ ASSIGNMENT_MISSION_TYPES = ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")
 DEFAULT_ASSIGNMENTS: dict[str, Assignment] = {}
 
 # Written only by POST /dev-types/first-setup — never a boot seeder.
+# Extra CLI args stay empty (CAKE-172): flags are harness-specific; the
+# Mission Types UI teaches via labeled per-harness examples, not a seed.
 WIZARD_ASSIGNMENTS = {
-    "ONBOARD": Assignment(dev_type="judge", extra_cli_args="--max-turns 15"),
+    "ONBOARD": Assignment(dev_type="judge"),
     "PLAN": Assignment(dev_type="judge"),
     "EXECUTE": Assignment(dev_type="executor"),
     "REVIEW": Assignment(dev_type="judge"),

@@ -117,6 +117,7 @@ async def list_harnesses():
                    "oauth_available": h.oauth is not None,
                    "skills_dir": h.skills_dir,
                    "experimental": h.experimental,
+                   "cli_arg_examples": list(h.cli_arg_examples),
                    "house_cli_version": HOUSE_PINS.get(name, ""),
                    "cli_pin_allowed": name in LAUNCH_SUPPORTED}
             for name, h in HARNESSES.items()}

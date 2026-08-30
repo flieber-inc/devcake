@@ -8,7 +8,7 @@
 
   Placeholders filled at install time:
     @REPO@      absolute checkout path (WorkingDirectory)
-    @RUNNER@    .factory/baker-run.sh (sources baker.env, execs python -m dev_factory)
+    @RUNNER@    .factory/baker-run.sh (sources baker.env, execs `devcake baker run`)
     @WATCH_LOG@ .factory/watch.log
 
   KeepAlive SuccessfulExit=false → restart unless the baker exits 0

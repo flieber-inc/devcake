@@ -1,0 +1,172 @@
+"""CAKE-176: console package + `devcake baker run` public seams.
+
+Public seams under test:
+- root pyproject.toml / cli/ packaging metadata (name, console script)
+- `devcake_cli.main:main` argv dispatch → `dev_factory.watch.main`
+- supervisor / up.sh / displace string contracts for the new entry
+
+Does not re-test the baker conveyor (flock / keep-set / rotation) — those
+stay in test_dev_factory.py.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+_CLI_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "cli",
+    Path("/srv/cli"),
+]
+
+_PYPROJECT_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "pyproject.toml",
+    Path("/srv/pyproject.toml"),
+]
+
+_SCRIPTS_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "scripts",
+    Path("/srv/repo-scripts"),
+]
+
+
+def _pyproject_path() -> Path:
+    path = next((p for p in _PYPROJECT_CANDIDATES if p.is_file()), None)
+    assert path is not None, (
+        "pyproject.toml missing — create at repo root, and bind "
+        "/srv/pyproject.toml in the pytest runner"
+    )
+    return path
+
+
+def _cli_root() -> Path:
+    path = next((p for p in _CLI_CANDIDATES if p.is_dir()), None)
+    assert path is not None, (
+        "cli/ missing — create cli/devcake_cli/, and bind /srv/cli "
+        "in the pytest runner"
+    )
+    return path
+
+
+def _scripts_root() -> Path:
+    path = next((p for p in _SCRIPTS_CANDIDATES if p.is_dir()), None)
+    assert path is not None, "scripts/ missing — bind scripts → /srv/repo-scripts"
+    return path
+
+
+def _ensure_cli_importable() -> None:
+    cli = _cli_root()
+    if str(cli) not in sys.path:
+        sys.path.insert(0, str(cli))
+    scripts = _scripts_root()
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+
+
+def test_pyproject_declares_devcake_cli_console_script():
+    """Packaging: name=devcake-cli, console script → devcake_cli.main:main."""
+    data = tomllib.loads(_pyproject_path().read_text())
+    assert data["project"]["name"] == "devcake-cli"
+    scripts = data["project"]["scripts"]
+    assert scripts["devcake"] == "devcake_cli.main:main"
+    # Package lives under cli/ (not app/), so checkout PYTHONPATH=…:app
+    # cannot shadow app/devcake.
+    pkg_dir = data["tool"]["setuptools"]["package-dir"]
+    assert pkg_dir[""] == "cli"
+    where = data["tool"]["setuptools"]["packages"]["find"]["where"]
+    assert where == ["cli"] or where == "cli"
+    assert (_cli_root() / "devcake_cli").is_dir()
+
+
+def test_cli_package_layout_exists():
+    """cli/devcake_cli exposes main + baker modules (ADR-0038 Decision 3)."""
+    root = _cli_root() / "devcake_cli"
+    assert (root / "__init__.py").is_file()
+    assert (root / "__main__.py").is_file()
+    assert (root / "main.py").is_file()
+    assert (root / "baker.py").is_file()
+
+
+def test_baker_run_dispatches_to_watch_main(monkeypatch):
+    """`devcake baker run` resolves to the same watch.main as python -m dev_factory."""
+    _ensure_cli_importable()
+    import dev_factory.watch as watch
+    import devcake_cli.main as cli_main
+
+    called: list[int] = []
+
+    def _fake_main() -> int:
+        called.append(1)
+        return 0
+
+    # baker.run imports watch.main at call time — patch the module attribute.
+    monkeypatch.setattr(watch, "main", _fake_main)
+
+    rc = cli_main.main(["baker", "run"])
+    assert rc == 0
+    assert called == [1]
+
+
+def test_baker_run_is_only_implemented_verb():
+    """Unimplemented v1 verbs return usage exit 2; baker run is the phase-1a verb."""
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+
+    assert cli_main.main(["up"]) == 2
+    assert cli_main.main([]) == 2
+    assert cli_main.main(["doctor"]) == 2
+
+
+def test_deprecated_dev_factory_module_entry_still_imports():
+    """ADR Decision 5: python -m dev_factory remains import-compatible."""
+    scripts = _scripts_root()
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import dev_factory
+    from dev_factory.watch import main as watch_main
+
+    assert callable(watch_main)
+    assert hasattr(dev_factory, "load_keep_set")
+
+
+def _baker_host_sh_path() -> Path:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "scripts" / "lib" / "baker_host.sh",
+        Path("/srv/repo-scripts/lib/baker_host.sh"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None, "baker_host.sh missing"
+    return path
+
+
+def test_cmdline_matcher_accepts_legacy_and_cli_entries(tmp_path):
+    """Orphan displace must match both -m dev_factory and `devcake baker run`."""
+    helper = _baker_host_sh_path()
+    driver = tmp_path / "driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'source "{helper}"\n'
+        "fail=0\n"
+        'devcake_baker_cmdline_is_module "python3 -m dev_factory" || fail=1\n'
+        'devcake_baker_cmdline_is_module "/usr/bin/python3 -m dev_factory" || fail=1\n'
+        'devcake_baker_cmdline_is_module "python3 -m dev_factory.watch" || fail=1\n'
+        'devcake_baker_cmdline_is_module "/home/u/.local/bin/devcake baker run" || fail=1\n'
+        'devcake_baker_cmdline_is_module "devcake baker run" || fail=1\n'
+        'devcake_baker_cmdline_is_module "/opt/venv/bin/python /opt/bin/devcake baker run" || fail=1\n'
+        # Must NOT match the respawn supervisor or unrelated commands.
+        'if devcake_baker_cmdline_is_module "bash baker_respawn.sh /repo /.factory"; then fail=1; fi\n'
+        'if devcake_baker_cmdline_is_module "python3 -m pytest"; then fail=1; fi\n'
+        'if [[ "$fail" -eq 0 ]]; then echo OK; else echo FAIL; exit 1; fi\n'
+    )
+    driver.chmod(0o700)
+    result = subprocess.run(
+        ["bash", str(driver)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "OK" in result.stdout

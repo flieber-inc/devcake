@@ -971,6 +971,116 @@ main() {{
     assert killed.read_text().strip() == "4242"
 
 
+def test_baker_host_displace_orphans_kills_foreign_spares_keep_pid(tmp_path):
+    """Install sweep SIGTERMs leftover bakers for this factory; spares keep_pid."""
+    factory = tmp_path / ".factory"
+    factory.mkdir()
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  # Override enumerator after source (call-time lookup).
+  devcake_baker_list_factory_bakers() {{
+    echo "111 01:02:03"
+    echo "222 00:00:05"
+  }}
+  devcake_baker_displace_orphans "{factory}" 222
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert killed.read_text().strip() == "111"
+    assert "pid 111" in result.stdout
+    assert "01:02:03" in result.stdout
+    assert "displacing leftover host baker" in result.stdout
+    assert "222" not in killed.read_text()
+
+
+def test_baker_host_displace_orphans_kills_all_without_keep_pid(tmp_path):
+    """Pre-start sweep with no keep_pid SIGTERMs every matching baker."""
+    factory = tmp_path / ".factory"
+    factory.mkdir()
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  devcake_baker_list_factory_bakers() {{
+    echo "333 age-unknown"
+    echo "444 00:01:00"
+  }}
+  devcake_baker_displace_orphans "{factory}"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert sorted(killed.read_text().split()) == ["333", "444"]
+    assert "pid 333" in result.stdout
+    assert "pid 444" in result.stdout
+    assert "pre-supervisor sweep" in result.stdout
+
+
+def test_baker_host_displace_orphans_never_kills_self(tmp_path):
+    """Enumerator listing $$ must not SIGTERM the installing shell."""
+    factory = tmp_path / ".factory"
+    factory.mkdir()
+    killed = tmp_path / "killed"
+    result = _run_baker_host_driver(tmp_path, f"""
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  echo "$1" >> "{killed}"
+  return 0
+}}
+sleep() {{ :; }}
+main() {{
+  self="$$"
+  devcake_baker_list_factory_bakers() {{
+    echo "$self 00:00:01"
+    echo "555 00:00:02"
+  }}
+  devcake_baker_displace_orphans "{factory}"
+  echo "self=$self"
+}}
+""")
+    assert result.returncode == 0, result.stderr + result.stdout
+    self_pid = [
+        line.split("=", 1)[1]
+        for line in result.stdout.splitlines()
+        if line.startswith("self=")
+    ][0]
+    assert killed.read_text().strip() == "555"
+    assert self_pid not in killed.read_text().split()
+
+
+def test_up_sh_and_baker_host_wire_displace_orphans():
+    """Displace chokepoint is defined once and invoked on install/refresh."""
+    helper = _baker_host_sh_text()
+    text = _up_sh_text()
+    assert "devcake_baker_displace_orphans()" in helper
+    assert "devcake_baker_list_factory_bakers()" in helper
+    assert "devcake_baker_displace_orphans" in text
+    # Pre-start sweep (no keep_pid) near prepare_pidfile.
+    prep = text.index("devcake_baker_prepare_pidfile")
+    # First displace call in up.sh should be the pre-start sweep.
+    first_disp = text.index("devcake_baker_displace_orphans")
+    assert first_disp > prep
+    # Post-install keep_pid sweeps live in each installer.
+    for name in (
+        "devcake_baker_systemd_install()",
+        "devcake_baker_launchd_install()",
+        "devcake_baker_respawn_install()",
+    ):
+        assert name in helper
+    assert helper.count("devcake_baker_displace_orphans") >= 4  # def + 3 installers
+
+
 def test_baker_host_wait_liveness_succeeds_when_log_grows(tmp_path):
     logfile = tmp_path / "watch.log"
     pidfile = tmp_path / "watch.pid"
@@ -1467,11 +1577,12 @@ def test_unhealthy_budget_is_minutes_not_three_strikes():
     assert factory.unhealthy_backoff_s(10) == 30
 
 
-def test_baker_singleton_flock_blocks_second_instance(tmp_path):
+def test_baker_singleton_flock_blocks_second_instance(tmp_path, capsys):
     """Pidfile + flock: a second baker cannot run while the lock is held.
 
     Exit code 0 on contention so Restart=on-failure / launchd KeepAlive
     (SuccessfulExit=false) do not restart-storm a healthy peer.
+    Contention log must name the holder pid already written into watch.lock.
     """
     _load_factory()
     import dev_factory.watch as watch
@@ -1483,12 +1594,18 @@ def test_baker_singleton_flock_blocks_second_instance(tmp_path):
     lockfile = factory_dir / "watch.lock"
     assert pidfile.is_file()
     assert lockfile.is_file()
-    assert pidfile.read_text().strip().isdigit()
+    holder_pid = lockfile.read_text().strip()
+    assert holder_pid.isdigit()
+    assert holder_pid == str(os.getpid())
 
-    # Second acquire must refuse without stealing the lock.
+    # Second acquire must refuse without stealing the lock, naming the holder.
     with pytest.raises(SystemExit) as excinfo:
         watch.acquire_baker_singleton(factory_dir)
     assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert f"pid {holder_pid}" in out
+    assert str(lockfile) in out
+    assert "exiting without stealing the lock" in out
 
     holder.close()
     # After release, a new holder can take the lock.

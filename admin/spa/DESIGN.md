@@ -100,7 +100,9 @@ scrolls to top.
 
 A scalar setting (number, select, toggle, short text) is a
 `SettingRow` (`src/components/SettingRow.jsx`): label + one-line description on
-the left, control on the right, stacked in a `divide-y` container. Long
+the left, control adjacent on the right (one-line row on `sm+` — do **not**
+`justify-between` across the full pane; that left an eye-tracking gulf under
+the page's `max-w-6xl` shell), stacked in a `divide-y` container. Long
 explanations go in its `help` popover, not inline. Pass `htmlFor` **only** when
 the child is a real labelable input — a bare `<label>` around non-inputs forwards
 clicks to the first labelable descendant (this was a shipped bug; see §6).

@@ -243,6 +243,11 @@ await withPage(async (page) => {
     await page.locator("#limits").count() === 1 &&
     await page.locator("#skills").count() === 0);
 
+  // CAKE-162: section chips wrap — never a horizontal scrollbar
+  const chipStrip = page.locator("main .sticky.top-0").first();
+  check("mobile Config chip strip does not scroll horizontally",
+    await chipStrip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1));
+
   // AdapterTabs: the sidebar's Adapters sub-entries are expanded-drawer-only,
   // so on mobile the adapter pages carry their own chip row (Config precedent)
   await gotoFresh(page, "#/repos");
@@ -250,6 +255,9 @@ await withPage(async (page) => {
   const pmoChip = page.locator('a[href="#/pmo"]:visible').first();
   check("mobile Repositories page shows the PMO adapter chip",
     (await pmoChip.count()) === 1);
+  const adapterStrip = page.locator("main .sticky.top-0").first();
+  check("mobile AdapterTabs strip does not scroll horizontally",
+    await adapterStrip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1));
   await pmoChip.click();
   await page.waitForSelector("#pmo");
   check("mobile adapter chip switches to the PMO page",

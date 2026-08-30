@@ -197,7 +197,10 @@ await withPage(async (page) => {
           cost_usd: 0, cost_usd_estimated: null, cost_usd_effective: 0,
           total_tokens_effective: 0,
         },
-        pmo_refs: [], rate_card: { rate_card_id: "builtin-v2", override_native: false },
+        // Non-zero rate_count keeps this suite isolated from empty-card precedence
+        pmo_refs: [], rate_card: {
+          rate_card_id: "builtin-v2", override_native: false, rate_count: 2,
+        },
       }) }));
   await gotoFresh(page, "#/runs");
   await page.waitForSelector("table tbody tr");
@@ -216,10 +219,23 @@ await withPage(async (page) => {
 });
 
 
-// ── CAKE-174: empty rate card cost copy (mocked) ──
+// ── CAKE-174: empty rate card cost copy composed with CAKE-171 by state ──
 await withPage(async (page) => {
   const runs = [
-    { run_id: "E-1-1-EXECUTE-NORATE", mission_key: "E-1", mission_type: "EXECUTE",
+    { run_id: "E-1-1-EXECUTE-RUNNNG", mission_key: "E-1", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "running",
+      input_tokens: null, output_tokens: null, cache_read_tokens: null,
+      cache_write_tokens: null, cost_usd: null, cost_usd_estimated: null,
+      model: "claude-opus-4-6",
+      started_at: new Date(Date.now() - 60000).toISOString(), ended_at: null },
+    { run_id: "E-2-1-EXECUTE-FAILED", mission_key: "E-2", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "failed",
+      input_tokens: null, output_tokens: null, cache_read_tokens: null,
+      cache_write_tokens: null, cost_usd: null, cost_usd_estimated: null,
+      model: "claude-opus-4-6",
+      started_at: new Date(Date.now() - 240000).toISOString(),
+      ended_at: new Date(Date.now() - 180000).toISOString() },
+    { run_id: "E-3-1-EXECUTE-NORATE", mission_key: "E-3", mission_type: "EXECUTE",
       dev_type: "senior-dev", seq: 1, state: "finished",
       token_source: "end_event",
       input_tokens: 1000, output_tokens: 100, cache_read_tokens: 0,
@@ -231,15 +247,22 @@ await withPage(async (page) => {
   await page.route(/\/api\/v1\/runs(?:\?.*)?$/, (route) =>
     route.fulfill({ status: 200, contentType: "application/json",
       body: JSON.stringify({
-        total: 1, total_runs: 1, runs,
+        total: 3, total_runs: 3, runs,
         totals: null, pmo_refs: [],
         rate_card: { rate_card_id: "builtin-v3", override_native: false, rate_count: 0 },
       }) }));
   await gotoFresh(page, "#/runs");
   await page.waitForSelector("table tbody tr");
-  const body = await page.innerText("tbody");
-  check("empty rate card shows no-rate-card cost copy",
-    body.includes("no rate card — add rates under Cost inputs"));
+  const rows = page.locator("table tbody tr");
+  const runningCost = await rows.nth(0).locator("td").nth(-2).innerText();
+  const failedCost = await rows.nth(1).locator("td").nth(-2).innerText();
+  const finishedCost = await rows.nth(2).locator("td").nth(-2).innerText();
+  check("empty card + running cost still says available after the run ends",
+    runningCost.includes("available after the run ends"));
+  check("empty card + failed cost still says not extracted (run failed)",
+    failedCost.includes("not extracted (run failed)"));
+  check("empty card + finished unpriced cost shows no-rate-card taxonomy",
+    finishedCost.includes("no rate card — add rates under Cost inputs"));
 });
 
 summary("costs");

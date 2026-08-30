@@ -12,6 +12,7 @@ import StageGlyph from "../components/StageGlyph.jsx";
 import usePoll from "../lib/usePoll.js";
 import { SERVICES, serviceValue, devTypeState, runsForDevActivity } from "../lib/services.js";
 import { relTime, fullTime } from "../lib/format.js";
+import { runHoverDetail } from "../lib/runHover.js";
 import { get } from "../api.js";
 import { connRef } from "../lib/connectionFields.js";
 import { STAGES } from "../lib/missionStages.js";
@@ -527,7 +528,8 @@ export default function OverviewPage({
                           </button>
                         </span>
                       </td>
-                      <td className="pr-3 font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                      <td className="pr-3 font-mono text-xs text-neutral-500 dark:text-neutral-400"
+                        title={runHoverDetail(r) || undefined}>
                         {r.mission_key || "—"}
                       </td>
                       <td className="pr-3"><StatusPill state={r.state} verdict={r.verdict} /></td>

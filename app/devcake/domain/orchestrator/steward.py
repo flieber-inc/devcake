@@ -276,11 +276,15 @@ async def finalize_steward(mgr, run: Run, payload: dict) -> None:
                 mgr, run, result.get("routes") or [])
             span.set_attribute("devcake.steward.routes_delivered", delivered)
             span.set_attribute("devcake.steward.routes_rejected", rejected)
+            run.outcome_summary = (
+                f"{delivered} discoveries shared ({rejected} rejected)")
         else:
             created, rejected = await apply_steward_edges(
                 mgr, result.get("edges") or [])
             span.set_attribute("devcake.steward.edges_created", created)
             span.set_attribute("devcake.steward.edges_rejected", rejected)
+            run.outcome_summary = (
+                f"{created} relations proposed ({rejected} rejected)")
         run.result = redact_value(result)
         run.state, run.ended_at = "finished", utcnow()
         mgr.runs.store.save(run)

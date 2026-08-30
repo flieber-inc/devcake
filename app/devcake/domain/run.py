@@ -102,6 +102,11 @@ class Run(BaseModel):
     # or "discovery". The flavor lives on the run record, never in the
     # outcome (one duty-agnostic `stewarded` outcome, founder ruling).
     steward_duty: str = ""
+    # CAKE-167: compact UI line stamped at steward finalize from apply
+    # counts (e.g. "3 relations proposed (1 rejected)"). Empty on
+    # non-steward / legacy / failed-before-apply. Never a substitute for
+    # serializing `result`.
+    outcome_summary: str = ""
     # ADR-0033: the discovery run's dispatch snapshot of the batches its
     # package carried — [{pmo_id, key, step}]. Finalize disposition-receipts
     # exactly this set (a batch harvested AFTER dispatch was not in the

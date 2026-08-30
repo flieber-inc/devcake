@@ -1031,3 +1031,53 @@ def test_finalize_steward_branches_on_duty(tmp_path):
     assert any("discovery-in:v1" in md for pid, md in pmo.comments
                if pid == "tgt")
     assert pmo.relations == []                 # the relations arm never ran
+
+
+def test_finalize_steward_stamps_relations_outcome_summary(tmp_path):
+    """CAKE-167: UI-readable compact line from apply counts (not OTel only)."""
+    pmo = MapPMO([m("ia", "T-A"), m("ib", "T-B"), m("ic", "T-C")])
+    mgr = make_mgr(tmp_path, pmo)
+    run = Run(run_id="L-TEAM-9-STEWARD-BBBBBB", mission_key="TEAM",
+              mission_type="STEWARD", dev_type="steward", seq=9,
+              pmo_ref=mgr.instance_name, steward_duty="",
+              state="finalizing")
+    mgr.runs.store.save(run)
+    payload = {"result": {"outcome": "stewarded", "summary": "s",
+                          "edges": [
+                              {"blocker": "T-A", "blocked": "T-B"},
+                              {"blocker": "T-A", "blocked": "T-C"},
+                              {"blocker": "T-A", "blocked": "T-A"},
+                          ]},
+               "token_report": {"extraction_method": "unavailable"}}
+    run_coro(steward.finalize_steward(mgr, run, payload))
+    saved = mgr.runs.store.get(run.run_id)
+    assert saved.state == "finished"
+    assert saved.outcome_summary == "2 relations proposed (1 rejected)"
+
+
+def test_finalize_steward_stamps_discovery_outcome_summary(tmp_path):
+    """CAKE-167: discovery duty uses the shared/rejected phrasing."""
+    pmo, mgr, run = _route_setup(tmp_path)
+    mgr.runs.store.save(run)
+    payload = {"result": {"outcome": "stewarded", "summary": "s",
+                          "routes": [_route()]},
+               "token_report": {"extraction_method": "unavailable"}}
+    run_coro(steward.finalize_steward(mgr, run, payload))
+    saved = mgr.runs.store.get(run.run_id)
+    assert saved.state == "finished"
+    assert saved.outcome_summary == "1 discoveries shared (0 rejected)"
+
+
+def test_finalize_steward_failed_leaves_outcome_summary_empty(tmp_path):
+    """Failed steward keeps relying on error/verdict — no summary line."""
+    mgr = make_mgr(tmp_path, MapPMO([]))
+    run = Run(run_id="L-TEAM-8-STEWARD-CCCCCC", mission_key="TEAM",
+              mission_type="STEWARD", dev_type="steward", seq=8,
+              pmo_ref=mgr.instance_name, state="finalizing")
+    mgr.runs.store.save(run)
+    run_coro(steward.finalize_steward(
+        mgr, run, {"result": {"outcome": "nope"},
+                   "token_report": {"extraction_method": "unavailable"}}))
+    saved = mgr.runs.store.get(run.run_id)
+    assert saved.state == "failed"
+    assert saved.outcome_summary == ""

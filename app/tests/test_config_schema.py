@@ -361,26 +361,37 @@ def test_continuation_fields_bounds():
 
 
 def test_cost_inputs_defaults_validation_and_round_trip():
-    """ADR-0021: the operator rate card is additive config (no migration),
-    validated (no negative rates, no duplicate prefixes), and deep_merge-
-    patchable: a narrow PUT body {cost_inputs: {...}} replaces the rates
-    list wholesale while preserving the untouched sibling key."""
-    from devcake.config import CostInputs, ModelRate, deep_merge
+    """ADR-0021 + CAKE-174: the operator rate card ships empty (operators
+    fill rates), is additive config (no migration), validated (no negative
+    rates, no duplicate prefixes), and deep_merge-patchable: a narrow PUT
+    body {cost_inputs: {...}} replaces the rates list wholesale while
+    preserving the untouched sibling key."""
+    from fakes import PRICED_MODEL_RATES
+    from devcake.config import (BUILTIN_RATE_CARD_ID, DEFAULT_MODEL_RATES,
+                                CostInputs, ModelRate, deep_merge)
 
     fresh = AppConfig()
-    assert [r.model_prefix for r in fresh.cost_inputs.rates] == [
-        "grok-4.5", "claude-opus"]
+    assert fresh.cost_inputs.rates == []
+    assert DEFAULT_MODEL_RATES == []
     assert fresh.cost_inputs.override_native is False
-    assert fresh.cost_inputs.rate_card_id == "builtin-v2"
+    assert BUILTIN_RATE_CARD_ID == "builtin-v3"
+    assert fresh.cost_inputs.rate_card_id == "builtin-v3"
+    assert CostInputs().rate_card_id == "builtin-v3"
 
-    # pre-feature config file (no cost_inputs key) still validates at v4
+    # pre-feature / fresh-install config (no cost_inputs key) still yields
+    # the empty builtin card
     base = _base()
     base.pop("cost_inputs", None)
-    assert AppConfig.model_validate(base).cost_inputs.rate_card_id == "builtin-v2"
+    omitted = AppConfig.model_validate(base)
+    assert omitted.cost_inputs.rates == []
+    assert omitted.cost_inputs.rate_card_id == "builtin-v3"
 
-    # a default-card edit must not write through to DEFAULT_MODEL_RATES
-    fresh.cost_inputs.rates[0].input_per_mtok = 99.0
-    assert AppConfig().cost_inputs.rates[0].input_per_mtok == 2.00
+    # mutating a CostInputs() rates list must not write through to the
+    # module-level DEFAULT_MODEL_RATES (still empty after append)
+    scratch = CostInputs(rates=[r.model_copy() for r in PRICED_MODEL_RATES])
+    scratch.rates[0].input_per_mtok = 99.0
+    assert DEFAULT_MODEL_RATES == []
+    assert AppConfig().cost_inputs.rates == []
 
     with pytest.raises(ValueError):
         ModelRate(model_prefix="x", input_per_mtok=-1.0,
@@ -396,8 +407,7 @@ def test_cost_inputs_defaults_validation_and_round_trip():
     on = AppConfig.model_validate(
         {**_base(), "cost_inputs": {"override_native": True}})
     assert on.cost_inputs.override_native is True
-    assert [r.model_prefix for r in on.cost_inputs.rates] == [
-        "grok-4.5", "claude-opus"]
+    assert on.cost_inputs.rates == []
     merged = deep_merge(on.model_dump(), {"cost_inputs": {"rates": [
         {"model_prefix": "claude-opus", "input_per_mtok": 5.0,
          "cache_read_per_mtok": 0.5, "output_per_mtok": 25.0}]}})

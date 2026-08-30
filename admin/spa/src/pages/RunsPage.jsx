@@ -119,8 +119,11 @@ export default function RunsPage() {
   };
 
   // effective displayed cost per row (ADR-0021): native first, estimates
-  // fill gaps — flipped when the operator's Cost Inputs override is on
+  // fill gaps — flipped when the operator's Cost Inputs override is on.
+  // Empty card (CAKE-174) beats the CAKE-171 absence phrasebook for cost
+  // cells only; usd(null) stays "—" for non-Runs callers.
   const overrideOn = !!data.rate_card?.override_native;
+  const emptyRateCard = data.rate_card?.rate_count === 0;
   const runAbsence = (r) =>
     <AbsenceNote copy={absenceCopy({ state: r.state, source: r.token_source })} />;
   // Aggregates have no single run state; same finished-style "not extracted"
@@ -137,7 +140,12 @@ export default function RunsPage() {
       ? r.cost_usd_estimated != null
       : r.cost_usd == null && r.cost_usd_estimated != null;
     const eff = showEst ? r.cost_usd_estimated : r.cost_usd;
-    if (eff == null) return runAbsence(r);
+    if (eff == null) {
+      if (emptyRateCard) {
+        return <AbsenceNote copy="no rate card — add rates under Cost inputs" />;
+      }
+      return runAbsence(r);
+    }
     if (!showEst) return <span>{usd(eff)}</span>;
     const title = `estimated (${data.rate_card?.rate_card_id || "rate card"})`
       + (overrideOn && r.cost_usd != null ? ` — harness reported ${usd(r.cost_usd)}` : "");

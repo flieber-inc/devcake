@@ -5,11 +5,12 @@ everything here happens in the app on the already-extracted token_report.
 
 Rate math uses known literals, never a reimplementation of the estimator."""
 
-from devcake.config import (BUILTIN_RATE_CARD_ID, DEFAULT_MODEL_RATES,
-                            CostInputs, ModelRate)
+from fakes import PRICED_MODEL_RATES, priced_cost_inputs
+from devcake.config import BUILTIN_RATE_CARD_ID, CostInputs, ModelRate
 from devcake.domain import costing
 
-GROK_45 = DEFAULT_MODEL_RATES  # $2.00 / $0.30 / $6.00 per 1M, cache_write 0
+# Explicit priced fixture — production DEFAULT_MODEL_RATES is empty (CAKE-174)
+GROK_45 = [PRICED_MODEL_RATES[0]]  # $2.00 / $0.30 / $6.00 per 1M, cache_write 0
 
 
 def _grok_report(**over):
@@ -136,25 +137,30 @@ def test_rate_card_id_builtin_and_operator():
 # ── stamp_estimate ───────────────────────────────────────────────────────────
 
 def test_stamp_adds_estimate_and_card_id_when_computable():
-    out = costing.stamp_estimate(_grok_report(), CostInputs())
+    ci = priced_cost_inputs()
+    out = costing.stamp_estimate(_grok_report(), ci)
     assert out["cost_usd_estimated"] == 5.60
-    assert out["rate_card_id"] == BUILTIN_RATE_CARD_ID
+    assert out["rate_card_id"] == ci.rate_card_id
+    assert out["rate_card_id"].startswith("operator:")
     assert out["cost_usd"] is None            # native never touched
 
 
 def test_stamp_is_noop_when_not_computable():
     report = _grok_report(model="codex-large")
-    out = costing.stamp_estimate(report, CostInputs())
+    out = costing.stamp_estimate(report, priced_cost_inputs())
     assert "cost_usd_estimated" not in out
     assert "rate_card_id" not in out
     assert costing.stamp_estimate({}, CostInputs()) == {}
+    # empty shipped card: even a mapped model stays unpriced
+    assert "cost_usd_estimated" not in costing.stamp_estimate(
+        _grok_report(), CostInputs())
 
 
 def test_stamp_also_estimates_alongside_native_cost():
     # a mapped model WITH native cost still gets the estimate stamped —
     # the override_native display mode needs it; native stays untouched
     claude_like = _grok_report(model="grok-4.5-build", cost_usd=4.4321)
-    out = costing.stamp_estimate(claude_like, CostInputs())
+    out = costing.stamp_estimate(claude_like, priced_cost_inputs())
     assert out["cost_usd"] == 4.4321
     assert out["cost_usd_estimated"] == 5.60
 

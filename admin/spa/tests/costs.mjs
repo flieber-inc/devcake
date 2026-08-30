@@ -78,9 +78,13 @@ await withPage(async (page) => {
     (await page.locator('[role="dialog"] th:has-text("Model prefix")').count()) === 1);
   check("modal has at least one rate row or the empty state",
     (await page.locator('[role="dialog"] tbody tr').count()) >= 1);
+  const modalText = await page.locator('[role="dialog"]').innerText();
+  check("modal teaches where to find vendor list prices",
+    /published API pricing page/.test(modalText) &&
+    /longest prefix wins/.test(modalText));
   check("override checkbox present with honest scope note",
     (await page.locator('[role="dialog"] input[type="checkbox"]').count()) === 1 &&
-    (await page.locator('[role="dialog"]').innerText()).includes("matching row"));
+    modalText.includes("matching row"));
   const prefixInput = page.locator('[role="dialog"] input[aria-label^="Model prefix"]').first();
   if (await prefixInput.count()) {
     await prefixInput.fill("probe-edit");   // editable — then thrown away
@@ -209,6 +213,33 @@ await withPage(async (page) => {
     /\b0\b/.test(body) && body.includes("$0.00"));
   check("null aggregate cache-write column says not extracted (not a fabricated 0)",
     (await page.locator('[data-testid="runs-totals"] [aria-label="not extracted"]').count()) >= 1);
+});
+
+
+// ── CAKE-174: empty rate card cost copy (mocked) ──
+await withPage(async (page) => {
+  const runs = [
+    { run_id: "E-1-1-EXECUTE-NORATE", mission_key: "E-1", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "finished",
+      token_source: "end_event",
+      input_tokens: 1000, output_tokens: 100, cache_read_tokens: 0,
+      cache_write_tokens: null, cost_usd: null, cost_usd_estimated: null,
+      model: "grok-4.5-build",
+      started_at: new Date(Date.now() - 120000).toISOString(),
+      ended_at: new Date(Date.now() - 60000).toISOString() },
+  ];
+  await page.route(/\/api\/v1\/runs(?:\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        total: 1, total_runs: 1, runs,
+        totals: null, pmo_refs: [],
+        rate_card: { rate_card_id: "builtin-v3", override_native: false, rate_count: 0 },
+      }) }));
+  await gotoFresh(page, "#/runs");
+  await page.waitForSelector("table tbody tr");
+  const body = await page.innerText("tbody");
+  check("empty rate card shows no-rate-card cost copy",
+    body.includes("no rate card — add rates under Cost inputs"));
 });
 
 summary("costs");

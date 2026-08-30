@@ -70,11 +70,18 @@ export default function CostInputsModal({ onClose, onSaved }) {
   return (
     <Modal onClose={busy ? undefined : onClose} className="max-w-3xl">
       <h4 className="mb-1 text-base font-semibold tracking-tight">Cost inputs</h4>
-      <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
         USD per 1M tokens, matched by the longest model-name prefix. These
         rates power every <em>estimated</em> cost — runs whose model matches
         no row are never priced, and the harness&apos;s own reported cost is
         never rewritten.
+      </p>
+      <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        Look up list prices on your model vendor&apos;s published API pricing
+        page (for example the pages behind grok-build, Claude-family, or
+        OpenAI-compatible harnesses). Enter USD per 1M tokens by model
+        prefix — longest prefix wins. Estimates appear only after at least
+        one matching row is saved.
       </p>
       {rates === null && !err && (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…</p>

@@ -276,7 +276,8 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
         # collapse to the currently selected option
         "pmo_refs": sorted({r.pmo_ref for r in everything}),
         "rate_card": {"rate_card_id": cost_inputs.rate_card_id,
-                      "override_native": cost_inputs.override_native},
+                      "override_native": cost_inputs.override_native,
+                      "rate_count": len(cost_inputs.rates)},
     }
 
     if group_by is None:

@@ -11,15 +11,22 @@ const ROLES = [
   { id: "steward", label: "Steward", help: "board-tending duties" },
 ];
 
+/** Launch-supported only — API 422s experimental / non-LAUNCH_SUPPORTED. */
+function launchHarnessKeys(harnesses) {
+  return Object.keys(harnesses || {}).filter(
+    (k) => harnesses[k]?.cli_pin_allowed !== false && !harnesses[k]?.experimental,
+  );
+}
+
 function pickDefaultHarness(harnesses) {
-  const keys = Object.keys(harnesses || {});
+  const keys = launchHarnessKeys(harnesses);
   if (keys.includes("claude-code")) return "claude-code";
   if (keys.includes("grok-build")) return "grok-build";
   return keys[0] || "";
 }
 
 function pickAltHarness(harnesses, primary) {
-  const keys = Object.keys(harnesses || {});
+  const keys = launchHarnessKeys(harnesses);
   if (primary !== "grok-build" && keys.includes("grok-build")) return "grok-build";
   if (primary !== "claude-code" && keys.includes("claude-code")) return "claude-code";
   return keys.find((k) => k !== primary) || primary;
@@ -87,7 +94,7 @@ export default function FirstSetupDialog({ harnesses, onClose, onCreated }) {
     }
   };
 
-  const harnessOptions = Object.keys(harnesses || {});
+  const harnessOptions = launchHarnessKeys(harnesses);
   const ready = ROLES.every((r) => roles[r.id]?.harness_template);
 
   return (

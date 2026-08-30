@@ -209,6 +209,10 @@ async def first_setup(body: dict, *, config, dev_types, version_source):
         ))
 
     created: list[str] = []
+    prior_assignments = {
+        k: v.model_copy() for k, v in (config.assignments or {}).items()}
+    prior_steward_dev_type = config.steward.dev_type
+    staffing_wired = False
     try:
         for dt in planned:
             dev_types[dt.name] = dt
@@ -228,11 +232,22 @@ async def first_setup(body: dict, *, config, dev_types, version_source):
         except BundleError as e:
             raise HTTPException(e.status, str(e)) from e
         config.steward.dev_type = "steward"
-        save_config(config)
+        staffing_wired = True
+        # Keep-set before config so a late failure is less likely to leave
+        # staffed assignments naming types rollback is about to delete.
         publish_keep_set(dev_types)
+        save_config(config)
     except Exception:
-        # Roll back YAML + prompt dirs + in-memory entries on any failure
-        # after the first create so a partial roster cannot wedge boot.
+        # Restore prior (unstaffed) config in memory + on disk whenever
+        # staffing was applied, then delete created YAML/prompt dirs so the
+        # next boot's assert_assignment_dev_types cannot wedge.
+        config.assignments = prior_assignments
+        config.steward.dev_type = prior_steward_dev_type
+        if staffing_wired:
+            try:
+                save_config(config)
+            except Exception as e:  # noqa: BLE001 — best-effort rollback
+                log.warning("first-setup rollback save_config: %s", e)
         for name in created:
             dev_types.pop(name, None)
             try:
@@ -250,6 +265,10 @@ async def first_setup(body: dict, *, config, dev_types, version_source):
                     shutil.rmtree(target, ignore_errors=True)
             except Exception as e:  # noqa: BLE001 — best-effort rollback
                 log.warning("first-setup rollback prompts(%s): %s", name, e)
+        try:
+            publish_keep_set(dev_types)
+        except Exception as e:  # noqa: BLE001 — best-effort rollback
+            log.warning("first-setup rollback publish_keep_set: %s", e)
         raise
 
     return {

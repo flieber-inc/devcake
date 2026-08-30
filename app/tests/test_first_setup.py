@@ -8,7 +8,6 @@ Public seams: load_dev_types (no seed top-up), AppConfig.assignments default
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -245,3 +244,57 @@ def test_first_setup_refuses_name_collision_without_partial_write(
     assert exc.value.status_code == 409
     assert "executor" not in dts
     assert "judge" not in dts
+
+
+def test_first_setup_rollback_restores_unstaffed_config_after_save_failure(
+        tmp_path, monkeypatch):
+    """If anything fails after save_config, disk must not keep staffed
+    assignments naming Dev Types that rollback deleted — otherwise the next
+    boot's assert_assignment_dev_types wedges."""
+    from devcake import config as config_mod
+    from devcake.api import devtypes_service
+    from devcake.config import AppConfig
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        tmp_path / "config" / "config.yaml")
+    (tmp_path / "config").mkdir(parents=True)
+
+    class Planted:
+        def latest(self, template: str) -> str:
+            return "9.9.9"
+
+    real_save = config_mod.save_config
+    calls = {"n": 0}
+
+    def save_then_boom(cfg):
+        calls["n"] += 1
+        real_save(cfg)
+        # First successful write is the wizard staffing config — fail after
+        # it lands so rollback must rewrite unstaffed assignments.
+        if calls["n"] == 1:
+            raise RuntimeError("simulated failure after save_config")
+
+    monkeypatch.setattr(devtypes_service, "save_config", save_then_boom)
+    monkeypatch.setattr(devtypes_service, "publish_keep_set", lambda d: None)
+
+    cfg = AppConfig()
+    dts: dict = {}
+    with pytest.raises(RuntimeError, match="simulated failure after save_config"):
+        _run(devtypes_service.first_setup(
+            {"roles": {
+                "judge": {"harness_template": "claude-code"},
+                "executor": {"harness_template": "grok-build"},
+                "steward": {"harness_template": "claude-code"},
+            }},
+            config=cfg, dev_types=dts, version_source=Planted()))
+
+    assert dts == {}
+    assert cfg.assignments == {}
+    # Fresh Steward default names "steward" even when disabled; restore prior.
+    assert cfg.steward.dev_type == AppConfig().steward.dev_type
+    for name in ("executor", "judge", "steward"):
+        assert not (tmp_path / "config" / "dev_types" / f"{name}.yaml").exists()
+
+    disk = config_mod.load_config()
+    assert disk.assignments == {}

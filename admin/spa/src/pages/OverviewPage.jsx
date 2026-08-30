@@ -18,6 +18,7 @@ import Button from "../components/Button.jsx";
 import FirstSetupDialog from "../components/FirstSetupDialog.jsx";
 import { connRef } from "../lib/connectionFields.js";
 import { STAGES } from "../lib/missionStages.js";
+import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 const ext = window.DEVCAKE || {};
 
@@ -173,6 +174,7 @@ export const SETUP_INTERNAL_FORGE_KEY = "setup-checklist:internal-forge";
 // The repo step is satisfied by an external work-repo token, a healthy
 // internal forge (zero-repo path), or an explicit operator dismiss.
 function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) {
+  const { reload } = useSharedDraft();
   const [checks, setChecks] = useState(null); // {pmoOk, repoOk, devOk, rosterEmpty}
   const [harnesses, setHarnesses] = useState({});
   const [firstSetup, setFirstSetup] = useState(false);
@@ -318,7 +320,13 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
       {firstSetup && (
         <FirstSetupDialog harnesses={harnesses}
           onClose={() => setFirstSetup(false)}
-          onCreated={() => { setFirstSetup(false); setTick((n) => n + 1); }} />
+          onCreated={async () => {
+            // Shared draft holds roster + assignments across Overview ↔ Fleet;
+            // without reload(), Fleet still shows the empty CTA (409 on retry).
+            await reload();
+            setFirstSetup(false);
+            setTick((n) => n + 1);
+          }} />
       )}
     </>
   );

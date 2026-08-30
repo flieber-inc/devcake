@@ -66,14 +66,21 @@ function TemplateManagerModal({
     setTypeKey((prev) => (opts.includes(prev) ? prev : (opts[0] || "")));
   }, [kind, data]);
 
-  // When type/entries change, keep selection if still present
+  // When type/entries change, keep selection if still present. Do not clear
+  // softWarns from an effect keyed on `creating` / `entry?.name` — that wiped
+  // Create-save amber warnings (CAKE-166 REVIEW). Clear only when the current
+  // selection actually left the list (delete/refresh), via handlers otherwise.
   useEffect(() => {
     if (creating) return;
-    setSelected((prev) => {
-      if (entries.some((e) => e.name === prev)) return prev;
-      return entries[0]?.name || "";
-    });
-  }, [entries, creating]);
+    if (entries.some((e) => e.name === selected)) return;
+    setSelected(entries[0]?.name || "");
+    setSoftWarns([]);
+    setErr(null);
+    // `creating` is read as a guard only; listing it as a dep re-ran this on
+    // Create→Save and is unnecessary while startCreate/cancelCreate/save own
+    // that transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, selected]);
 
   const entry = creating ? null : entries.find((e) => e.name === selected) || null;
   const editable = creating || (entry && !entry.builtin);
@@ -92,11 +99,6 @@ function TemplateManagerModal({
     setText(entry?.template || "");
     setErr(null);
   }, [entry?.name, entry?.template, creating]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    setSoftWarns([]);
-    setErr(null);
-  }, [entry?.name, creating, typeKey, kind]);
 
   const startCreate = () => {
     setCreating(true);
@@ -134,10 +136,14 @@ function TemplateManagerModal({
       await send("PUT", `${basePath}/${typeKey}/${encodeURIComponent(saveName)}`,
         { template: text });
       const createdName = saveName;
-      setCreating(false);
-      setNewName("");
+      // Refresh first, select the saved name, then exit create mode — so the
+      // editor sync effect lands on the new entry in one step and soft warns
+      // set above are not cleared by a creating/entry?.name effect.
       await onChanged();
       setSelected(createdName);
+      setCreating(false);
+      setNewName("");
+      setSoftWarns(soft);
     } catch (e) {
       setErr(String(e.message || e));
     } finally {

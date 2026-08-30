@@ -87,6 +87,52 @@ check("Work ONLY inside staleness on any mission type", () => {
   assert.match(warns[0], /result\.json/);
 });
 
+// Modal contract: soft warnings set on Save must survive Create→setCreating(false).
+// REVIEW reject CAKE-166: a useEffect that cleared softWarns listed `creating` (and
+// entry?.name) as deps, so Create flashed then wiped the amber banner.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const promptsSrc = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../src/components/PromptsSection.jsx"),
+  "utf8",
+);
+
+check("unconditional softWarns clear effect must not key on creating/entry?.name", () => {
+  // REVIEW reject: save() setSoftWarns(soft) then setCreating(false); an effect
+  // that unconditionally setSoftWarns([]) on [entry?.name, creating, …] wiped
+  // the amber banner on Create. Selection-sync may clear only after proving the
+  // current selection left the list — that is not this bug.
+  assert.doesNotMatch(
+    promptsSrc,
+    /setSoftWarns\(\[\]\);\s*\n\s*setErr\(null\);\s*\n\s*\}, \[entry\?\.name,\s*creating/,
+    "must not unconditionally clear softWarns on [entry?.name, creating, …]",
+  );
+  const effectRe = /useEffect\(\(\) => \{([\s\S]*?)\}, \[([^\]]*)\]/g;
+  let m;
+  while ((m = effectRe.exec(promptsSrc))) {
+    const body = m[1];
+    const deps = m[2];
+    if (!/setSoftWarns\(\[\]\)/.test(body)) continue;
+    const unconditional = /^\s*setSoftWarns\(\[\]\)/.test(body);
+    if (!unconditional) continue;
+    assert.doesNotMatch(deps, /\bcreating\b/,
+      "unconditional softWarns clear must not depend on creating");
+    assert.doesNotMatch(deps, /entry\?\.name/,
+      "unconditional softWarns clear must not depend on entry?.name");
+  }
+});
+
+check("Create/Save still surfaces soft warnings in the modal", () => {
+  assert.match(promptsSrc, /data-testid="template-soft-warnings"/,
+    "soft-warn banner testid must remain");
+  assert.match(promptsSrc, /setSoftWarns\(soft\)/,
+    "save() must still assign soft warnings from templateSoftWarnings");
+  assert.match(promptsSrc, /setCreating\(false\)/,
+    "successful Create still exits creating mode");
+});
+
 if (failed) {
   console.error(`template_soft_warnings.mjs: ${failed} check(s) failed`);
   process.exit(1);

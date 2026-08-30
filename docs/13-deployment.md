@@ -361,25 +361,34 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 
-### 8a. Protect the default branch (operator supply-chain control — docs/14 §2 zone C)
+### 8a. Protect the default branch (DEPLOYMENT REQUIREMENT — docs/14 §2 zone C)
 
-**Branch protection** is a policy you set **on the forge** (GitHub / GitLab /
-Gitea) for a branch name — in DevCake, the repo’s `default_branch` (usually
-`main`). The forge refuses direct pushes and merges that do not meet your rules
-(PR required, ≥1 approval, checks, no force-push, no bypass for the Dev
+**Branch protection** (PR + ≥1 approval + **required status checks**) is a
+**DEPLOYMENT REQUIREMENT** for any forge hosting work repos — not optional
+hardening. It is a policy you set **on the forge** (GitHub / GitLab / Gitea)
+for a branch name — in DevCake, the repo’s `default_branch` (usually `main`).
+The forge refuses direct pushes and merges that do not meet your rules (PR
+required, ≥1 approval, required checks, no force-push, no bypass for the Dev
 account). DevCake does not implement those rules; it only **warns** when the
-branch looks unprotected and does not hard-block dispatch (`14` §8).
+branch looks unprotected and does not hard-block dispatch (`14` §8). The honest
+missing-protection surface is `/health` `forge_protection` → Overview
+**critical** (dismissable) alert.
 
-Why it is mandatory for production-ish use: Dev containers hold a write-capable
-forge token, and token scoping cannot separate “push a feature branch” from
-“merge to the default branch” (both are often `contents: write`). **Per-repo
-`auto_merge` off only stops the app from merging that repo** — it does not
-change what the Dev token can do (`14` §2 zone C). Full actor/token
-walkthrough: `14` §2 and the README “How forge merges are controlled.”
+Why it is mandatory: Dev containers hold a write-capable forge token, and token
+scoping cannot separate “push a feature branch” from “merge to the default
+branch” (both are often `contents: write`). **Per-repo `auto_merge` off only
+stops the app from merging that repo** — it does not change what the Dev token
+can do (`14` §2 zone C). Required status checks alone stop premature merges but
+not a patient Dev self-merge after green CI; the complete forge-side stop needs
+required reviews plus a distinct reviewer token. Playbooks hard-forbid Dev
+merge / forge-approve / push-to-default and are the operative belt until that
+setup lands. Full actor/token walkthrough: `14` §2 and the README “How forge
+merges are controlled.”
 
 Recommended operator setup:
 
-1. **Protect `default_branch`** on every work repo.
+1. **Protect `default_branch`** on every work repo (PR + ≥1 approval + required
+   checks; Dev account must not bypass).
 2. **Write token** for EXECUTE (push + open PR); app reuses it for merge if
    that repo's `auto_merge` is later enabled (Repos page, per card — ADR-0020).
 3. **RO token** for non-EXECUTE (recommended).
@@ -389,10 +398,11 @@ Recommended operator setup:
 5. Leave each repo's **`auto_merge` off** until you want the app to
    squash-merge that repo after REVIEW.
 
-- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so per-repo `auto_merge` can still work if you enable it.
-- **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
+- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval* + *required status checks*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so per-repo `auto_merge` can still work if you enable it.
+- **GitLab:** protect that branch (no direct pushes), require ≥1 MR approval, and require pipeline success.
 
-Forge connection test and `/health` surface protection state; amber warning when unprotected.
+Forge connection test and `/health` surface protection state; Overview shows a
+**critical** (dismissable) alert when unprotected — still not a dispatch gate.
 
 ### 8b. macOS Docker Desktop
 

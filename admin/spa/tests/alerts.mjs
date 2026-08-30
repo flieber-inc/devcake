@@ -83,7 +83,8 @@ check("circuit breaker stays critical red in the same list", () => {
   assert.ok(kinds.includes("breakers"));
 });
 
-// CAKE-30: forge_protection is advisory (docs/14 §8) — never a hard gate.
+// CAKE-30 / CAKE-179: forge_protection is advisory (docs/14 §8) — never a hard
+// gate — but the banner names the deployment-requirement / Dev-merge hazard.
 check("unprotected default branch is a dismissable advisory, not a dispatch gate", () => {
   const alerts = deriveAlerts({
     forge_protection: { main: { protected: false } },
@@ -91,9 +92,14 @@ check("unprotected default branch is a dismissable advisory, not a dispatch gate
   const hit = alerts.find((a) => a.id === "forge:main");
   assert.ok(hit, "forge:main alert missing");
   assert.equal(hit.dismissable, true);
+  assert.equal(hit.severity, "critical");
   assert.match(hit.title, /unprotected/i);
   assert.match(hit.body, /does not block dispatch/i);
-  assert.match(hit.body, /branch protection/i);
+  assert.match(hit.body, /deployment requirement/i);
+  assert.match(hit.body, /required status checks/i);
+  // Required reviews (≥1 approval) are part of the deployment-requirement shape —
+  // checks alone do not stop a patient Dev self-merge after green CI (CAKE-179).
+  assert.match(hit.body, /1 approval|≥1 approval|reviews/i);
 });
 
 // CAKE-89: unused-repos alert names memory + skill-source separation

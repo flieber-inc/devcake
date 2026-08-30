@@ -354,6 +354,10 @@ conflicts, and push — do NOT redo or extend the mission's implementation.
 7. Write /workspace/out/result.json EXACTLY as:
    {{"schema_version": 1, "outcome": "executed", "summary": "<what you built,
    deviations, test results>", "pr_url": "<the PR/MR url>"}}
+8. Devs never merge pull requests, never approve them on the forge, and never
+   push to the default branch. Open/update the mission branch and PR only;
+   merging is the app (`auto_merge`) or a human — lifecycle gates and receipts
+   live above the Dev.
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -413,6 +417,12 @@ its handoff_md forward, amending only what the newer entries change.
 3. Run the tests / build if present. A red test suite is an automatic reject.
 4. Hunt for real defects: correctness, edge cases, error handling, security,
    silent failure modes. Cosmetic nitpicks alone do not justify a reject.
+
+### Binding rules (violations fail the run)
+- Devs never merge pull requests, never approve them on the forge, and never
+  push to the default branch. Verdict goes in `result.json` only; formal forge
+  approval and merge are the app (`auto_merge`) or a human — lifecycle gates
+  and receipts live above the Dev.
 
 ### Required output — /workspace/out/result.json
 {{"schema_version": 1, "outcome": "reviewed", "verdict": "approve" | "reject",

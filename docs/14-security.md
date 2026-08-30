@@ -105,7 +105,7 @@ LLM, and not by pretending tickets are sterile.
 
 | Control | Owner | App role |
 |---|---|---|
-| Branch protection on the default branch (PR + reviews; Dev token cannot bypass) | **Operator** | Detects/warns unprotected branch; out-of-pipeline merge tripwire |
+| Branch protection on the default branch (PR + ≥1 formal approval + **required status checks**; Dev token cannot bypass) — **DEPLOYMENT REQUIREMENT** for any forge hosting work repos (`13` §8a) | **Operator** | `/health` `forge_protection` → loud Overview critical alert when unprotected; out-of-pipeline merge tripwire. App still **warns only** — does not refuse dispatch |
 | Who can write issues/comments on each configured PMO instance | **Operator** | Per-instance scope only (one team/board key per instance — `05-pmo-adapter.md`) |
 | Who can push to the repo the agent clones | **Operator** | — |
 | Per-repo `auto_merge` off (**app** does not merge that repo) | **Operator** (default off per card) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
@@ -133,7 +133,8 @@ What is **not** hard from the toggle alone:
 
 - Stripping merge rights from the Dev token (token scopes often cannot separate “push feature branch” from “merge to default branch” — `13` §8a, `adr/0007`).
 - Preventing a prompt-injected or misbehaving agent from calling `gh pr merge` / the forge merge API.
-- That stop is **forge branch protection** (require PR + reviews; Dev account must not bypass). Unprotected default branch → advisory only; dispatch is not blocked (`§8`).
+- The structural stop is **forge branch protection** (require PR + ≥1 formal approval + required status checks; Dev account must not bypass) — a **deployment requirement**, not optional hardening (`13` §8a). Required status checks alone stop *premature* merges; they do **not** stop a patient Dev from merging after CI is green. The complete forge-side stop needs required reviews plus a distinct reviewer identity (repo-card reviewer token) so the app can approve without self-approval wedging. Until that operator setup lands, the playbook never-merge hard rule is the **operative belt**. Unprotected default branch → loud Overview critical alert via `/health` `forge_protection`; dispatch is still not blocked (`§8`).
+- Playbooks hard-forbid Dev merge / forge-approve / push-to-default (EXECUTE + REVIEW); that is guidance on top of forge enforcement, not a kernel fence.
 - Out-of-pipeline merge is a **detection tripwire** (feed + audit + health), not a block or rollback (`15-errors-and-retries.md`).
 
 **Do not claim** “auto-merge off means no agent can land on the default branch.” Claim: “auto-merge off means DevCake’s app will not merge; protect the default branch so the Dev token cannot either.”
@@ -148,18 +149,28 @@ What is **not** hard from the toggle alone:
 
 REVIEW’s job is judgment (`result.json`). Formal forge approval and merge are **app** side effects, never something the REVIEW container is handed credentials to do with the reviewer token.
 
-#### Branch protection (what it is)
+#### Branch protection (what it is) — deployment requirement
 
-**Branch protection** is a **forge-enforced** policy on a branch name (your
-repo’s `default_branch` — usually `main`). It is configured in GitHub / GitLab /
-Gitea, not in DevCake. Typical rules: no direct push to that branch; changes
-must arrive via PR/MR; merge requires ≥1 formal approval and/or green checks;
+**Branch protection** (PR + ≥1 formal approval + **required status checks**) is
+a **DEPLOYMENT REQUIREMENT** for any forge hosting work repos — not optional
+hardening. It is a **forge-enforced** policy on a branch name (your repo’s
+`default_branch` — usually `main`), configured in GitHub / GitLab / Gitea, not
+in DevCake. Required shape: no direct push to that branch; changes must arrive
+via PR/MR; merge requires ≥1 formal approval and **required status checks**;
 the Dev token’s account must **not** be on a bypass list.
 
 Token scopes on most forges **cannot** grant “push feature branches + open PRs”
 without also granting the API capability to merge when protection allows.
-Protection is therefore the real containment for zone C; DevCake only **warns**
-when the default branch looks unprotected (`13` §8a, `/health`).
+Protection with the full required shape is therefore the real containment for
+zone C. Required status checks alone do **not** refuse a patient Dev self-merge
+after green CI — that needs required reviews plus a distinct reviewer identity
+(repo-card reviewer token). Until that setup lands, playbook hard rules are the
+operative belt. When protection is missing, the honest surface is `/health`
+`forge_protection` → the Overview **critical** (dismissable) alert — DevCake
+still only **warns**; it does not refuse dispatch (`13` §8a, `§8`). The health
+probe today reports whether the default branch is protected, not whether
+required reviews or checks are configured — operators must still enable those
+rules on the forge.
 
 #### End-to-end merge path (operator mental model)
 
@@ -408,7 +419,7 @@ pinned mirror, not a second redaction implementation.
 | `repo-read-only:{repo}` | **Warning** in `security_warnings` (dismissable) | Repo is in a PMO work set but stores only a RO token (no write) — EXECUTE will fail at push; move it to reference repos or add a write token |
 | `pmo-forge-mono-repo:{pmo}` | **Warning** in `security_warnings` (dismissable) | Forge-issues `team_key` normalizes to the same repository path (and host) as a configured work-repo URL — Dev forge token can reach that Issues board; prefer a dedicated Issues repo or Linear PMO |
 | `gui-secrets-basic-auth` | **Info** in `security_warnings` | Reminder of control-plane posture |
-| Unprotected default branch | **Advisory** via `/health` `forge_protection` (SPA alert) — **not** in the `security_warnings` list | Operator must fix forge-side |
+| Unprotected default branch | **Critical Overview alert** (dismissable) from `/health` `forge_protection` — **not** in the `security_warnings` list; **not** a dispatch gate | Violates the branch-protection **deployment requirement** (`13` §8a); operator must fix forge-side (PR + ≥1 approval + required checks; Dev account must not bypass) |
 | `secret_env` value missing **and** referenced by an mcp_setup_command | **Gate** (dispatch refused) | `blocked_reasons`/health names the var; self-heals the poll cycle after the value is pasted. Declared-but-unreferenced = warning only (log + ✗ on the Config card) |
 | `auto_merge` enable | Confirm dialog | Operator accepts **app**-driven merge after REVIEW (not a Dev sandbox) |
 | `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |
@@ -430,9 +441,14 @@ dismiss.
    admin/Dagu/OO to the public internet.
 3. **Sandbox (or tightly controlled) PMO membership** on every configured
    instance — ticket writers = agent trust.
-4. **Branch protection** on the default branch; Dev token must not bypass —
-   this is what stops a Dev from merging, not the auto-merge toggle alone
-   (§2 zone C, `13` §8a).
+4. **Branch protection** on the default branch (DEPLOYMENT REQUIREMENT):
+   require PR + ≥1 formal approval + required status checks; Dev token must
+   not bypass — not the auto-merge toggle alone. Required checks alone do
+   **not** stop a patient Dev from self-merging after green CI; the complete
+   forge-side stop needs required reviews plus a distinct reviewer token.
+   Until that operator setup lands, playbook never-merge hard rules are the
+   operative belt. Missing protection shows as a critical Overview alert from
+   `/health` `forge_protection` (§2 zone C, `13` §8a).
 5. Leave **`auto_merge` off** until you understand forge approval + reviewer
    token (off = app will not merge; protect the branch so Devs cannot either).
 6. Prefer a **read-only forge PAT** for non-EXECUTE and a **reviewer token**

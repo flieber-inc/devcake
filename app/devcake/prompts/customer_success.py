@@ -111,6 +111,10 @@ job is to sync `{branch}` with the default branch and resolve conflicts.
 7. Write /workspace/out/result.json EXACTLY as:
    {"schema_version": 1, "outcome": "executed", "summary": "<what you
    produced and any [VERIFY] flags>", "pr_url": "<the PR/MR url>"}
+8. Devs never merge pull requests, never approve them on the forge, and never
+   push to the default branch. Open/update the mission branch and PR only;
+   merging is the app (`auto_merge`) or a human — lifecycle gates and receipts
+   live above the Dev.
 
 ### The issue
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -144,6 +148,12 @@ its handoff_md forward, amending only what the newer entries change.
    `[VERIFY: …]` flags — an unverified fact presented as certain is an
    automatic reject.
 4. Cosmetic nitpicks alone do not justify a reject.
+
+### Binding rules (violations fail the run)
+- Devs never merge pull requests, never approve them on the forge, and never
+  push to the default branch. Verdict goes in `result.json` only; formal forge
+  approval and merge are the app (`auto_merge`) or a human — lifecycle gates
+  and receipts live above the Dev.
 
 ### Required output — /workspace/out/result.json
 {"schema_version": 1, "outcome": "reviewed", "verdict": "approve" | "reject",

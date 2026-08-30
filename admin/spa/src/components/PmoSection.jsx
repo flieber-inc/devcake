@@ -216,7 +216,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
 
   return (
     <>
-      <Section id="pmo" title="PMO connections"
+      <Section id="pmo" title="Watched teams"
         description="The PMO teams DevCake watches, and how missions are adopted."
         help={(() => {
           const systems = registry.pmo_systems || [];
@@ -473,7 +473,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 </div>
                 <div>
                   <RepoChips label="Memory (board-bound)"
-                    help="Team-memory notebooks this board's workers consult while working — mounted read-only in every run. A notebook is an ordinary repository card that holds curated notes; it is never a work target here (a separate Curator board maintains it — see Settings → Scheduled Tasks)."
+                    help="Team-memory notebooks this board's workers consult while working — mounted read-only in every run. A notebook is an ordinary repository card that holds curated notes; it is never a work target here (a separate Curator board maintains it — see Settings → Scheduled Tasks). Strictness and auto-merge for notebooks: Settings → Policies → Memory."
                     all={cfg.repos} selected={inst.memory_repos || []}
                     excluded={[...(inst.repos || []), ...(inst.reference_repos || [])]}
                     excludedNote="work or reference repo"

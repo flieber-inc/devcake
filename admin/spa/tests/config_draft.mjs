@@ -135,7 +135,7 @@ check("no diff row ever renders [object Object]", () => {
 });
 
 // container-limits Save guard (2026-08-13 audit): a cleared numeric box is
-// stored as null by LimitsSection — Number("") === 0 would silently mean
+// stored as null by PoliciesSection — Number("") === 0 would silently mean
 // UNLIMITED — and must block Save via the draft's one validation seam.
 check("cleared container-limit field blocks Save with an inline error", () => {
   const d = snap([BOARD],
@@ -200,7 +200,7 @@ check("cron rows label under Scheduled Tasks in the save review", () => {
   assert.match(meta.label, /Ticket text/);
   assert.equal(metaFor("cfg.crons").group, "Scheduled Tasks");
   assert.equal(metaFor("cfg.steward.enabled").group, "Scheduled Tasks");
-  assert.equal(metaFor("cfg.memory_auto_merge").group, "Limits");
+  assert.equal(metaFor("cfg.memory_auto_merge").group, "Policies");
 });
 if (failed) {
   console.error(`config_draft: ${failed} check(s) failed`);

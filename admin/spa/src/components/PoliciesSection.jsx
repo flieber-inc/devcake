@@ -20,15 +20,23 @@ const ATTEMPT_RESET_DESC = {
     "Never gives up — DevCake retries failed steps indefinitely and warns about cost.",
 };
 
+const linkClass =
+  "font-medium text-accent-700 underline-offset-2 hover:underline dark:text-accent-300";
+
 // 2026-08 reviewer round: one 11-row scroll became four story-grouped
 // sections — what bounds the fleet, what burns attempts, what rescues a
 // result-less run, and how source mirrors stay fresh. Same knobs, same
-// fields, same route (#/settings/limits; was #/config/limits); the
+// fields, same route (#/settings/policies; legacy #/config/limits and #/config/traffic redirect); the
 // informational "Service auto-restart" row is gone (it was a knob-shaped
 // non-knob — the restart policy is compose's, documented in docs/13).
 // CAKE-159: attach_merged_changeset_to_pmo moved here from Repositories.
 
-export default function LimitsSection() {
+// Domain-grouped policies (CAKE-161): fleet bounds, attempts, counting
+// budgets, result recovery, mirrors, memory. Same AppConfig knobs; route
+// is #/settings/policies. Cross-links keep mirror/memory knobs findable from Repos / PMO
+// / Scheduled Tasks without orphaning the global fields.
+
+export default function PoliciesSection() {
   const { dr } = useSharedDraft();
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
@@ -36,12 +44,12 @@ export default function LimitsSection() {
 
   return (
     <>
-      <Section id="limits" title="Concurrency & timeouts"
-        description="What bounds the Dev fleet at any moment.">
+      <Section id="policies" title="Fleet bounds"
+        description="What bounds the Dev fleet at any moment — concurrency, wall-clock timeout, and per-container cgroups.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Global max Devs"
             desc="Effective ceiling = min(global, Σ per-type caps)."
-            help="Primary host-protection control for fleet WIDTH — how many Devs run at once. Per-container DEPTH is governed by the hard cgroup limits in the Dev-containers section below (delivered 2026-08-13); budget host RAM as concurrency × the memory limit.">
+            help="Primary host-protection control for fleet WIDTH — how many Devs run at once. Per-container DEPTH is governed by the hard cgroup limits on this same card (delivered 2026-08-13); budget host RAM as concurrency × the memory limit.">
             <Input type="number" className="w-24" value={cfg.concurrency.global_max}
               aria-label="Global max Devs"
               onChange={(e) => setField("cfg.concurrency.global_max", Number(e.target.value))} />
@@ -53,112 +61,9 @@ export default function LimitsSection() {
               aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
           </SettingRow>
-          <SettingRow label="Decomposition depth"
-            desc="How many generations of Mission breakdown ONBOARD may create."
-            help="Each ONBOARD pass may split a high-complexity Mission into sub-missions. At 1, a Mission created by a breakdown is never broken down again. At 2 (default), it may be broken down once more — a Project's missions can each split again. Unlimited removes the ceiling entirely and leaves the choice to the ONBOARD Dev on every pass: a runaway Dev could keep splitting work indefinitely.">
-            <Select className="w-40" value={String(cfg.max_decomposition_depth)}
-              aria-label="Decomposition depth limit"
-              onChange={(e) => setField("cfg.max_decomposition_depth", Number(e.target.value))}>
-              {![0, 1, 2].includes(cfg.max_decomposition_depth) && (
-                // an API/YAML-set depth outside the offered values must
-                // round-trip — a controlled select with no matching option
-                // would misrender it and the next save would clobber it
-                <option value={String(cfg.max_decomposition_depth)}>
-                  {cfg.max_decomposition_depth} levels (set via API)
-                </option>
-              )}
-              <option value="1">1 level</option>
-              <option value="2">2 levels</option>
-              <option value="0">Unlimited</option>
-            </Select>
-          </SettingRow>
-        </div>
-      </Section>
-
-      <Section id="limits-attempts" title="Attempts & retries"
-        description="What burns a step's attempts, what grants fresh ones, and when DevCake warns.">
-        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
-          <SettingRow label="Attempt reset"
-            desc={ATTEMPT_RESET_DESC[cfg.attempt_reset] || `${cfg.attempt_reset} (set via API)`}
-            help="A DevCake idiosyncrasy worth understanding: each pipeline step retries up to the attempt limit, and certain events grant FRESH attempts — the count restarts. Removing DEVCAKE-FAILED and a later step finishing always reset. What else resets is this policy. Strict (default): only a comment containing the literal DEVCAKE-RETRY — the deliberate human gesture. Any comment: every non-DevCake comment resets, which reads naturally ('a human intervened') but lets a chatty integration (a Linear↔GitHub sync bot, a CI notifier) keep the counter at 1 forever — the mission then never fails AND never stops, retrying at token cost indefinitely. Unlimited: DevCake never applies DEVCAKE-FAILED at all — an explicit choice for self-hosted models where retries cost watts, not dollars; a cumulative-cost warning posts to the mission feed at the review-loop cadence so the mode stays loud. DEVCAKE-SKIP always stops a mission regardless of policy.">
-            <Select className="w-44" value={cfg.attempt_reset}
-              aria-label="Attempt reset policy"
-              onChange={(e) => setField("cfg.attempt_reset", e.target.value)}>
-              {!ATTEMPT_RESET_POLICIES.includes(cfg.attempt_reset) && (
-                // an API/YAML-set policy outside the offered values must
-                // round-trip — a controlled select with no matching option
-                // would misrender it and the next save would clobber it
-                <option value={cfg.attempt_reset}>
-                  {cfg.attempt_reset} (set via API)
-                </option>
-              )}
-              <option value="label-ops">Strict (DEVCAKE-RETRY / labels)</option>
-              <option value="any-comment">Any comment</option>
-              <option value="unlimited">Unlimited (never give up)</option>
-            </Select>
-          </SettingRow>
-          <SettingRow label="Brake on missing results"
-            desc={cfg.brake_on_bad_output
-              ? "ON — repeated no-result runs (exit 11) count as backend-brake evidence."
-              : "OFF — only harness faults (exit 15) engage the backend brake (default)."}
-            help="Another nuance: when a model backend degrades fleet-wide, every container may fail the same way at once. DevCake's backend brake correlates such failures — the same failure class across two or more missions in the recent window — and responds by excusing those attempts (they don't count toward the limit) and throttling the Dev Type to a single probe run until two clean runs clear it. By default only harness faults (exit 15: the CLI reported an API/backend error) are brake evidence. This switch adds exit 11 — the run ended without writing its result file — which is also the signature of a backend returning garbage to every container at once. It stays off by default because the continuation loop already recovers most solitary no-result runs, and a genuinely confused model should burn its attempts honestly. Note: at a per-type concurrency of 1 the throttle arm changes nothing — only the attempt-excusal arm acts.">
-            <Toggle on={!!cfg.brake_on_bad_output}
-              label="Brake on missing results"
-              onClick={() => setField("cfg.brake_on_bad_output",
-                !cfg.brake_on_bad_output)} />
-          </SettingRow>
-          <SettingRow label="Review-loop warning"
-            desc="Warn after every N rejections of EXECUTE's work."
-            help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene. Must be ≥ 1.">
-            <Input type="number" className="w-24" min={1} value={cfg.review_loop_warning_every}
-              aria-label="Review-loop warning every N rejections"
-              onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
-          </SettingRow>
-        </div>
-      </Section>
-
-      <Section id="limits-budgets" title="Counting budgets"
-        description="Feed-counted bounds on re-reviews and discoveries (ADR-0033). 0 = unlimited.">
-        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
-          <SettingRow label="Freshness re-reviews"
-            desc={Number(cfg.budgets?.freshness_rereviews) === 0
-              ? "0 — unlimited: the gate keeps re-reviewing, never closes over unread material."
-              : `Up to ${cfg.budgets?.freshness_rereviews} re-reviews per mission; past that, close with a disclosure.`}
-            help="When material feed activity lands after a REVIEW's context was assembled, the approve verdict is withheld and a counted re-review dispatches instead. This bounds those loops per mission lifetime — human steering posts and routed discoveries draw from the same budget. Discoveries are the memory this otherwise memoryless system keeps; size the budget to how much of it you want re-examined at close.">
-            <Input type="number" className="w-24" min={0}
-              value={cfg.budgets?.freshness_rereviews ?? 5}
-              aria-label="Freshness re-review budget"
-              onChange={(e) => setField("cfg.budgets.freshness_rereviews", Number(e.target.value))} />
-          </SettingRow>
-          <SettingRow label="Discoveries per run"
-            desc={Number(cfg.budgets?.discoveries_per_run) === 0
-              ? "0 — unlimited: every valid discovery a run reports is harvested."
-              : `At most ${cfg.budgets?.discoveries_per_run} discovery entries harvested from one run.`}
-            help="A Dev may report structured discoveries (finding / evidence / scope) in its result. This caps how many one run can memorialize; extras are dropped with an audit note.">
-            <Input type="number" className="w-24" min={0}
-              value={cfg.budgets?.discoveries_per_run ?? 3}
-              aria-label="Discoveries per run"
-              onChange={(e) => setField("cfg.budgets.discoveries_per_run", Number(e.target.value))} />
-          </SettingRow>
-          <SettingRow label="Claims queue max"
-            desc={Number(cfg.budgets?.claims_queue_max) === 0
-              ? "0 — unlimited: every harvested lead is copied into .claims/."
-              : `At most ${cfg.budgets?.claims_queue_max} .claims/*.json files per notebook; new leads are refused, never evicted.`}
-            help="When a run reports a discovery, DevCake copies it as a raw lead into every notebook that run consulted, where it queues for the Memory Curator's review. This caps how many unreviewed leads one notebook can hold. At the cap new leads are refused (with a warning on the Overview page) — existing leads are never deleted to make room; the Curator drains them.">
-            <Input type="number" className="w-24" min={0}
-              value={cfg.budgets?.claims_queue_max ?? 50}
-              aria-label="Claims queue max"
-              onChange={(e) => setField("cfg.budgets.claims_queue_max", Number(e.target.value))} />
-          </SettingRow>
-        </div>
-      </Section>
-
-      <Section id="limits-containers" title="Dev containers"
-        description="Hard kernel limits (cgroups) applied to every Dev container — both steps of every run. 0 = unlimited.">
-        {/* A cleared box stores null (Number("") === 0 would silently mean
-            UNLIMITED — audit 2026-08-13); useConfigDraft blocks Save on null
-            with an inline DirtyBar message. Unlimited is an explicit 0. */}
-        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          {/* A cleared box stores null (Number("") === 0 would silently mean
+              UNLIMITED — audit 2026-08-13); useConfigDraft blocks Save on null
+              with an inline DirtyBar message. Unlimited is an explicit 0. */}
           <SettingRow label="Memory (MB)"
             desc={cfg.container_limits?.memory_mb === null
               ? "Cleared — type a number to Save (0 = unlimited)."
@@ -201,7 +106,104 @@ export default function LimitsSection() {
         </div>
       </Section>
 
-      <Section id="limits-recovery" title="Result recovery"
+      <Section id="policies-attempts" title="Attempts & retries"
+        description="What burns a step's attempts, what grants fresh ones, and when DevCake warns.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Attempt reset"
+            desc={ATTEMPT_RESET_DESC[cfg.attempt_reset] || `${cfg.attempt_reset} (set via API)`}
+            help="A DevCake idiosyncrasy worth understanding: each pipeline step retries up to the attempt limit, and certain events grant FRESH attempts — the count restarts. Removing DEVCAKE-FAILED and a later step finishing always reset. What else resets is this policy. Strict (default): only a comment containing the literal DEVCAKE-RETRY — the deliberate human gesture. Any comment: every non-DevCake comment resets, which reads naturally ('a human intervened') but lets a chatty integration (a Linear↔GitHub sync bot, a CI notifier) keep the counter at 1 forever — the mission then never fails AND never stops, retrying at token cost indefinitely. Unlimited: DevCake never applies DEVCAKE-FAILED at all — an explicit choice for self-hosted models where retries cost watts, not dollars; a cumulative-cost warning posts to the mission feed at the review-loop cadence so the mode stays loud. DEVCAKE-SKIP always stops a mission regardless of policy.">
+            <Select className="w-44" value={cfg.attempt_reset}
+              aria-label="Attempt reset policy"
+              onChange={(e) => setField("cfg.attempt_reset", e.target.value)}>
+              {!ATTEMPT_RESET_POLICIES.includes(cfg.attempt_reset) && (
+                // an API/YAML-set policy outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={cfg.attempt_reset}>
+                  {cfg.attempt_reset} (set via API)
+                </option>
+              )}
+              <option value="label-ops">Strict (DEVCAKE-RETRY / labels)</option>
+              <option value="any-comment">Any comment</option>
+              <option value="unlimited">Unlimited (never give up)</option>
+            </Select>
+          </SettingRow>
+          <SettingRow label="Brake on missing results"
+            desc={cfg.brake_on_bad_output
+              ? "ON — repeated no-result runs (exit 11) count as backend-brake evidence."
+              : "OFF — only harness faults (exit 15) engage the backend brake (default)."}
+            help="Another nuance: when a model backend degrades fleet-wide, every container may fail the same way at once. DevCake's backend brake correlates such failures — the same failure class across two or more missions in the recent window — and responds by excusing those attempts (they don't count toward the limit) and throttling the Dev Type to a single probe run until two clean runs clear it. By default only harness faults (exit 15: the CLI reported an API/backend error) are brake evidence. This switch adds exit 11 — the run ended without writing its result file — which is also the signature of a backend returning garbage to every container at once. It stays off by default because the continuation loop already recovers most solitary no-result runs, and a genuinely confused model should burn its attempts honestly. Note: at a per-type concurrency of 1 the throttle arm changes nothing — only the attempt-excusal arm acts.">
+            <Toggle on={!!cfg.brake_on_bad_output}
+              label="Brake on missing results"
+              onClick={() => setField("cfg.brake_on_bad_output",
+                !cfg.brake_on_bad_output)} />
+          </SettingRow>
+          <SettingRow label="Review-loop warning"
+            desc="Warn after every N rejections of EXECUTE's work."
+            help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene. Must be ≥ 1.">
+            <Input type="number" className="w-24" min={1} value={cfg.review_loop_warning_every}
+              aria-label="Review-loop warning every N rejections"
+              onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
+          </SettingRow>
+        </div>
+      </Section>
+
+      <Section id="policies-budgets" title="Counting budgets"
+        description="Feed-counted bounds on re-reviews, discoveries, and decomposition generations (ADR-0033). 0 = unlimited.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Freshness re-reviews"
+            desc={Number(cfg.budgets?.freshness_rereviews) === 0
+              ? "0 — unlimited: the gate keeps re-reviewing, never closes over unread material."
+              : `Up to ${cfg.budgets?.freshness_rereviews} re-reviews per mission; past that, close with a disclosure.`}
+            help="When material feed activity lands after a REVIEW's context was assembled, the approve verdict is withheld and a counted re-review dispatches instead. This bounds those loops per mission lifetime — human steering posts and routed discoveries draw from the same budget. Discoveries are the memory this otherwise memoryless system keeps; size the budget to how much of it you want re-examined at close.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.freshness_rereviews ?? 5}
+              aria-label="Freshness re-review budget"
+              onChange={(e) => setField("cfg.budgets.freshness_rereviews", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Discoveries per run"
+            desc={Number(cfg.budgets?.discoveries_per_run) === 0
+              ? "0 — unlimited: every valid discovery a run reports is harvested."
+              : `At most ${cfg.budgets?.discoveries_per_run} discovery entries harvested from one run.`}
+            help="A Dev may report structured discoveries (finding / evidence / scope) in its result. This caps how many one run can memorialize; extras are dropped with an audit note.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.discoveries_per_run ?? 3}
+              aria-label="Discoveries per run"
+              onChange={(e) => setField("cfg.budgets.discoveries_per_run", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Claims queue max"
+            desc={Number(cfg.budgets?.claims_queue_max) === 0
+              ? "0 — unlimited: every harvested lead is copied into .claims/."
+              : `At most ${cfg.budgets?.claims_queue_max} .claims/*.json files per notebook; new leads are refused, never evicted.`}
+            help="When a run reports a discovery, DevCake copies it as a raw lead into every notebook that run consulted, where it queues for the Memory Curator's review. This caps how many unreviewed leads one notebook can hold. At the cap new leads are refused (with a warning on the Overview page) — existing leads are never deleted to make room; the Curator drains them.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.claims_queue_max ?? 50}
+              aria-label="Claims queue max"
+              onChange={(e) => setField("cfg.budgets.claims_queue_max", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Decomposition depth"
+            desc="How many generations of Mission breakdown ONBOARD may create."
+            help="Each ONBOARD pass may split a high-complexity Mission into sub-missions. At 1, a Mission created by a breakdown is never broken down again. At 2 (default), it may be broken down once more — a Project's missions can each split again. Unlimited removes the ceiling entirely and leaves the choice to the ONBOARD Dev on every pass: a runaway Dev could keep splitting work indefinitely.">
+            <Select className="w-40" value={String(cfg.max_decomposition_depth)}
+              aria-label="Decomposition depth limit"
+              onChange={(e) => setField("cfg.max_decomposition_depth", Number(e.target.value))}>
+              {![0, 1, 2].includes(cfg.max_decomposition_depth) && (
+                // an API/YAML-set depth outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={String(cfg.max_decomposition_depth)}>
+                  {cfg.max_decomposition_depth} levels (set via API)
+                </option>
+              )}
+              <option value="1">1 level</option>
+              <option value="2">2 levels</option>
+              <option value="0">Unlimited</option>
+            </Select>
+          </SettingRow>
+        </div>
+      </Section>
+
+      <Section id="policies-recovery" title="Result recovery"
         description="What happens when a run ends without its result file.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Accept misplaced result files"
@@ -246,8 +248,9 @@ export default function LimitsSection() {
         </div>
       </Section>
 
-      <Section id="limits-mirrors" title="Repository mirrors"
-        description="How the app-maintained source mirrors stay fresh.">
+      <Section id="policies-mirrors" title="Repository mirrors"
+        description={<>How the app-maintained source mirrors stay fresh. Repository cards and tokens live under{" "}
+          <a className={linkClass} href="#/repos">Adapters → Repositories</a>.</>}>
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Mirror sync max age"
             desc={Number(cfg.repo_mirror?.sync_max_age_seconds) === 0
@@ -271,8 +274,10 @@ export default function LimitsSection() {
         </div>
       </Section>
 
-      <Section id="limits-memory" title="Memory"
-        description="How team-memory notebooks reach workers, and how notes become official."
+      <Section id="policies-memory" title="Memory"
+        description={<>How team-memory notebooks reach workers, and how notes become official. Bind notebooks on the{" "}
+          <a className={linkClass} href="#/pmo">PMO</a>{" "}page; drain the lead queue via{" "}
+          <a className={linkClass} href="#/config/scheduled-tasks">Scheduled Tasks → Memory Curator</a>.</>}
         help="Team memory lives in notebooks — ordinary git repositories holding curated notes. Bind one to a board (PMO page) or to a worker profile (Dev Types) and every run gets it mounted read-only. Raw leads that runs leave behind queue inside the notebook until the Memory Curator (Scheduled Tasks) reviews them into notes via pull requests.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Context sourcing strict"
@@ -303,7 +308,7 @@ export default function LimitsSection() {
         </div>
       </Section>
 
-      <Section id="limits-delivery" title="Delivery"
+      <Section id="policies-delivery" title="Delivery"
         description="What DevCake posts back to the PMO after a merge.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Also attach merged change set to PMO"

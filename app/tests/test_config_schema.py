@@ -283,7 +283,7 @@ def test_continuation_fields_default_and_round_trip():
 
 
 def test_attempt_reset_and_brake_fields_default_and_round_trip():
-    """ADR-0026: spend discipline is operator policy (Limits & Traffic) —
+    """ADR-0026: spend discipline is operator policy (Policies) —
     strict `label-ops` default, brake widening OFF, both additive: a
     pre-ADR-0026 config file still validates at schema v4 with no migration."""
     base = _base()

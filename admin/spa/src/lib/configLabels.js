@@ -63,49 +63,49 @@ const EXACT = {
     format: orEmpty, multiline: true,
   },
   "cfg.context_sourcing_strict": {
-    group: "Limits", label: "Context sourcing strict", format: onOff,
+    group: "Policies", label: "Context sourcing strict", format: onOff,
   },
   "cfg.memory_auto_merge": {
-    group: "Limits", label: "Memory auto-merge", format: onOff,
+    group: "Policies", label: "Memory auto-merge", format: onOff,
     warning: (o, n) => (n === true ? MEMORY_AUTO_MERGE_COPY : null),
   },
   "cfg.budgets.claims_queue_max": {
-    group: "Limits", label: "Claims queue max",
+    group: "Policies", label: "Claims queue max",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.max_decomposition_depth": {
-    group: "Limits", label: "Decomposition depth",
+    group: "Policies", label: "Decomposition depth",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.budgets.freshness_rereviews": {
-    group: "Limits", label: "Freshness re-review budget",
+    group: "Policies", label: "Freshness re-review budget",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.budgets.discoveries_per_run": {
-    group: "Limits", label: "Discoveries per run",
+    group: "Policies", label: "Discoveries per run",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.container_limits.memory_mb": {
-    group: "Limits", label: "Container memory (MB)",
+    group: "Policies", label: "Container memory (MB)",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.container_limits.cpus": {
-    group: "Limits", label: "Container CPUs",
+    group: "Policies", label: "Container CPUs",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.container_limits.pids": {
-    group: "Limits", label: "Container PIDs",
+    group: "Policies", label: "Container PIDs",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
-  "cfg.concurrency.global_max": { group: "Limits", label: "Global max Devs" },
-  "cfg.dev_timeout_minutes": { group: "Limits", label: "Dev run timeout (min)" },
-  "cfg.review_loop_warning_every": { group: "Limits", label: "Loop warning every N rejections" },
+  "cfg.concurrency.global_max": { group: "Policies", label: "Global max Devs" },
+  "cfg.dev_timeout_minutes": { group: "Policies", label: "Dev run timeout (min)" },
+  "cfg.review_loop_warning_every": { group: "Policies", label: "Loop warning every N rejections" },
   "cfg.recover_misplaced_result": {
-    group: "Limits", label: "Accept misplaced result files", format: onOff,
+    group: "Policies", label: "Accept misplaced result files", format: onOff,
   },
-  "cfg.continuation_policy": { group: "Limits", label: "Continuation policy" },
+  "cfg.continuation_policy": { group: "Policies", label: "Continuation policy" },
   "cfg.attempt_reset": {
-    group: "Limits", label: "Attempt reset policy",
+    group: "Policies", label: "Attempt reset policy",
     // Operator-facing labels only — vocabulary lives in configEnums.js /
     // spa-contracts (ATTEMPT_RESET_POLICIES).
     format: (v) => {
@@ -119,18 +119,18 @@ const EXACT = {
     },
   },
   "cfg.brake_on_bad_output": {
-    group: "Limits", label: "Brake on missing results (exit 11)",
+    group: "Policies", label: "Brake on missing results (exit 11)",
     format: onOff,
   },
   "cfg.repo_mirror.sync_max_age_seconds": {
-    group: "Limits", label: "Mirror sync max age (s)",
+    group: "Policies", label: "Mirror sync max age (s)",
     format: (v) => (v === 0 ? "every dispatch" : String(v)),
   },
   "cfg.repo_mirror.lfs": {
-    group: "Limits", label: "Mirror LFS content", format: onOff,
+    group: "Policies", label: "Mirror LFS content", format: onOff,
   },
   "cfg.max_continuations": {
-    group: "Limits", label: "Max continuations per run",
+    group: "Policies", label: "Max continuations per run",
     format: (v) => (v === 0 ? "off" : String(v)),
   },
   "cfg.cost_inputs.override_native": {
@@ -165,7 +165,7 @@ const ASSIGNMENT_FIELDS = {
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
   "PMO", "Repository", "Skills", "Dev Types", "Mission Types",
-  "Prompts", "Limits", "Scheduled Tasks", "Cost", "Other",
+  "Prompts", "Policies", "Scheduled Tasks", "Cost", "Other",
 ];
 
 // the instance LISTS diff atomically when a card is added/removed — show the

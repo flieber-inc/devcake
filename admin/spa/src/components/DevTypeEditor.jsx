@@ -221,7 +221,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             set("skills_required", skills_required);
           }} />
         <RepoChips label="Memory (domain-bound)"
-          help="Team-memory notebooks every run of THIS worker profile consults, on any board — mounted read-only next to its work repository. Combined with whatever the board itself binds (PMO page). Use it for expertise that follows the worker rather than the project."
+          help="Team-memory notebooks every run of THIS worker profile consults, on any board — mounted read-only next to its work repository. Combined with whatever the board itself binds (PMO page). Use it for expertise that follows the worker rather than the project. Strictness and auto-merge for notebooks: Configuration → Policies → Memory."
           all={repoCards} selected={d.memory_repos || []}
           excluded={[]}
           excludedNote=""
@@ -290,7 +290,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
         </InstantZone>
             <div className="sm:max-w-[10rem]">
               <Field label="Max concurrency"
-                help="How many Devs of this type may run at once. The global ceiling under Limits still applies on top.">
+                help="How many Devs of this type may run at once. The global ceiling under Policies → Fleet bounds still applies on top.">
                 <Input
                   type="number" min="1" value={d.max_concurrency}
                   onChange={(e) => set("max_concurrency", Number(e.target.value))}

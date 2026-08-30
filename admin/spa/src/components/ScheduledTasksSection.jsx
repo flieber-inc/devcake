@@ -215,7 +215,7 @@ function CuratorPanel() {
   return (
     <BuiltinTaskPanel
       name="Memory Curator"
-      help="Team memory in DevCake is a notebook — a git repository of curated notes that workers consult while they work. As runs finish, DevCake copies their raw discoveries into the notebook's incoming queue. This task assigns a worker to review that queue: promote a lead into a proper note or discard it, always through a pull request you can inspect. It fires one ticket per Curator board (a board you set up whose only repository is a notebook). Automatic fires skip empty queues; Run now never skips — handy for a tidy-up pass."
+      help="Team memory in DevCake is a notebook — a git repository of curated notes that workers consult while they work. As runs finish, DevCake copies their raw discoveries into the notebook's incoming queue. This task assigns a worker to review that queue: promote a lead into a proper note or discard it, always through a pull request you can inspect. It fires one ticket per Curator board (a board you set up whose only repository is a notebook). Automatic fires skip empty queues; Run now never skips — handy for a tidy-up pass. Context-sourcing strictness and memory auto-merge live under Configuration → Policies → Memory."
       statusLine={(row.enabled
         ? `on · every ${row.interval_minutes} min`
         : "off — manual only") + " · every Curator board"}

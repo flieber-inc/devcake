@@ -7,8 +7,10 @@ import { Help } from "./Field.jsx";
 // htmlFor is given — a bare label around non-inputs forwards clicks.
 export default function SettingRow({ label, desc, help, htmlFor, children }) {
   const Heading = htmlFor ? "label" : "span";
+  // Control sits adjacent to the label (CAKE-162) — justify-between across a
+  // max-w-6xl pane left an eye-tracking gulf of dead space.
   return (
-    <div className="flex flex-col gap-2 py-3 first:pt-1 last:pb-1 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+    <div className="flex flex-col gap-2 py-3 first:pt-1 last:pb-1 sm:flex-row sm:items-center sm:gap-4">
       <div className="min-w-0 sm:max-w-[34rem]">
         <Heading {...(htmlFor ? { htmlFor } : {})} className="text-sm font-medium">
           {label}

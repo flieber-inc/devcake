@@ -108,6 +108,17 @@ check("unused-repos alert includes memory and excludes skill-source as selection
   assert.doesNotMatch(hit.body, /work or reference repos on no PMO/);
 });
 
+// CAKE-161: claims-queue alert points at Policies, not the old Limits label
+check("claims-queue-capped alert names Policies → Counting budgets", () => {
+  const alerts = deriveAlerts({
+    claims_queue_capped: ["notebook_a"],
+  });
+  const hit = alerts.find((a) => a.id === "claims-queue-capped:notebook_a");
+  assert.ok(hit, "claims-queue-capped alert missing");
+  assert.match(hit.body, /Policies → Counting budgets/);
+  assert.doesNotMatch(hit.body, /Limits →/);
+});
+
 if (failed) {
   console.error(`alerts.mjs: ${failed} check(s) failed`);
   process.exit(1);

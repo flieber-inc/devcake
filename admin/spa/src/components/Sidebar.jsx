@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import markBlack from "../assets/devcake-mark-black-transparent.svg";
-import markColor from "../assets/devcake-mark-color-transparent.svg";
+import markWhite from "../assets/devcake-mark-white-transparent.svg";
 import wordmarkBlack from "../assets/devcake-wordmark-black-transparent.svg";
-import wordmarkColor from "../assets/devcake-wordmark-color-transparent.svg";
+import wordmarkWhite from "../assets/devcake-wordmark-white-transparent.svg";
 import {
   LayoutDashboard, SquareTerminal, Settings2, Plug, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
@@ -147,7 +147,7 @@ function IntakeSwitch({ collapsed, paused, busy, disabled, error, onToggle }) {
         className={`mx-auto flex h-9 w-9 items-center justify-center rounded-lg border transition disabled:opacity-40 ${
           paused
             ? "border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
-            : "border-green-200 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-900 dark:bg-green-950/60 dark:text-green-400"
+            : "border-neutral-200 bg-neutral-50 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
         }`}
       >
         {paused ? <Pause size={16} aria-hidden /> : <Play size={16} aria-hidden />}
@@ -172,10 +172,13 @@ function IntakeSwitch({ collapsed, paused, busy, disabled, error, onToggle }) {
           label="Mission intake"
           onClick={onToggle}
         />
-        <span className={`text-sm font-semibold ${
+        <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${
           unknown ? "text-neutral-500 dark:text-neutral-400"
-            : paused ? "text-amber-700 dark:text-amber-300" : "text-green-700 dark:text-green-400"
+            : paused ? "text-amber-700 dark:text-amber-300" : "text-neutral-800 dark:text-neutral-100"
         }`}>
+          {!unknown && !paused && (
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-hidden />
+          )}
           {unknown ? "unknown" : paused ? "PAUSED" : "ON"}
         </span>
       </div>
@@ -225,14 +228,14 @@ export default function Sidebar({
       <a href="#/overview" className={`flex items-center gap-2.5 px-3 py-4 ${collapsed ? "justify-center" : "px-4"}`}>
         {/* Brand SVGs (docs/img/brand is the canonical home; these are the
             bundled copies — the admin build context stops at admin/).
-            Black-violet artwork carries the light theme; cream-violet the
-            dark one. */}
+            Black-violet artwork carries the light theme; white-violet the
+            dark one (no cream on dark ground — CAKE-158). */}
         <img src={markBlack} alt="DevCake" className="h-8 w-auto shrink-0 dark:hidden" />
-        <img src={markColor} alt="DevCake" className="hidden h-8 w-auto shrink-0 dark:block" />
+        <img src={markWhite} alt="DevCake" className="hidden h-8 w-auto shrink-0 dark:block" />
         {!collapsed && (
           <span className="leading-tight">
             <img src={wordmarkBlack} alt="" className="block h-[15px] w-auto dark:hidden" />
-            <img src={wordmarkColor} alt="" className="hidden h-[15px] w-auto dark:block" />
+            <img src={wordmarkWhite} alt="" className="hidden h-[15px] w-auto dark:block" />
             <span className="mt-1 block text-[10px] text-neutral-500 dark:text-neutral-400">agentic developer</span>
           </span>
         )}

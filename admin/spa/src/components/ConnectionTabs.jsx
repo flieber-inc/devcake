@@ -1,6 +1,7 @@
 import React from "react";
 import { CONNECTION_PAGES } from "../lib/nav.js";
 
+// Wrap — never horizontal-scroll (CAKE-162 chip-row rule).
 // Mobile/collapsed-rail switcher between the Connections pages — the exact
 // counterpart of Fleet/Settings section chip rows: the sidebar's indented
 // sub-entries exist only in the expanded drawer, so narrow viewports (where

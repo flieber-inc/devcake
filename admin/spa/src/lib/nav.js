@@ -13,7 +13,7 @@ export const FLEET_SECTIONS = [
 ];
 
 export const SETTINGS_SECTIONS = [
-  { id: "limits", label: "Limits" },
+  { id: "policies", label: "Policies" },
   { id: "scheduled-tasks", label: "Scheduled Tasks" },
   { id: "profiles", label: "Profiles & Export" },
 ];

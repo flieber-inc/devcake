@@ -23,7 +23,7 @@ import SettingRow from "./SettingRow.jsx";
 
 const APPLY_BODY = (name) =>
   `Replaces the runtime settings this profile contains: PMO connections, ` +
-  `repositories, Dev Types, prompt templates and active selections, limits — ` +
+  `repositories, Dev Types, prompt templates and active selections, policies — ` +
   `and every stored secret value when the profile carries secrets. Current ` +
   `settings are not kept anywhere unless you saved them as a profile first. ` +
   `Run history, the skill store, internal repos, and .env values are ` +
@@ -190,7 +190,7 @@ export default function ProfilesSection() {
   return (
     <Section id="profiles" title="Profiles & Export"
       description="Named snapshots of your settings and secrets — save the current setup, switch between saved ones, move them between installs."
-      help="A profile captures the saved runtime settings (connections, repos, Dev Types, prompt templates, limits) and every stored secret value. Applying replaces the current settings with the snapshot; later edits never update a profile. Secret values are stored on the server and never shown here."
+      help="A profile captures the saved runtime settings (connections, repos, Dev Types, prompt templates, policies) and every stored secret value. Applying replaces the current settings with the snapshot; later edits never update a profile. Secret values are stored on the server and never shown here."
       actions={
         <>
           <ImmediateBadge text="everything here applies immediately" />

@@ -21,10 +21,15 @@ import { runHoverDetail } from "../lib/runHover.js";
 // CAKE-171/174: muted italic placeholder when a token/cost scalar was not
 // measured. Copy comes only from the tokenCostAbsence phrasebook — never a
 // second phrase string here.
-function AbsenceNote({ copy }) {
+// CAKE-183: layout="merged" drops the per-cell max-w cap and centers a single
+// nowrap line across the five token/cost columns.
+function AbsenceNote({ copy, layout = "cell" }) {
+  const merged = layout === "merged";
   return (
     <span
-      className="inline-block max-w-[9rem] text-left text-[11px] italic leading-snug text-neutral-500 dark:text-neutral-400"
+      className={merged
+        ? "inline-block whitespace-nowrap text-center text-[11px] italic text-neutral-500 dark:text-neutral-400"
+        : "inline-block max-w-[9rem] text-left text-[11px] italic leading-snug text-neutral-500 dark:text-neutral-400"}
       title={copy}
       aria-label={copy}>
       {copy}
@@ -137,11 +142,20 @@ export default function RunsPage() {
     value != null ? tokens(value) : aggregateAbsence();
   const aggregateUsdOrAbsence = (value) =>
     value != null ? usd(value) : aggregateAbsence();
-  const costCell = (r) => {
+  // Effective displayed cost scalar (null → absence path). Same ADR-0021
+  // override/estimate rules as costCell — kept as a pure helper so the
+  // CAKE-183 merge predicate can compare copy without re-deriving showEst.
+  const effectiveCostUsd = (r) => {
     const showEst = overrideOn
       ? r.cost_usd_estimated != null
       : r.cost_usd == null && r.cost_usd_estimated != null;
-    const eff = showEst ? r.cost_usd_estimated : r.cost_usd;
+    return {
+      showEst,
+      eff: showEst ? r.cost_usd_estimated : r.cost_usd,
+    };
+  };
+  const costCell = (r) => {
+    const { showEst, eff } = effectiveCostUsd(r);
     if (eff == null) {
       return (
         <AbsenceNote
@@ -161,6 +175,32 @@ export default function RunsPage() {
         ~{usd(eff)}
       </span>
     );
+  };
+
+  // CAKE-183: when all five token/cost display paths are absence notes with
+  // the same phrasebook copy, merge into one colspan=5 cell. Mixed rows
+  // (numbers + "not extracted" on CACHE W alone) stay per-cell.
+  const uniformTokenCostAbsence = (r) => {
+    const tokenAbs = (value) =>
+      value != null ? null : absenceCopy({ state: r.state, source: r.token_source });
+    const { eff } = effectiveCostUsd(r);
+    const costAbs = eff == null
+      ? costAbsenceCopy({
+          state: r.state,
+          source: r.token_source,
+          emptyRateCard,
+        })
+      : null;
+    const copies = [
+      tokenAbs(r.input_tokens),
+      tokenAbs(r.output_tokens),
+      tokenAbs(r.cache_read_tokens),
+      tokenAbs(r.cache_write_tokens),
+      costAbs,
+    ];
+    if (copies.some((c) => c == null)) return null;
+    const first = copies[0];
+    return copies.every((c) => c === first) ? first : null;
   };
 
   const sortableTh = (key, label, extra = "") => {
@@ -263,74 +303,85 @@ export default function RunsPage() {
   // multi-line cells. It lives in the stage glyph's popup, the icon
   // aria-labels, the run terminal's header — and always in the CSV export.
   const iconAction = "rounded p-0.5 text-neutral-500 transition hover:text-accent-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-accent-300";
-  const runRow = (r) => (
-    <tr key={r.run_id} onClick={() => setOpenRun(r)}
-      title="Click to open the run terminal"
-      className="cursor-pointer border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
-      <td className="py-2 pr-2">
-        <span className="flex items-center gap-1 whitespace-nowrap">
-          <StageGlyph stage={r.mission_type} detail={`run ${r.run_id}`} />
-          <button type="button"
-            onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
-            title="Open the run terminal"
-            aria-label={`Open the terminal for run ${r.run_id}`}
-            className={iconAction}>
-            <ScrollText size={14} aria-hidden />
-          </button>
-          <a href={traceUrl(r.run_id)}
-            onClick={(e) => e.stopPropagation()}
-            target="_blank" rel="noopener"
-            title="Open traces in OpenObserve"
-            aria-label={`Open traces for run ${r.run_id}`}
-            className={iconAction}>
-            <Activity size={14} aria-hidden />
-          </a>
-        </span>
-      </td>
-      <td className="pr-2">{missionCell(r)}</td>
-      <td className="pr-2">{harnessCell(r)}</td>
-      <td className="pr-2">{telCell(r.model)}</td>
-      <td className="pr-2">
-        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <StatusPill state={r.state} verdict={r.verdict} />
-          {/* the old second line, folded to a popup — one-line rows */}
-          {(r.error || r.verdict) && (
-            <span role="img"
-              title={r.error || r.verdict}
-              aria-label={r.error ? `error: ${r.error}` : `verdict: ${r.verdict}`}
-              className={r.error
-                ? "text-red-500 dark:text-red-400"
-                : "text-amber-500 dark:text-amber-400"}>
-              <TriangleAlert size={13} aria-hidden />
-            </span>
-          )}
-        </span>
-      </td>
-      <td className="whitespace-nowrap pr-2 text-xs text-neutral-500 dark:text-neutral-400"
-        title={fullTime(r.started_at)}>
-        {relTime(r.started_at)}
-      </td>
-      <td className="whitespace-nowrap pr-2 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-        {duration(r.started_at, r.ended_at)}
-      </td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.input_tokens, r)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokenOrAbsence(r.output_tokens, r)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.cache_read_tokens, r)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.cache_write_tokens, r)}</td>
-      <td className="pr-2 text-right text-xs tabular-nums">{costCell(r)}</td>
-      <td className="pl-2 text-right">
-        {/* dispatched/running only — finalizing hides Stop too: the Dev has
-            already exited and the backend 409s a stop there by design */}
-        {["dispatched", "running"].includes(r.state) && (
-          <Button size="sm" kind="danger-ghost"
-            aria-label={`Stop run ${r.run_id}`}
-            onClick={(e) => { e.stopPropagation(); setStopOneErr(""); setStopTarget(r); }}>
-            Stop
-          </Button>
+  const runRow = (r) => {
+    const mergedCopy = uniformTokenCostAbsence(r);
+    return (
+      <tr key={r.run_id} onClick={() => setOpenRun(r)}
+        title="Click to open the run terminal"
+        className="cursor-pointer border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
+        <td className="py-2 pr-2">
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <StageGlyph stage={r.mission_type} detail={`run ${r.run_id}`} />
+            <button type="button"
+              onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
+              title="Open the run terminal"
+              aria-label={`Open the terminal for run ${r.run_id}`}
+              className={iconAction}>
+              <ScrollText size={14} aria-hidden />
+            </button>
+            <a href={traceUrl(r.run_id)}
+              onClick={(e) => e.stopPropagation()}
+              target="_blank" rel="noopener"
+              title="Open traces in OpenObserve"
+              aria-label={`Open traces for run ${r.run_id}`}
+              className={iconAction}>
+              <Activity size={14} aria-hidden />
+            </a>
+          </span>
+        </td>
+        <td className="pr-2">{missionCell(r)}</td>
+        <td className="pr-2">{harnessCell(r)}</td>
+        <td className="pr-2">{telCell(r.model)}</td>
+        <td className="pr-2">
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <StatusPill state={r.state} verdict={r.verdict} />
+            {/* the old second line, folded to a popup — one-line rows */}
+            {(r.error || r.verdict) && (
+              <span role="img"
+                title={r.error || r.verdict}
+                aria-label={r.error ? `error: ${r.error}` : `verdict: ${r.verdict}`}
+                className={r.error
+                  ? "text-red-500 dark:text-red-400"
+                  : "text-amber-500 dark:text-amber-400"}>
+                <TriangleAlert size={13} aria-hidden />
+              </span>
+            )}
+          </span>
+        </td>
+        <td className="whitespace-nowrap pr-2 text-xs text-neutral-500 dark:text-neutral-400"
+          title={fullTime(r.started_at)}>
+          {relTime(r.started_at)}
+        </td>
+        <td className="whitespace-nowrap pr-2 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+          {duration(r.started_at, r.ended_at)}
+        </td>
+        {mergedCopy != null ? (
+          <td colSpan={5} className="pr-2 text-center text-xs">
+            <AbsenceNote copy={mergedCopy} layout="merged" />
+          </td>
+        ) : (
+          <>
+            <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.input_tokens, r)}</td>
+            <td className="pr-2 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokenOrAbsence(r.output_tokens, r)}</td>
+            <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.cache_read_tokens, r)}</td>
+            <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokenOrAbsence(r.cache_write_tokens, r)}</td>
+            <td className="pr-2 text-right text-xs tabular-nums">{costCell(r)}</td>
+          </>
         )}
-      </td>
-    </tr>
-  );
+        <td className="pl-2 text-right">
+          {/* dispatched/running only — finalizing hides Stop too: the Dev has
+              already exited and the backend 409s a stop there by design */}
+          {["dispatched", "running"].includes(r.state) && (
+            <Button size="sm" kind="danger-ghost"
+              aria-label={`Stop run ${r.run_id}`}
+              onClick={(e) => { e.stopPropagation(); setStopOneErr(""); setStopTarget(r); }}>
+              Stop
+            </Button>
+          )}
+        </td>
+      </tr>
+    );
+  };
 
   const doClear = async () => {
     setClearing(true);

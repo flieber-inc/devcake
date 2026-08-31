@@ -27,9 +27,9 @@ from devcake.adapters.registry import make_forge
 from devcake.config import RepoInstance
 
 PASS, FAIL = "PASS", "FAIL"
-# Pinned check count (ids 1–13). A vanished check must fail the battery —
+# Pinned check count (ids 1–14). A vanished check must fail the battery —
 # never self-grade N/N from len(results) alone (CAKE-83).
-EXPECTED_ROWS = 13
+EXPECTED_ROWS = 14
 results: list[tuple[str, str, str]] = []
 
 
@@ -248,7 +248,30 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     # 13 — capabilities declared
     caps = forge.capabilities
     check("13", "capabilities declared",
-          caps.branch_protection_read in ("writer", "maintainer", "admin"))
+          caps.branch_protection_read in ("writer", "maintainer", "admin")
+          and caps.branch_protection_write is True)
+
+    # 14 — ForgePort apply_default_branch_protection round-trip (not the
+    # provisioner path): drop fixture protection, apply via the port, read back.
+    admin_user = fixture.admin[0]
+    ok14, note14 = True, ""
+    try:
+        try:
+            fixture._req(
+                "DELETE",
+                f"/repos/{admin_user}/{fixture.repo}/branch_protections/main")
+        except Exception:
+            pass
+        applied = await forge.apply_default_branch_protection("main")
+        prot14 = await forge.default_branch_protection("main")
+        ok14 = (
+            applied.outcome in ("applied", "already_as_strict")
+            and prot14 is not None and prot14.protected is True
+        )
+        note14 = f"{applied.outcome} {prot14}"
+    except Exception as e:
+        ok14, note14 = False, str(e)[:150]
+    check("14", "apply_default_branch_protection round-trip", ok14, note14)
 
 
 def main():

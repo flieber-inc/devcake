@@ -377,14 +377,16 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 **Branch protection** (PR + ≥1 approval + **required status checks**) is a
 **DEPLOYMENT REQUIREMENT** for any forge hosting work repos — not optional
-hardening. It is a policy you set **on the forge** (GitHub / GitLab / Gitea)
+hardening. It is a policy enforced **on the forge** (GitHub / GitLab / Gitea)
 for a branch name — in DevCake, the repo’s `default_branch` (usually `main`).
 The forge refuses direct pushes and merges that do not meet your rules (PR
 required, ≥1 approval, required checks, no force-push, no bypass for the Dev
-account). DevCake does not implement those rules; it only **warns** when the
-branch looks unprotected and does not hard-block dispatch (`14` §8). The honest
-missing-protection surface is `/health` `forge_protection` → Overview
-**critical** (dismissable) alert.
+account). Operators normally set those rules in the forge UI; the app can also
+apply a **derived** shape via `ForgePort.apply_default_branch_protection` when
+explicitly invoked (never silently on connect — `06` §1b). The app still only
+**warns** when the branch looks unprotected and does not hard-block dispatch
+(`14` §8). The honest missing-protection surface is `/health` `forge_protection`
+→ Overview **critical** (dismissable) alert.
 
 Why it is mandatory: Dev containers hold a write-capable forge token, and token
 scoping cannot separate “push a feature branch” from “merge to the default

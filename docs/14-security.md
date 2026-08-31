@@ -154,10 +154,14 @@ REVIEW’s job is judgment (`result.json`). Formal forge approval and merge are 
 **Branch protection** (PR + ≥1 formal approval + **required status checks**) is
 a **DEPLOYMENT REQUIREMENT** for any forge hosting work repos — not optional
 hardening. It is a **forge-enforced** policy on a branch name (your repo’s
-`default_branch` — usually `main`), configured in GitHub / GitLab / Gitea, not
-in DevCake. Required shape: no direct push to that branch; changes must arrive
-via PR/MR; merge requires ≥1 formal approval and **required status checks**;
-the Dev token’s account must **not** be on a bypass list.
+`default_branch` — usually `main`). Operators configure it in GitHub / GitLab /
+Gitea; the app may also apply a derived shape through
+`ForgePort.apply_default_branch_protection` when explicitly invoked (never
+auto on connect — `06` §1b). Required shape: no direct push to that branch;
+changes must arrive via PR/MR; merge requires ≥1 formal approval **when a
+distinct reviewer identity is configured** and **required status checks**
+discovered from the repo’s own CI (empty when there is no CI); the Dev token’s
+account must **not** be on a bypass list.
 
 Token scopes on most forges **cannot** grant “push feature branches + open PRs”
 without also granting the API capability to merge when protection allows.
@@ -168,9 +172,9 @@ after green CI — that needs required reviews plus a distinct reviewer identity
 operative belt. When protection is missing, the honest surface is `/health`
 `forge_protection` → the Overview **critical** (dismissable) alert — DevCake
 still only **warns**; it does not refuse dispatch (`13` §8a, `§8`). The health
-probe today reports whether the default branch is protected, not whether
-required reviews or checks are configured — operators must still enable those
-rules on the forge.
+probe reports whether the default branch is protected (`BranchProtection.protected`);
+after a successful apply, that probe reflects `protected=True`. Richer
+reviews/checks detail is not required for the Overview alert.
 
 #### End-to-end merge path (operator mental model)
 

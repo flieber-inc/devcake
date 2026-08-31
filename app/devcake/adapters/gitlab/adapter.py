@@ -8,8 +8,9 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeCapabilities, ForgeDescriptor,
-                            ForgeError, ForgeHealth, PRFile, PRFilesResult,
+from ...ports.forge import (ApplyProtectionResult, BranchProtection,
+                            ForgeCapabilities, ForgeDescriptor, ForgeError,
+                            ForgeHealth, PRFile, PRFilesResult, ProtectionShape,
                             PullRequest)
 
 log = logging.getLogger("devcake.forge")
@@ -42,7 +43,8 @@ class GitLabForge:
     # real tri-state; MR-list source_branch filters server-side
     capabilities = ForgeCapabilities(
         mergeable_tristate=True, self_approval_blocked=False,
-        branch_protection_read="maintainer", pr_list_head_filter=True)
+        branch_protection_read="maintainer", branch_protection_write=True,
+        pr_list_head_filter=True)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None,
@@ -219,6 +221,96 @@ class GitLabForge:
             return None
         except Exception:  # noqa: BLE001 — probe contract: failure → None (protection unknown); never raises into the poll loop
             return None
+
+    async def _discover_status_checks(self, branch: str) -> list[str]:
+        """Commit status / job names on the default-branch HEAD. Empty when
+        the project has no CI — GitLab maps a non-empty discovery to
+        only_allow_merge_if_pipeline_succeeds (no per-context require on Free)."""
+        try:
+            b = await self._req(
+                "GET", f"/repository/branches/{quote(branch, safe='')}")
+        except ForgeError:
+            return []
+        sha = ((b.get("commit") or {}).get("id") or "")
+        if not sha:
+            return []
+        try:
+            statuses = await self._req(
+                "GET", f"/repository/commits/{quote(sha, safe='')}/statuses"
+            ) or []
+        except ForgeError:
+            return []
+        return sorted({s.get("name") for s in statuses
+                       if isinstance(s, dict) and s.get("name")})
+
+    async def _read_protection_shape(
+            self, branch: str) -> ProtectionShape | None:
+        try:
+            pb = await self._req(
+                "GET", f"/protected_branches/{quote(branch, safe='')}")
+        except ForgeError as e:
+            if e.status == 404:
+                return None
+            return None
+        approvals = 0
+        pipeline_checks: list[str] = []
+        try:
+            proj = await self._req("GET", "")
+            approvals = int(proj.get("approvals_before_merge") or 0)
+            if proj.get("only_allow_merge_if_pipeline_succeeds"):
+                # preserve non-empty discovered names if we can; else marker
+                pipeline_checks = ["*pipeline*"]
+        except ForgeError:
+            pass
+        return ProtectionShape(
+            require_pull_request=True,
+            allow_force_push=bool(pb.get("allow_force_push")),
+            allow_deletions=False,
+            required_status_checks=pipeline_checks,
+            required_approving_review_count=approvals,
+        )
+
+    async def _write_protection_shape(
+            self, branch: str, shape: ProtectionShape) -> None:
+        # Idempotent protect: drop existing rule then recreate (GitLab has no
+        # full PATCH for access levels on Free).
+        qbranch = quote(branch, safe="")
+        try:
+            await self._req("DELETE", f"/protected_branches/{qbranch}")
+        except ForgeError as e:
+            if e.status not in (404,):
+                raise
+        await self._req(
+            "POST", "/protected_branches",
+            json={
+                "name": branch,
+                "push_access_level": 0,       # No one — changes via MR only
+                "merge_access_level": 40,     # Maintainer
+                "allow_force_push": bool(shape.allow_force_push),
+            })
+        # Project-level merge gates (approvals + pipeline) — best-effort on
+        # Free/CE; 403 remaps via run_apply.
+        proj_body: dict[str, Any] = {
+            "approvals_before_merge": int(shape.required_approving_review_count),
+            "only_allow_merge_if_pipeline_succeeds": bool(
+                shape.required_status_checks),
+        }
+        await self._req("PUT", "", json=proj_body)
+
+    async def apply_default_branch_protection(
+            self, branch: str = "main") -> ApplyProtectionResult:
+        from ..protection_apply import run_apply_default_branch_protection
+        return await run_apply_default_branch_protection(
+            capabilities=self.capabilities,
+            write_token=self.token,
+            reviewer_token=self.reviewer_token,
+            branch=branch,
+            discover_status_checks=self._discover_status_checks,
+            read_protection_shape=self._read_protection_shape,
+            write_protection_shape=self._write_protection_shape,
+            forge_label="GitLab",
+            write_permission="Maintainer+ (api + protect branch / project settings)",
+        )
 
     async def pr_files(self, pr_number: int) -> PRFilesResult:
         """MR changed-file list. GitLab's /changes may set ``overflow`` when

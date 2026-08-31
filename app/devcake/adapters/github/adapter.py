@@ -8,8 +8,9 @@ from typing import Any, Optional
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeCapabilities, ForgeDescriptor,
-                            ForgeError, ForgeHealth, PRFile, PRFilesResult,
+from ...ports.forge import (ApplyProtectionResult, BranchProtection,
+                            ForgeCapabilities, ForgeDescriptor, ForgeError,
+                            ForgeHealth, PRFile, PRFilesResult, ProtectionShape,
                             PullRequest)
 
 log = logging.getLogger("devcake.forge")
@@ -38,7 +39,8 @@ class GitHubForge:
     )
     capabilities = ForgeCapabilities(
         mergeable_tristate=True, self_approval_blocked=True,
-        branch_protection_read="admin", pr_list_head_filter=True)
+        branch_protection_read="admin", branch_protection_write=True,
+        pr_list_head_filter=True)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None,
@@ -227,6 +229,123 @@ class GitHubForge:
         except ForgeError:
             pass
         return BranchProtection(protected=protected, requires_reviews=requires_reviews)
+
+    async def _discover_status_checks(self, branch: str) -> list[str]:
+        """Combined status contexts + check-run names on branch HEAD."""
+        try:
+            b = await self._req("GET", f"/branches/{branch}")
+        except ForgeError:
+            return []
+        sha = ((b.get("commit") or {}).get("sha") or "")
+        if not sha:
+            return []
+        names: set[str] = set()
+        try:
+            combined = await self._req("GET", f"/commits/{sha}/status") or {}
+            for s in combined.get("statuses") or []:
+                ctx = s.get("context")
+                if ctx:
+                    names.add(ctx)
+        except ForgeError:
+            pass
+        try:
+            runs = await self._req(
+                "GET", f"/commits/{sha}/check-runs?per_page=100") or {}
+            for r in runs.get("check_runs") or []:
+                name = r.get("name")
+                if name:
+                    names.add(name)
+        except ForgeError:
+            pass
+        return sorted(names)
+
+    async def _read_protection_shape(
+            self, branch: str) -> ProtectionShape | None:
+        try:
+            prot = await self._req("GET", f"/branches/{branch}/protection")
+        except ForgeError as e:
+            if e.status in (404, 403):
+                # unprotected or unreadable detail — treat as no classic rule
+                try:
+                    b = await self._req("GET", f"/branches/{branch}")
+                    if not b.get("protected"):
+                        return None
+                except ForgeError:
+                    return None
+                # protected flag but no detail → unknown richness; not as-strict
+                return ProtectionShape(
+                    require_pull_request=True,
+                    allow_force_push=True,   # unknown → force apply to lock down
+                    allow_deletions=True,
+                    required_status_checks=[],
+                    required_approving_review_count=0,
+                )
+            return None
+        reviews = prot.get("required_pull_request_reviews") or {}
+        checks_obj = prot.get("required_status_checks") or {}
+        contexts = list(checks_obj.get("contexts") or [])
+        for c in checks_obj.get("checks") or []:
+            if isinstance(c, dict) and c.get("context"):
+                contexts.append(c["context"])
+        force = prot.get("allow_force_pushes") or {}
+        deletions = prot.get("allow_deletions") or {}
+        return ProtectionShape(
+            require_pull_request=True,  # classic protection implies PR path
+            allow_force_push=bool(force.get("enabled")),
+            allow_deletions=bool(deletions.get("enabled")),
+            required_status_checks=sorted({c for c in contexts if c}),
+            required_approving_review_count=int(
+                reviews.get("required_approving_review_count") or 0),
+        )
+
+    async def _write_protection_shape(
+            self, branch: str, shape: ProtectionShape) -> None:
+        reviews = None
+        if shape.required_approving_review_count > 0:
+            reviews = {
+                "required_approving_review_count":
+                    int(shape.required_approving_review_count),
+                "dismiss_stale_reviews": False,
+                "require_code_owner_reviews": False,
+            }
+        status_checks = None
+        if shape.required_status_checks:
+            status_checks = {
+                "strict": True,
+                "contexts": list(shape.required_status_checks),
+            }
+        body = {
+            "required_status_checks": status_checks,
+            "enforce_admins": True,
+            "required_pull_request_reviews": reviews,
+            "restrictions": None,
+            "allow_force_pushes": bool(shape.allow_force_push),
+            "allow_deletions": bool(shape.allow_deletions),
+        }
+        # GitHub requires required_pull_request_reviews object (or null) when
+        # require_pr; null disables reviews but branch stays protected.
+        if shape.require_pull_request and reviews is None:
+            body["required_pull_request_reviews"] = {
+                "required_approving_review_count": 0,
+                "dismiss_stale_reviews": False,
+                "require_code_owner_reviews": False,
+            }
+        await self._req("PUT", f"/branches/{branch}/protection", json=body)
+
+    async def apply_default_branch_protection(
+            self, branch: str = "main") -> ApplyProtectionResult:
+        from ..protection_apply import run_apply_default_branch_protection
+        return await run_apply_default_branch_protection(
+            capabilities=self.capabilities,
+            write_token=self.token,
+            reviewer_token=self.reviewer_token,
+            branch=branch,
+            discover_status_checks=self._discover_status_checks,
+            read_protection_shape=self._read_protection_shape,
+            write_protection_shape=self._write_protection_shape,
+            forge_label="GitHub",
+            write_permission="Administration (edit repository rules) on the write token",
+        )
 
     async def pr_files(self, pr_number: int) -> PRFilesResult:
         out: list[PRFile] = []

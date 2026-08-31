@@ -34,6 +34,11 @@ class ForgePort(Protocol):
             self, branch: str = "main") -> Optional[BranchProtection]: ...
         # protection state of the given branch (callers pass the resolved
         # repo's default_branch); None when unreadable
+    async def apply_default_branch_protection(
+            self, branch: str = "main") -> ApplyProtectionResult: ...
+        # write protection derived from the target repo only (CAKE-181);
+        # never auto-runs on connect; no-op when already as-strict;
+        # 403 → ForgeError naming the write token + missing permission
     async def pr_files(self, pr_number: int) -> PRFilesResult: ...
         # changed-file list for deliverable packaging (M11); truncated=True
         # when the vendor withheld paths (names unknown)
@@ -48,7 +53,9 @@ All adapters raise the same `ForgeError` — callers never see forge-native or `
 Normalized DTOs (pydantic models in `ports/forge.py`):
 
 - `PullRequest` — `{number, url, state: "open"|"closed", merged: bool, merge_commit_sha: str|None}`. GitLab's `iid` maps to `number`; MR state `"merged"` normalizes to `state="closed"` + `merged=True`; GitHub *list* payloads carry `merged_at` (not `merged`), so the adapter derives `merged` from it. `merge_commit_sha` is populated on `pr_state` reads (GitLab squash merges map `squash_commit_sha` onto it) — it pins the deliverable zip to the actual merge commit instead of the moving default branch.
-- `BranchProtection` — `{protected: bool, requires_reviews: bool|None}` (`None` = couldn't determine).
+- `BranchProtection` — `{protected: bool, requires_reviews: bool|None}` (`None` = couldn't determine). Health/Overview still use this thin DTO.
+- `ProtectionShape` — apply/compare shape: `{require_pull_request, allow_force_push, allow_deletions, required_status_checks: list[str], required_approving_review_count}`. Check names are discovered from the target repo (empty when no CI) — never hardcoded.
+- `ApplyProtectionResult` — `{outcome: "applied"|"already_as_strict", shape: ProtectionShape}` from `apply_default_branch_protection`.
 - `PRFile` — `{path, status, additions, deletions}` for deliverable packaging.
 - `PRFilesResult` — `{files: list[PRFile], truncated: bool}`. `truncated=True` means the vendor withheld some changed paths (names unknown). GitLab reads `/merge_requests/{iid}/changes` `overflow` and retries once with `access_raw_diffs=true`; residual overflow stays `truncated=True`. GitHub paginates to completion (`truncated=False`). Gitea passes through `paginate_rest`'s ceiling flag. Delivery discloses residual truncation in `MANIFEST.txt` and the feed note without inventing dropped filenames.
 - `ForgeHealth` — `{ok, repository, can_push, can_read, transient, detail}` from `health_probe`.
@@ -65,7 +72,23 @@ Each adapter declares a `capabilities` ClassVar so call sites branch on behavior
 | `mergeable_tristate` | real tri-state vs True/False/None-on-absent | True | True | False |
 | `self_approval_blocked` | server rejects PR author approving own PR | True | **False** (allows by default) | True |
 | `branch_protection_read` | scope needed to READ protection | `"admin"` | `"maintainer"` | `"admin"` |
+| `branch_protection_write` | forge can WRITE protection via `apply_default_branch_protection` (token must still be privileged enough) | True | True | True |
 | `pr_list_head_filter` | server-side `head` filter on PR list | True | True | False (adapter filters client-side) |
+
+### 1b. `apply_default_branch_protection` (CAKE-181)
+
+Explicit operator/API action — **not** silent on connect. Shape is derived from the target repo only:
+
+| Rule | Behavior |
+|---|---|
+| Require PR | Direct pushes disallowed (GitHub classic protection / GitLab `push_access_level=0` / Gitea `enable_push=false`) |
+| No force-push / no deletion | Vendor flags set to forbid |
+| Required status checks | Contexts discovered on default-branch HEAD (GitHub statuses + check-runs; GitLab commit statuses → `only_allow_merge_if_pipeline_succeeds` when non-empty; Gitea `status_check_contexts`). **Empty list when the repo has no CI — never hardcoded names.** |
+| Approvals | `required_approving_review_count=1` only when the adapter was constructed with a **distinct** `reviewer_token`; otherwise `0` |
+| No-weaken | If existing protection already meets or exceeds the desired shape → `outcome="already_as_strict"` (no write). Writes merge strictest-of(current, desired). |
+| 403 | `ForgeError(status=403)` naming the **write token** and the permission/scope the forge needs |
+
+This is **not** the internal Gitea provisioner's `_ensure_protection` (hardcoded approvals whitelist for `devcake-reviewer` on operator/mission repos — `InternalForgePort` only).
 
 ## 2. Branch convention (single definition)
 
@@ -87,7 +110,7 @@ Restated from `03-mission-lifecycle.md`:
 
 - Branch: `devcake/{INSTANCE}-{mission_key}` — reused across EXECUTE loops; never force-pushed; checked out if it already exists on the remote. Playbooks receive it via the `{branch}` placeholder, fed by `mission_branch(instance, key)`. Pre-v3 records without a stored `branch` fall back via `run_branch()` / `legacy_branch()`.
 - PR title: `[{mission_key}] {title}`; body links the Mission URL and the plan attachment.
-- DevCake **playbooks** never push to the default branch (the resolved repo's `default_branch`). The only *intended* path to the default branch is a PR merge (human, or app under `auto_merge`). Enforcement is **forge-side branch protection** (operator-owned, `14-security.md` §2 zone C / `13-deployment.md` §8a) — token capability cannot separate push-branch from merge on many forges. The app **warns** when the default branch is unprotected (via `/health` `forge_protection`); it does not hard-block dispatch.
+- DevCake **playbooks** never push to the default branch (the resolved repo's `default_branch`). The only *intended* path to the default branch is a PR merge (human, or app under `auto_merge`). Enforcement is **forge-side branch protection** (`14-security.md` §2 zone C / `13-deployment.md` §8a) — token capability cannot separate push-branch from merge on many forges. Operators set protection on the forge; the app can also apply a derived shape via `apply_default_branch_protection` when explicitly invoked (never silently on connect). The app **warns** when the default branch is unprotected (via `/health` `forge_protection`); it does not hard-block dispatch.
 
 ## 3. Division of labor: Dev vs. app
 
@@ -186,6 +209,7 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 - CLI in Dev images: `gh` (authenticated via `GH_TOKEN` — the descriptor's `cli_token_envs`, mirrored from the forge token by the entrypoint).
 - API: REST for the app-side operations (PR lookup, comments, reviews, merge with `merge_method: squash`, branch protection); PR creation happens Dev-side via the descriptor's `pr_instructions`. `api_base` overrides `https://api.github.com` for GitHub Enterprise.
 - `default_branch_protection` reads the branch's `protected` flag, classic protection detail (may 403/404 without admin scope), and repository rulesets (the modern mechanism).
+- `apply_default_branch_protection` writes **classic** protection via `PUT /branches/{branch}/protection` (admin / edit-repository-rules). Rulesets remain a read signal only on this path.
 
 ## 7. GitLab specifics
 
@@ -193,6 +217,7 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 - CLI in Dev images: `glab` (authenticated via `GITLAB_TOKEN`).
 - Merge: `PUT /merge_requests/:iid/merge` with `squash: true`.
 - Self-hosted: the API origin derives from the repo URL (§3b); the project path is URL-encoded (`grp/repo` → `grp%2Frepo`). `default_branch_protection`: a 404 on `/protected_branches/{branch}` means unprotected.
+- `apply_default_branch_protection` (re)creates `/protected_branches` with `push_access_level=0` and `allow_force_push=false`, then sets project `approvals_before_merge` / `only_allow_merge_if_pipeline_succeeds` to match the derived shape (GitLab Free has no per-context required-check list).
 - **`pr_files` truncation:** `GET /merge_requests/{iid}/changes` may set `overflow: true` when size limits withhold paths (names are not returned). The adapter retries once with `access_raw_diffs=true`; if overflow remains, `PRFilesResult.truncated=True` and delivery discloses that additional paths are unknown (MANIFEST + feed note), pointing at the MR as canonical.
 
 ## 7a. Gitea specifics
@@ -200,9 +225,10 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 - Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos) plus the provisioner method **`create_operator_repo`** for operator/"gitea (internal)" repo cards incl. memory notebooks (admin `POST …/internal-repos/create` → `internal_repos_service.create_internal_repo`; refuses `activity-*` names, never swept by Clear — not a Protocol method today). Isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped). Day-to-day PR ops use the ordinary `ForgePort` from `mission_repo_binding` → `make_gitea_adapter` on **org service tokens** (PR comment/merge); the per-mission write/read pair is Dev/runspec only.
 - Auth: Gitea personal/access tokens; machine users + scoped token pairs for per-mission isolation on the internal forge (ADR-0010; container isolation posture `14` §6 — Gitea admin password never enters the Dev env).
 - **Machine-user naming (measured, Gitea 1.27.1):** usernames are capped at 40 chars and reject **consecutive hyphens** — `_svc_user()` therefore rstrips hyphens off the truncated stem before appending the full-name hash. Provisioning also discriminates Gitea's overloaded **422**: `"already exists"` is tolerated (idempotent re-provision), anything else — notably `"invalid username"` — fails loud. Both were one bug: the ADR-0030 board's repo names truncated exactly onto a hyphen, the invalid user was silently never created, and every zero-repo board mission then gated on the collaborator PUT with `user does not exist` (founder report 2026-08-05).
-- Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True` (enforced client-side like GitHub — a pasted write token returns `False` from `approve()` without a wire call, §4 item 3), `pr_list_head_filter=False` (client-side head filter).
+- Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True` (enforced client-side like GitHub — a pasted write token returns `False` from `approve()` without a wire call, §4 item 3), `pr_list_head_filter=False` (client-side head filter), `branch_protection_write=True`.
+- `apply_default_branch_protection` POSTs/PATCHes `/branch_protections` with `enable_push=false`, `enable_force_push=false`, discovered `status_check_contexts`, and `required_approvals` from the distinct-reviewer rule. Distinct from the provisioner's `_ensure_protection` (always approvals=1 + `devcake-reviewer` whitelist — internal repos only).
 - **Merge 405:** Gitea's 405 is overloaded — `"Please try again later"` (async mergeability) is retried briefly inside `merge()`; `"Does not have enough approvals"` and already-merged paths are definitive (probe `merged` before reporting failure so redelivery is safe).
-- Contract battery: `scripts/contract_tests_forge.py` default / `DEVCAKE_CONTRACT_FORGE=gitea` lane (wired into `ci_suite.sh` / GHA when the stack+Gitea are up).
+- Contract battery: `scripts/contract_tests_forge.py` default / `DEVCAKE_CONTRACT_FORGE=gitea` lane (wired into `ci_suite.sh` / GHA when the stack+Gitea are up) — includes an apply→read round-trip.
 
 ## 8. Adapter contract tests
 
@@ -222,9 +248,10 @@ Two layers:
 | 8 | Registry: `forges()` covers `{github, gitlab, gitea}` with real descriptors; `make_forge` constructs each (passing `api_base`); `make_internal_forge` / `make_gitea_adapter` are the only other construction paths; production AST scan forbids direct `*Forge(` outside the registry; an unknown forge is rejected by `RepoInstance` validation |
 | 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile; Gitea `token_patterns == []` is pinned (intentional — SHA collision) |
 | 10 | `mission_branch(instance, key)` single definition: `devcake/{INSTANCE}-{key}` prefix |
-| 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea) |
+| 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea), including `branch_protection_write` |
 | 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
 | 13 | `approve()`: False without reviewer; same write/reviewer token no-ops on `self_approval_blocked` forges and still posts on GitLab; `post_pr_comment` redacts known secret shapes on the wire (`test_forge_http.py`) |
+| 14 | `apply_default_branch_protection`: shape from discovered checks; approvals only with distinct reviewer; already-as-strict no-op; 403 names write token + permission; hermetic Gitea MockTransport round-trip (`test_forge_apply_protection.py`) |
 
 **HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape, full URL assembly, PR-comment redaction, self-approval same-token honesty for GitHub/GitLab, and Gitea's `APPROVED` review event, so empty `_headers()` or a broken `_req` URL fails the suite. The live forge battery (`scripts/contract_tests_forge.py`) is **gitea-only** (default / `DEVCAKE_CONTRACT_FORGE=gitea`; non-gitea values hard-exit). GitHub/GitLab live forge proof is the M12 acceptance ritual / `scripts/acceptance.py` (tester-side tokens), not this script.
 

@@ -5,7 +5,7 @@ these DTOs; callers never see raw forge JSON."""
 
 from typing import ClassVar, Literal, Optional, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..domain.run import LEGACY_PMO_REFS
 
@@ -76,6 +76,88 @@ class BranchProtection(BaseModel):
     requires_reviews: Optional[bool] = None
 
 
+class ProtectionShape(BaseModel):
+    """Desired or observed branch-protection shape for apply + no-weaken
+    compare (CAKE-181). Richer than ``BranchProtection`` (health/Overview
+    still use that thin DTO). Never hardcodes check names — callers pass
+    contexts discovered from the target repo."""
+    require_pull_request: bool = True
+    allow_force_push: bool = False
+    allow_deletions: bool = False
+    required_status_checks: list[str] = Field(default_factory=list)
+    required_approving_review_count: int = 0
+
+
+class ApplyProtectionResult(BaseModel):
+    """Outcome of ``ForgePort.apply_default_branch_protection``."""
+    outcome: Literal["applied", "already_as_strict"]
+    shape: ProtectionShape
+
+
+def distinct_reviewer_configured(
+        write_token: str, reviewer_token: str | None) -> bool:
+    """True when the repo card has a reviewer identity distinct from the
+    write token (same rule ``approve()`` uses on self_approval_blocked forges)."""
+    rev = (reviewer_token or "").strip()
+    return bool(rev) and rev != write_token
+
+
+def derive_protection_shape(
+        *, discovered_status_checks: list[str],
+        has_distinct_reviewer: bool) -> ProtectionShape:
+    """Target-repo-only desired shape: PR required, no force-push/delete,
+    discovered check contexts (empty when no CI), one approval only when a
+    distinct reviewer identity is configured."""
+    checks = sorted({c for c in discovered_status_checks if c})
+    return ProtectionShape(
+        require_pull_request=True,
+        allow_force_push=False,
+        allow_deletions=False,
+        required_status_checks=checks,
+        required_approving_review_count=1 if has_distinct_reviewer else 0,
+    )
+
+
+def is_as_strict_as(
+        current: ProtectionShape | None, desired: ProtectionShape) -> bool:
+    """True when ``current`` already meets or exceeds ``desired`` on every
+    dimension — apply must no-op (never weaken)."""
+    if current is None:
+        return False
+    if desired.require_pull_request and not current.require_pull_request:
+        return False
+    if (not desired.allow_force_push) and current.allow_force_push:
+        return False
+    if (not desired.allow_deletions) and current.allow_deletions:
+        return False
+    if current.required_approving_review_count < desired.required_approving_review_count:
+        return False
+    have = set(current.required_status_checks)
+    return all(c in have for c in desired.required_status_checks)
+
+
+def merge_strictest(
+        current: ProtectionShape | None,
+        desired: ProtectionShape) -> ProtectionShape:
+    """Union of constraints so a write never drops a stricter existing rule."""
+    if current is None:
+        return desired.model_copy(deep=True)
+    return ProtectionShape(
+        require_pull_request=(
+            current.require_pull_request or desired.require_pull_request),
+        allow_force_push=(
+            current.allow_force_push and desired.allow_force_push),
+        allow_deletions=(
+            current.allow_deletions and desired.allow_deletions),
+        required_status_checks=sorted(
+            set(current.required_status_checks)
+            | set(desired.required_status_checks)),
+        required_approving_review_count=max(
+            current.required_approving_review_count,
+            desired.required_approving_review_count),
+    )
+
+
 class PRFile(BaseModel):
     """One changed file in a PR (M11 deliverable zip)."""
     path: str
@@ -106,6 +188,10 @@ class ForgeCapabilities(BaseModel):
     self_approval_blocked: bool = True
     # scope needed to READ branch protection: "writer" | "maintainer" | "admin"
     branch_protection_read: str = "admin"
+    # can this forge (with a suitably privileged token) WRITE protection via
+    # apply_default_branch_protection? False → call sites skip / surface
+    # unsupported rather than hitting a dead endpoint (CAKE-181).
+    branch_protection_write: bool = True
     # does the PR-list `head` query param filter server-side? (Gitea ignores
     # it → the adapter filters client-side; capability documents the fact)
     pr_list_head_filter: bool = True
@@ -158,6 +244,9 @@ class ForgePort(Protocol):
     - `merge` squash-merges and retries transient 409 races in place.
     - `approve` uses the reviewer token; returns False when none configured.
     - `get_pr_by_branch` returns the NEWEST PR (any state) for the branch.
+    - `apply_default_branch_protection` derives shape from the target repo
+      (discovered checks; approvals only with a distinct reviewer token),
+      never weakens existing rules, and does not auto-run on connect.
     """
 
     descriptor: ClassVar[ForgeDescriptor]
@@ -172,6 +261,8 @@ class ForgePort(Protocol):
     async def mergeable(self, pr_number: int) -> Optional[bool]: ...
     async def default_branch_protection(
         self, branch: str = "main") -> Optional[BranchProtection]: ...
+    async def apply_default_branch_protection(
+        self, branch: str = "main") -> ApplyProtectionResult: ...
     # deliverable packaging (M11): the merged change set → zip → PMO feed
     async def pr_files(self, pr_number: int) -> PRFilesResult: ...
     async def file_content(self, path: str, ref: str) -> bytes: ...

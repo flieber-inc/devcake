@@ -185,11 +185,19 @@ await withPage(async (page) => {
       cache_write_tokens: 0, cost_usd: 0, cost_usd_estimated: null,
       started_at: new Date(Date.now() - 300000).toISOString(),
       ended_at: new Date(Date.now() - 240000).toISOString() },
+    // Mixed finished: numbers + null CACHE W — must NOT colspan-merge
+    { run_id: "A-5-1-EXECUTE-MIXEDX", mission_key: "A-5", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "finished",
+      token_source: "end_event",
+      input_tokens: 1200, output_tokens: 340, cache_read_tokens: 80,
+      cache_write_tokens: null, cost_usd: 0.42, cost_usd_estimated: null,
+      started_at: new Date(Date.now() - 360000).toISOString(),
+      ended_at: new Date(Date.now() - 300000).toISOString() },
   ];
   await page.route(/\/api\/v1\/runs(?:\?.*)?$/, (route) =>
     route.fulfill({ status: 200, contentType: "application/json",
       body: JSON.stringify({
-        total: 4, total_runs: 4, runs,
+        total: 5, total_runs: 5, runs,
         totals: {
           runtime_seconds: 180,
           input_tokens: 0, output_tokens: 0,
@@ -205,9 +213,24 @@ await withPage(async (page) => {
   await gotoFresh(page, "#/runs");
   await page.waitForSelector("table tbody tr");
   const body = await page.innerText("tbody");
+  // Totals row is first in tbody when present — locate data rows by content.
+  const runningRow = page.locator("table tbody tr").filter({
+    has: page.locator('button[aria-label="Stop run A-1-1-EXECUTE-WAITXX"]'),
+  });
+  const mixedRow = page.locator("table tbody tr").filter({ hasText: "A-5" });
 
-  check("running null cells say available after the run ends",
-    body.includes("available after the run ends"));
+  // CAKE-183: uniform interim placeholder merges into one colspan=5 cell
+  const waitPhrase = "available after the run ends";
+  await checked("running row shows the interim placeholder exactly once",
+    async () => (await runningRow.locator(`[aria-label="${waitPhrase}"]`).count()) === 1);
+  await checked("running interim placeholder spans the five token/cost columns",
+    async () => {
+      const mergedCell = runningRow.locator(`td[colspan="5"]:has([aria-label="${waitPhrase}"])`);
+      return (await mergedCell.count()) === 1;
+    });
+  check("running row keeps its Stop control after the merged token/cost cell",
+    (await runningRow.locator('button[aria-label="Stop run A-1-1-EXECUTE-WAITXX"]').count()) === 1);
+
   check("failed null cells say not extracted (run failed)",
     body.includes("not extracted (run failed)"));
   check("finished + unavailable source says not extracted (unavailable)",
@@ -216,6 +239,26 @@ await withPage(async (page) => {
     /\b0\b/.test(body) && body.includes("$0.00"));
   check("null aggregate cache-write column says not extracted (not a fabricated 0)",
     (await page.locator('[data-testid="runs-totals"] [aria-label="not extracted"]').count()) >= 1);
+
+  // Mixed finished row: per-column cells, no colspan merge
+  check("mixed finished row has no colspan=5 token/cost merge",
+    (await mixedRow.locator("td[colspan='5']").count()) === 0);
+  const mixedCells = mixedRow.locator("td");
+  // 7 leading + 5 token/cost + 1 actions = 13
+  check("mixed finished row keeps five separate token/cost cells",
+    (await mixedCells.count()) === 13);
+  check("mixed finished CACHE W alone shows not extracted",
+    (await mixedCells.nth(10).innerText()).includes("not extracted"));
+  check("mixed finished cost still shows its dollar amount",
+    (await mixedCells.nth(11).innerText()).includes("$0.42"));
+
+  // One-line discipline at the suite's default viewport (1280): the merged
+  // phrase must not force document-level horizontal overflow.
+  const docOver = await page.evaluate(() =>
+    Math.ceil(document.documentElement.scrollWidth)
+      - document.documentElement.clientWidth);
+  check(`running merged placeholder does not force document horizontal overflow (${docOver}px)`,
+    docOver <= 1);
 });
 
 
@@ -253,16 +296,21 @@ await withPage(async (page) => {
       }) }));
   await gotoFresh(page, "#/runs");
   await page.waitForSelector("table tbody tr");
-  const rows = page.locator("table tbody tr");
-  const runningCost = await rows.nth(0).locator("td").nth(-2).innerText();
-  const failedCost = await rows.nth(1).locator("td").nth(-2).innerText();
-  const finishedCost = await rows.nth(2).locator("td").nth(-2).innerText();
-  check("empty card + running cost still says available after the run ends",
-    runningCost.includes("available after the run ends"));
-  check("empty card + failed cost still says not extracted (run failed)",
-    failedCost.includes("not extracted (run failed)"));
+  // No totals in this fixture — still locate by mission key so row order
+  // from server sort cannot silently retarget assertions. After CAKE-183,
+  // uniform-absence rows use one colspan=5 cell (not five token tds).
+  const waitPhrase = "available after the run ends";
+  const failedPhrase = "not extracted (run failed)";
+  const noRatePhrase = "no rate card — add rates under Cost inputs";
+  const runningRow = page.locator("table tbody tr").filter({ hasText: "E-1" });
+  const failedRow = page.locator("table tbody tr").filter({ hasText: "E-2" });
+  const finishedRow = page.locator("table tbody tr").filter({ hasText: "E-3" });
+  check("empty card + running still shows interim phrase once across token/cost",
+    (await runningRow.locator(`[aria-label="${waitPhrase}"]`).count()) === 1);
+  check("empty card + failed still shows run-failed phrase once across token/cost",
+    (await failedRow.locator(`[aria-label="${failedPhrase}"]`).count()) === 1);
   check("empty card + finished unpriced cost shows no-rate-card taxonomy",
-    finishedCost.includes("no rate card — add rates under Cost inputs"));
+    (await finishedRow.locator(`[aria-label="${noRatePhrase}"]`).count()) === 1);
 });
 
 summary("costs");

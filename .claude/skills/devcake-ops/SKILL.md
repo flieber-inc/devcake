@@ -42,12 +42,14 @@ Ground rules before anything else:
 From the repository root:
 
 ```bash
-uv tool install .        # or: pipx install .
-devcake --help           # verify the console script resolves
+uv tool install devcake-cli   # from PyPI (or: pipx install devcake-cli)
+devcake --help                # verify the console script resolves
 ```
 
-The CLI is versioned with the checkout: after every `git pull`, run
-`uv tool install .` again so the installed CLI matches the tree.
+When operating a checkout day to day, prefer installing from it
+(`uv tool install .` at the repo root) and re-run that after every
+`git pull` — the CLI is versioned with the tree, and PyPI releases can
+lag it.
 
 ## 3. Preflight — `devcake doctor`
 

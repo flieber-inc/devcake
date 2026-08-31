@@ -336,12 +336,18 @@ class RepoCache:
             # refuses `refs/heads/` and the sync would fail every cycle.
             r = await self.git(["ls-remote", "--symref", expected_url, "HEAD"],
                                env=env)
-            branch = _symref_head_branch(r.stdout) if r.returncode == 0 else ""
+            if r.returncode != 0:
+                # a probe ERROR keeps its own stderr — an auth failure must
+                # latch the breaker, not read as "set Branch on the card"
+                return await fail(f"default-branch probe: "
+                                  f"{r.stderr or r.stdout}"
+                                  + (" (timeout)" if r.timed_out else ""))
+            branch = _symref_head_branch(r.stdout)
             if not branch:
                 return await fail(
                     "default branch: the card's branch is empty and the "
-                    "remote's HEAD does not name one (empty repository?) — "
-                    "set Branch on the card")
+                    "remote's HEAD does not name one (empty repository or "
+                    "detached HEAD) — set Branch on the card")
         r = await self.git(["-C", str(p), "symbolic-ref", "HEAD",
                             f"refs/heads/{branch}"], env=env)
         if r.returncode != 0:

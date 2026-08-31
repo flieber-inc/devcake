@@ -27,6 +27,12 @@ export default function SkillSourcesSection({
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
   const sources = cfg.skill_sources || [];
+  // Backed-by candidates: CONFIGURED repo cards only — the server refuses
+  // an unconfigured backing card, so the picker never offers one
+  const backedRepoOptions = (cfg.repos || [])
+    .filter((r) => (r.url || "").trim())
+    .map((r) => r.name)
+    .filter(Boolean);
   // stored tokens key on the source name — lock the name once saved, with
   // the same session-new / last-index rule as Repos and PMO cards
   const newNames = useNewNames(dr.server?.cfg.skill_sources, sources,
@@ -100,6 +106,7 @@ export default function SkillSourcesSection({
       {sources.map((src, idx) => {
         const locked = nameLocked(src.name, idx);
         const tr = testResult[`skill:${src.name}`];
+        const backed = (src.backed_by || "").trim();
         return (
         <div key={idx}
           className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
@@ -133,6 +140,33 @@ export default function SkillSourcesSection({
                 </span>
               )}
             </Field>
+            <Field label="Backed by repository"
+              hint="Own remote = URL + token below"
+              help="Pick a repository card when the skills live inside a repo DevCake already mirrors — this source then reads that card's mirror: one copy, its token, its sync. The card stays a skills connection; nothing about the repo card changes.">
+              <Select value={backed}
+                aria-label={`Skill source ${idx + 1} backed by`}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setField(`cfg.skill_sources.${idx}.backed_by`, v);
+                  // backed_by and url are mutually exclusive server-side —
+                  // picking a card supersedes any URL typed earlier
+                  if (v) setField(`cfg.skill_sources.${idx}.url`, "");
+                }}>
+                <option value="">Own remote</option>
+                {backedRepoOptions.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+                {backed && !backedRepoOptions.includes(backed) && (
+                  <option value={backed} disabled>{backed} (missing)</option>
+                )}
+              </Select>
+              {dr.errors[`cfg.skill_sources.${idx}.backed_by`] && (
+                <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
+                  ✗ {dr.errors[`cfg.skill_sources.${idx}.backed_by`]}
+                </span>
+              )}
+            </Field>
+            {!backed && (
             <Field label="Forge"
               help="Which service hosts the repository — used only to shape the authenticated fetch.">
               <Select value={src.forge || "github"}
@@ -144,6 +178,8 @@ export default function SkillSourcesSection({
                 ))}
               </Select>
             </Field>
+            )}
+            {(!backed || (src.url || "").trim()) && (
             <Field label="Repository URL"
               help="HTTPS URL of the skills repository, e.g. https://github.com/you/skills.git.">
               <Input value={src.url || ""}
@@ -151,7 +187,10 @@ export default function SkillSourcesSection({
                 onChange={(e) => setField(`cfg.skill_sources.${idx}.url`,
                   e.target.value)} />
             </Field>
-            <Field label="Branch" hint="Empty = the repository's default">
+            )}
+            <Field label="Branch"
+              hint={backed ? "Empty = the backing card's branch"
+                : "Empty = the repository's default"}>
               <Input value={src.default_branch || ""}
                 aria-label={`Skill source ${idx + 1} branch`}
                 onChange={(e) => setField(`cfg.skill_sources.${idx}.default_branch`,
@@ -165,6 +204,7 @@ export default function SkillSourcesSection({
                   e.target.value)} />
             </Field>
           </div>
+          {!backed && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <SecretField label="Read token"
               help="Token with read access to the repository (private sources). Stored as plaintext mode 0600 on the app volume — never echoed back."
@@ -175,7 +215,16 @@ export default function SkillSourcesSection({
               refKey={connRef("skill", src.name, "token")} paste
               locked={!locked} />
           </div>
-          {!locked && (
+          )}
+          {backed && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Reads repository card <span className="font-mono">{backed}</span>&apos;s
+              mirror with its token — no second copy, no separate sync, nothing
+              to paste here. Removing that card is refused while this source
+              points at it.
+            </p>
+          )}
+          {!locked && !backed && (
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Save first — tokens can be pasted once the source exists.
             </p>

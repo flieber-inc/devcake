@@ -128,6 +128,17 @@ class RepoCache:
                 return x
         return None
 
+    def mirror_name_of(self, name: str) -> str:
+        """The card whose PHYSICAL mirror serves `name` — a repo-backed
+        skill source (ADR-0039) reads its backing repository card's mirror;
+        every other name is itself. Callers that sync or read by card name
+        resolve through this ONE place so the backed pair can never fetch
+        the same bare repo under two locks."""
+        src = self._skill_source(name)
+        backed = (getattr(src, "backed_by", "") or "").strip() \
+            if src is not None else ""
+        return backed or name
+
     def eligible(self, name: str) -> bool:
         """A configured repo card (registered in the runtime and NOT an
         internal synthesized repo — token-scope isolation, module
@@ -150,6 +161,7 @@ class RepoCache:
         Do NOT use ``mirror_path.is_dir`` as a stand-in: that is true
         after a failed first sync too.
         """
+        name = self.mirror_name_of(name)
         st = self.ledger.get(name)
         if st is not None and st.synced_at is not None:
             return True
@@ -215,7 +227,10 @@ class RepoCache:
         """Sync every named mirror unless already fresh. (all_ok, {name:
         reason}) — reasons only for failures. NEVER raises; the caller's
         poll segment must survive anything this does."""
-        names = list(names)
+        # Backed skill sources resolve to their backing card here as well as
+        # at the callers — the physical mirror must only ever sync under ITS
+        # name's lock (two locks on one bare repo = racing fetches).
+        names = sorted({self.mirror_name_of(n) for n in names})
         if not names:
             return True, {}
         t_entry = self._monotonic()
@@ -391,6 +406,16 @@ class RepoCache:
         mirror-INELIGIBLE cards (bundled Gitea), whose `tree_head` has no
         mirror to read (PLAN_MEMORY §3.6). One `ls-remote` with the card's
         read token via askpass; None on any failure."""
+        pin = ""
+        backing = self.mirror_name_of(name)
+        if backing != name:
+            # repo-backed skill source: the BACKING card supplies remote,
+            # clone user, and token — but the SOURCE's branch pin (when
+            # set) still names the ref, so a bad pin fails THIS probe
+            # instead of riding the backing card's default to a false green
+            src = self._skill_source(name)
+            pin = (getattr(src, "default_branch", "") or "").strip()
+            name = backing
         inst = self.forges.instance(name)
         forge = self.forges.get(name)
         if inst is None or forge is None:
@@ -401,8 +426,8 @@ class RepoCache:
         clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
                       if forge is not None else self.clone_user_of(inst.forge))
         url = self._origin_url(url, clone_user)
-        ref = (f"refs/heads/{inst.default_branch}"
-               if inst.default_branch else "HEAD")
+        branch = pin or (inst.default_branch or "").strip()
+        ref = f"refs/heads/{branch}" if branch else "HEAD"
         r = await self.git(["ls-remote", url, ref], env=self._git_env(inst))
         if r.returncode != 0 or not (r.stdout or "").strip():
             return None
@@ -432,9 +457,21 @@ class RepoCache:
         bare mirror, falling back to the mirror's HEAD. None = unresolvable
         (mirror absent / branch missing) — the caller warns and skips."""
         inst = self.forges.instance(name) or self._skill_source(name)
-        p = self.mirror_path(name)
-        refs = ([f"refs/heads/{inst.default_branch}"]
-                if inst is not None and inst.default_branch else []) + ["HEAD"]
+        # the card's OWN branch pin applies even when the physical mirror is
+        # a backing repo card's (a backed source may track e.g. `stable`
+        # while work happens on the backing card's default branch)
+        physical = self.mirror_name_of(name)
+        p = self.mirror_path(physical)
+        branch = ((inst.default_branch or "").strip()
+                  if inst is not None else "")
+        if physical != name and branch:
+            # a backed source's explicit pin fails LOUD when the branch is
+            # missing — the shared mirror's HEAD is the BACKING card's
+            # branch, so falling back would silently serve the wrong one
+            # (an own-remote mirror's HEAD is its own branch: harmless)
+            refs = [f"refs/heads/{branch}"]
+        else:
+            refs = ([f"refs/heads/{branch}"] if branch else []) + ["HEAD"]
         for ref in refs:
             r = await self.git(["-C", str(p), "rev-parse", "--verify",
                                 f"{ref}^{{commit}}"])
@@ -454,7 +491,7 @@ class RepoCache:
         import re as _re
         from .skills import SKILL_NAME_RE
         skill_re = _re.compile(rf"{SKILL_NAME_RE}$")
-        p = self.mirror_path(name)
+        p = self.mirror_path(self.mirror_name_of(name))
         spec = f"{sha}:{subdir}" if subdir else sha
         r = await self.git(["-C", str(p), "ls-tree", "-r", "-l", spec])
         if r.returncode != 0:
@@ -481,7 +518,7 @@ class RepoCache:
         """One blob, verbatim bytes (`git show sha:path`). None on any
         failure — the payload builder warns and drops the file, additive
         doctrine (the gate already proved the mirror fresh)."""
-        p = self.mirror_path(name)
+        p = self.mirror_path(self.mirror_name_of(name))
         prefix = f"{subdir}/" if subdir else ""
         r = await self.git(["-C", str(p), "show",
                             f"{sha}:{prefix}{skill}/{rel_path}"])
@@ -497,7 +534,9 @@ class RepoCache:
                   if r.configured and self.eligible(r.name)]
                  + [x.name for x in
                     getattr(self.config, "skill_sources", None) or []
-                    if x.configured])
+                    # backed sources have no mirror of their own — their
+                    # physical mirror warms with the backing repo card
+                    if x.configured and self.mirror_name_of(x.name) == x.name])
         if names:
             await self.ensure_fresh(names)
             log.info("mirror warm-up finished: %d ok / %d total",
@@ -592,6 +631,9 @@ class NullRepoCache:
 
     def mirror_path(self, name: str) -> Path:
         return Path(f"/mirrors/{name}.git")
+
+    def mirror_name_of(self, name: str) -> str:
+        return name
 
     def eligible(self, name: str) -> bool:
         return False

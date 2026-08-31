@@ -87,7 +87,7 @@ check("scaffolds carry every server-model field (pmo, repo, skill-source)", () =
      "default_branch", "forge", "merge_retry_window_minutes",
      "merge_settle_minutes", "name", "url"]);
   assert.deepEqual(Object.keys(newSkillSourceCard("x")).sort(),
-    ["default_branch", "forge", "name", "subdir", "url"]);
+    ["backed_by", "default_branch", "forge", "name", "subdir", "url"]);
 });
 
 check("skill sources: name shape, dupes, repo-name collision", () => {

@@ -39,4 +39,5 @@ export const newSkillSourceCard = (name) => ({
   url: "",
   default_branch: "",
   subdir: "",
+  backed_by: "",
 });

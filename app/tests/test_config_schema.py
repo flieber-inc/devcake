@@ -962,6 +962,35 @@ def test_default_branch_boundary_normalization():
     assert SkillSource(name="s", url="https://github.com/o/s").default_branch == ""
 
 
+def test_repo_backed_skill_source_validation():
+    """ADR-0039: `backed_by` names a configured repo card whose mirror
+    serves the source's reads — url and backed_by are mutually exclusive,
+    an unknown backing card is refused (which is also what refuses
+    deleting the backing card while a source still cites it), and a
+    backed source counts as configured with no URL of its own."""
+    from devcake.config import RepoInstance, SkillSource
+    repo = RepoInstance(name="work", url="https://github.com/o/r")
+    backed = SkillSource(name="shelf", backed_by="work", subdir="skills")
+    cfg = AppConfig(pmos=[], repos=[repo], skill_sources=[backed])
+    assert cfg.skill_sources[0].configured
+    assert AppConfig.model_validate(cfg.model_dump()) \
+        .skill_sources[0].backed_by == "work"
+    with pytest.raises(Exception, match="mutually exclusive"):
+        AppConfig(pmos=[], repos=[repo], skill_sources=[SkillSource(
+            name="shelf", backed_by="work",
+            url="https://github.com/o/skills")])
+    with pytest.raises(Exception, match="names no repository card"):
+        AppConfig(pmos=[], repos=[], skill_sources=[SkillSource(
+            name="shelf", backed_by="work")])
+    # an unconfigured backing card would leave a source that can never
+    # sync — refused at save time, where the fix is obvious
+    with pytest.raises(Exception, match="no repository URL yet"):
+        AppConfig(pmos=[], repos=[RepoInstance(name="work")],
+                  skill_sources=[SkillSource(name="shelf", backed_by="work")])
+    # normalized at the model boundary: every consumer compares ONE string
+    assert SkillSource(name="shelf", backed_by="  work  ").backed_by == "work"
+
+
 def test_skill_source_url_and_forge_match_repo_instance():
     """CAKE-65: SkillSource rejects the same malformed URL / unknown forge
     literals as RepoInstance — empty URL still allowed (unconfigured card)."""

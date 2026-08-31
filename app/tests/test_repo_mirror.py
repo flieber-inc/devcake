@@ -801,3 +801,36 @@ def test_delete_mirror_pops_bookkeeping_even_without_a_dir(tmp_path):
     cache.delete_mirror("alpha")
     assert "alpha" not in cache.ledger
     assert "alpha" not in cache._synced_mono
+
+
+def test_dispatch_backed_skill_card_failure_stays_context_governed(tmp_path):
+    """ADR-0039 at the dispatch gate: a backed source's sync failure keys by
+    its BACKING card; with strict off and last-good content the run proceeds
+    on stale cache instead of deferring."""
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.domain.model import MissionType
+
+    class BackedCache(GrantingCache):
+        def mirror_name_of(self, name):
+            return "work" if name == "shelf" else name
+
+        async def ensure_fresh(self, names):
+            assert "shelf" not in names          # resolved before the union
+            bad = {n: "fetch: down" for n in names if n == "work"}
+            return (not bad), bad
+
+        def has_last_good(self, name):
+            return name == "work"
+
+        async def tree_head(self, name):
+            return "cafe1234"
+
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, FakeInternalForge())
+    mgr.config.context_sourcing_strict = False
+    mgr.repo_cache = BackedCache()
+    dt = mgr.dev_types["senior-dev"]
+    dt.skills = ["shelf/tdd"]
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE, dt))
+    assert run is not None                       # stale-cache proceed
+    assert "work" in run.mirror_repos            # the PHYSICAL gate snapshot

@@ -393,6 +393,11 @@ Zone B) and must not ride a deployment-shared volume. LFS: pointer files by
 default; `cfg.repo_mirror.lfs` upgrades to real content served from the
 mirror's own LFS store (probe-verified standalone `file://` transfer) — the
 posture is installed in BOTH containers, since checkout smudges in each.
+Mirrors are keyed by card name — one mirror per card, each a per-credential
+health probe. The ONE sanctioned sharing is a repo-backed skill source
+(ADR-0039): the operator declares `backed_by: <repo card>` on the skill
+source and its reads ride that card's mirror; the runtime never infers
+sharing from equal URLs.
 
 ## 8. Building a new Dev image (checklist)
 

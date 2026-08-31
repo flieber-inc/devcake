@@ -41,7 +41,7 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
     Returns None when the workspace base is unusable (AUD-001: a periodic
     steward must skip cleanly, never poison the poll segment)."""
     from ..ids import make_run_id
-    from ..repo_sourcing import skill_source_cards
+    from ..repo_sourcing import resolved_skill_cards
     repo_name = dispatch.steward_repo(mgr)
     if repo_name is None:
         # spec env carries the forge dialect — no repo, no steward runs either
@@ -94,7 +94,7 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
                 instance=mgr.instance,
                 blocker_entries=blocker_work or [],
                 dev_type=dev_type, config=mgr.config))
-                | skill_source_cards(dev_type.skills))
+                | resolved_skill_cards(dev_type.skills, mgr.repo_cache))
                 - set(context_omit)),
         )
         run.memory_mounts = await dispatch._memory_mount_snapshot(

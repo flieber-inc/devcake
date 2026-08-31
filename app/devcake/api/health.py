@@ -162,8 +162,13 @@ def unused_repo_names(config, dev_types=None) -> list[str]:
         selected.update(pmo.memory_repos or [])
     for dt in (dev_types or {}).values():
         selected.update(getattr(dt, "memory_repos", None) or [])
-    # `<source>/<skill>` prefixes name dedicated skill_sources now
-    # (2026-08-14 ruling), never repo cards — no skills branch here
+    # `<source>/<skill>` prefixes name dedicated skill_sources
+    # (2026-08-14 ruling), never repo cards — no skills branch here. But a
+    # repo card BACKING a skill source (ADR-0039) is in use: flagging it
+    # unused would nudge a removal the config validator then refuses.
+    for src in getattr(config, "skill_sources", None) or []:
+        if getattr(src, "backed_by", ""):
+            selected.add(src.backed_by)
     return sorted(r.name for r in config.repos if r.name not in selected)
 
 

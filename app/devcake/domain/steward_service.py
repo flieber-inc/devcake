@@ -246,20 +246,25 @@ class StewardService:
         (ok, why, stale, omit) — the stale/omit sets ride into the launch
         snapshot so the run record stays honest about its mounts."""
         from .repo_sourcing import (classify_context_failures, memory_mount_names,
-                                    skill_source_cards,
+                                    resolved_skill_cards,
                                     unresolvable_memory_cards)
-        skill_cards = skill_source_cards(dt.skills)
+        # ADR-0039: resolved to physical mirror names — the same rule as
+        # dispatch's gate; raw source names would never match ensure_fresh's
+        # resolved failure keys and a backed source's failure would defer
+        # even in open mode.
+        skill_cards = resolved_skill_cards(dt.skills, self.mgr.repo_cache)
         memory_cards = set(memory_mount_names(
             instance=self.mgr.instance, dev_type=dt, repo_ref=repo))
         needed_for = getattr(self.mgr.repo_cache, "needed_for", None)
         if callable(needed_for):
-            needed = list(needed_for(
+            sourced = set(needed_for(
                 work_repo=repo, mission_type="STEWARD",
                 instance=self.mgr.instance, blocker_entries=None,
-                dev_type=dt, config=self.config))
-            needed = sorted(set(needed) | skill_cards | set(extra or ()))
+                dev_type=dt, config=self.config)) | set(extra or ())
+            needed = sorted(sourced | skill_cards)
         else:
             # test fakes that only implement ensure_fresh (ADR-0033 gate tests)
+            sourced = {repo} | set(extra or ())
             needed = [repo] + list(extra or ()) + sorted(skill_cards | memory_cards)
         ok, why = await self.mgr.repo_cache.ensure_fresh(needed)
         stale: set[str] = set()
@@ -267,7 +272,7 @@ class StewardService:
         if not ok:
             has_last = getattr(self.mgr.repo_cache, "has_last_good", None)
             defer, stale, omit = classify_context_failures(
-                why, context_cards=memory_cards | skill_cards,
+                why, context_cards=memory_cards | (skill_cards - sourced),
                 strict=self.config.context_sourcing_strict,
                 has_mirror=has_last if callable(has_last) else (lambda n: False))
             if defer:

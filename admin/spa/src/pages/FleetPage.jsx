@@ -62,7 +62,8 @@ export default function FleetPage({ section, onHealthChange }) {
       )}
       {section === "skills" && (
         <SkillsSection setPageErr={setPageErr}
-          skillSources={dr.draft.cfg.skill_sources || []} />
+          skillSources={dr.draft.cfg.skill_sources || []}
+          repos={dr.draft.cfg.repos || []} />
       )}
     </div>
   );

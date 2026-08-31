@@ -211,3 +211,35 @@ def test_skill_source_probe_exception_ok_false(tmp_path, monkeypatch):
     assert out["ok"] is False
     assert "error" in out
     assert "https://evil/secret" not in out["error"]
+
+
+def test_skill_source_backed_probe_delegates_and_names_the_card(
+        tmp_path, monkeypatch):
+    """ADR-0039: a repo-backed source probes through its backing card — the
+    unreachable error names that card (the fix lives on ITS Test button),
+    never a token hint for a card that stores none."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import connections_service as cs
+    from devcake.config import RepoInstance, SkillSource
+
+    cfg = AppConfig(
+        pmos=[],
+        repos=[RepoInstance(name="work", url="https://github.com/o/r")],
+        skill_sources=[SkillSource(name="shelf", backed_by="work")])
+
+    class Down:
+        async def remote_head(self, name):
+            return None
+
+    out = _run(cs.test_skill_source("shelf", config=cfg, repo_cache=Down()))
+    assert out["ok"] is False
+    assert "work" in out["error"] and "no token" not in out["error"]
+
+    class Up:
+        async def remote_head(self, name):
+            return "feedc0de1234"
+
+    out = _run(cs.test_skill_source("shelf", config=cfg, repo_cache=Up()))
+    assert out["ok"] is True
+    assert out["remote_head"] == "feedc0de1234"
+    assert out["repo"] == "backed by work"

@@ -30,6 +30,7 @@ const SUITES = [
   "cake162_polish.mjs",
   "cake162_ui.mjs",
   "skill_sources_links.mjs",
+  "repo_backed_skills.mjs",
   "settings.mjs",
   "tasks.mjs",
   "hierarchy.mjs",

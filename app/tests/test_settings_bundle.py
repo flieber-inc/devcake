@@ -1929,3 +1929,47 @@ def test_config_put_remove_plus_rename_never_deletes_the_migrated_mirror(
             repo_cache=cache))
     assert ("b", "a") in cache.renamed
     assert "a" not in cache.deleted
+
+
+def test_config_put_flip_to_backed_deletes_the_old_own_mirror(
+        monkeypatch, tmp_path):
+    """ADR-0039: converting an own-remote source to backed keeps the card
+    but must drop its own mirror (and with it the stale ledger/health
+    row) — the backing card's mirror serves it from now on."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.repos = list(cfg.repos) + [config_mod.RepoInstance(
+        name="work", url="https://github.com/acme/monorepo")]
+    cfg.skill_sources = [config_mod.SkillSource(
+        name="shelf", url="https://github.com/acme/skills")]
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    class Cache:
+        def __init__(self):
+            self.deleted = []
+            self.renamed = []
+
+        def delete_mirror(self, name):
+            self.deleted.append(name)
+
+        def rename_mirror(self, old, new):
+            self.renamed.append((old, new))
+
+    cache = Cache()
+    body = {"skill_sources": [
+        {"name": "shelf", "forge": "github", "url": "",
+         "default_branch": "", "subdir": "", "backed_by": "work"}]}
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={},
+            reload=lambda: None, repo_cache=cache))
+    assert cfg.skill_sources[0].backed_by == "work"
+    assert "shelf" in cache.deleted

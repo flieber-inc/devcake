@@ -176,3 +176,18 @@ def skill_source_cards(skill_names) -> set[str]:
     sourced_repo_names: skill cards feed the runspec skills payload from
     the mirror READ-side and are never cloned into /workspace."""
     return {n.split("/", 1)[0] for n in (skill_names or []) if "/" in n}
+
+
+def resolved_skill_cards(skill_names, repo_cache) -> set[str]:
+    """`skill_source_cards` mapped through the mirror resolver (ADR-0039):
+    a repo-backed source's sync — and therefore its `ensure_fresh` failure
+    KEY — rides its backing repository card's physical mirror name. Every
+    gate and launch snapshot must union THIS set, never the raw source
+    names: comparing raw names against resolved failure keys silently
+    reclassifies a backed source's failure as a sourcing failure (defer)
+    where the toggle-governed context split should apply. A backing card
+    that ALSO rides sourcing classifies as sourcing — callers subtract
+    their sourced set from this one before building `context_cards`."""
+    cards = skill_source_cards(skill_names)
+    resolver = getattr(repo_cache, "mirror_name_of", None)
+    return {resolver(c) for c in cards} if callable(resolver) else cards

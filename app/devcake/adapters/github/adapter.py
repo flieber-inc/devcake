@@ -380,8 +380,11 @@ class GitHubForge:
         contexts = sorted(
             set(contexts) | set(shape.required_status_checks or []))
         if contexts:
+            # "strict" (branch must be up to date before merging) is not part
+            # of the derived shape: preserve the operator's existing choice,
+            # never newly enable it.
             status_checks: dict[str, Any] | None = {
-                "strict": True,
+                "strict": bool(ex_checks.get("strict", False)),
                 "contexts": contexts,
             }
         elif ex_checks:

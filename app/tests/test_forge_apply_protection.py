@@ -572,3 +572,46 @@ def test_gitea_apply_preserves_star_unscoped_status_check_on_force_push_tighten(
     assert writes[0].get("enable_force_push") is False
     assert writes[0].get("enable_status_check") is True
     assert writes[0].get("status_check_contexts") == ["*"]
+
+
+def test_github_apply_never_newly_enables_strict_up_to_date():
+    """"strict" (branch up to date before merging) is not part of the derived
+    shape: an existing rule with strict disabled keeps it disabled after
+    apply, even when contexts are added (review #2)."""
+    from devcake.adapters.github.adapter import GitHubForge
+
+    existing = {
+        "required_status_checks": {"strict": False, "contexts": ["lint"]},
+        "enforce_admins": {"enabled": False},
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+    }
+    put_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/branches/main"):
+            return httpx.Response(200, json={
+                "protected": True, "commit": {"sha": "deadbeef"}})
+        if request.method == "GET" and path.endswith("/status"):
+            return httpx.Response(200, json={
+                "statuses": [{"context": "ci", "state": "success"}]})
+        if request.method == "GET" and "check-runs" in path:
+            return httpx.Response(200, json={"check_runs": []})
+        if request.method == "GET" and path.endswith("/protection"):
+            return httpx.Response(200, json=existing)
+        if request.method == "PUT" and path.endswith("/protection"):
+            put_bodies.append(json.loads(request.content.decode()))
+            return httpx.Response(200, json=existing)
+        return httpx.Response(500, text=f"unexpected {request.method} {path}")
+
+    forge = GitHubForge(
+        "https://github.com/o/r", "gh-write", "gh-reviewer",
+        transport=httpx.MockTransport(handler),
+    )
+    result = run_coro(forge.apply_default_branch_protection("main"))
+    assert result.outcome == "applied"
+    body = put_bodies[0]
+    checks = body["required_status_checks"]
+    assert checks["strict"] is False
+    assert "ci" in checks["contexts"] and "lint" in checks["contexts"]

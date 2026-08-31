@@ -263,6 +263,7 @@ export function metaFor(path) {
       url: { label: "Repository URL" },
       default_branch: { label: "Branch" },
       subdir: { label: "Skills folder" },
+      backed_by: { label: "Backed by repository" },
     };
     const f = FIELDS[m[2]] || { label: m[2] };
     return { group: "Skills", multiline: false, format: orEmpty, ...f,

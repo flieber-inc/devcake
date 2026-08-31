@@ -46,4 +46,4 @@
 | [0036](0036-upstream-activity-ancestor-offer.md) | Offer every decomposition ancestor's activity under `activity/upstream/{KEY}/` | Accepted (2026-08-19); amends ADR-0014; cross-refs ADR-0012 depth bound + ADR-0017 blocker contract (blocked_by stays separate); CAKE-124 |
 | [0037](0037-per-pmo-prompt-template-overrides.md) | Per-PMO prompt-template overrides (dual-crew playbooks) | Accepted (2026-08-29); mirrors ADR-0019 for playbook selection; CAKE-150 |
 | [0038](0038-devcake-cli-scope-command-surface-and-agent-operability.md) | DevCake CLI: scope, command surface, agent-operability | **Accepted** (2026-08-30) — founder ratification (env auto-init default, ADR-0013 bundle import on `setup`, verb orthogonality); CAKE-175 |
-|
+| [0039](0039-repo-backed-skill-sources.md) | Repo-backed skill sources: declared mirror sharing, never inferred | Accepted (2026-08-31); amends the ADR-0016 addendum's skill-source connection (adds `backed_by`); mirror sharing is operator-declared config, runtime URL-dedup rejected |

@@ -394,6 +394,11 @@ def _rewrite_repo_citations(merged_dict: dict,
         for field in ("repos", "reference_repos", "memory_repos"):
             if field in pmo and pmo[field] is not None:
                 pmo[field] = _map_names(list(pmo[field]))
+    for src in merged_dict.get("skill_sources") or []:
+        # ADR-0039: a backed skill source cites its backing repo card by
+        # name — the citation follows a rename like every other one
+        if isinstance(src, dict) and src.get("backed_by"):
+            src["backed_by"] = mapping.get(src["backed_by"], src["backed_by"])
     dirty: list[tuple[object, list[str]]] = []
     for dt in (dev_types or {}).values():
         before = list(getattr(dt, "memory_repos", None) or [])

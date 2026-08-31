@@ -450,12 +450,18 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # are never cloned into /workspace.
     from ..repo_sourcing import (classify_context_failures, memory_mount_names,
                                  skill_source_cards, unresolvable_memory_cards)
-    needed = mgr.repo_cache.needed_for(
+    sourced = mgr.repo_cache.needed_for(
         work_repo=repo_name, mission_type=mtype.value,
         instance=mgr.instance, blocker_entries=blocker_entries,
         dev_type=dev_type, config=mgr.config)
-    skill_cards = skill_source_cards(dev_type.skills)
-    needed = sorted(set(needed) | skill_cards)
+    # ADR-0039: a repo-backed skill source resolves to its backing repo
+    # card before the union — sync/failure keys are physical-mirror names.
+    # A backing card that ALSO rides sourcing (it is the work/reference
+    # repo) must classify as sourcing, never be downgraded to a
+    # context-card stale/omit — hence the set difference below.
+    skill_cards = {mgr.repo_cache.mirror_name_of(c)
+                   for c in skill_source_cards(dev_type.skills)}
+    needed = sorted(set(sourced) | skill_cards)
     ok, why = await mgr.repo_cache.ensure_fresh(needed)
     memory_cards = set(memory_mount_names(
         instance=mgr.instance, dev_type=dev_type, repo_ref=repo_name))
@@ -463,7 +469,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     omit_cards: set[str] = set()
     if not ok:
         defer, stale_cards, omit_cards = classify_context_failures(
-            why, context_cards=memory_cards | skill_cards,
+            why, context_cards=memory_cards | (skill_cards - set(sourced)),
             strict=mgr.config.context_sourcing_strict,
             has_mirror=getattr(mgr.repo_cache, "has_last_good",
                                lambda n: False))

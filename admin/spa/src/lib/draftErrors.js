@@ -112,6 +112,14 @@ export function draftErrors(draft) {
       errs[`cfg.skill_sources.${i}.name`] =
         `skill source "${x.name}" collides with a repository card name`;
     seenSrc.add(x.name);
+    // repo-backed sources — mirrors config.py _pmo_repo_sets_valid
+    const backed = (x.backed_by || "").trim();
+    if (backed && (x.url || "").trim())
+      errs[`cfg.skill_sources.${i}.backed_by`] =
+        `skill source "${x.name}": backed-by and a URL are mutually exclusive`;
+    else if (backed && !repoNames.has(backed))
+      errs[`cfg.skill_sources.${i}.backed_by`] =
+        `skill source "${x.name}": backed-by names no repository card ("${backed}")`;
   });
   // scheduled tasks (cfg.crons) — mirrors the server validators (config.py
   // CronJob + _crons_valid): a bad row blocks Save inline, not as a 422.

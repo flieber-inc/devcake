@@ -388,6 +388,15 @@ class SkillSource(BaseModel):
     # optional path inside the repository holding the `<skill>/SKILL.md`
     # dirs ("" = repo root)
     subdir: str = ""
+    # ADR-0039: name of a repository card whose ADR-0024 mirror serves this
+    # source's reads — the operator's declaration that both cards address
+    # ONE remote, so no second mirror, no second sync, no second token.
+    # Mutually exclusive with `url`; the card stays a first-class skills
+    # connection (naming, read-only nature, no PR surface all unchanged).
+    # Sharing is DECLARED here, never inferred from equal URLs: inference
+    # would piggyback one card's credential on another and mute the
+    # per-card dead-token health signal.
+    backed_by: str = ""
 
     @field_validator("forge")
     @classmethod
@@ -417,7 +426,7 @@ class SkillSource(BaseModel):
 
     @property
     def configured(self) -> bool:
-        return bool(self.url.strip())
+        return bool(self.url.strip()) or bool(self.backed_by.strip())
 
     @property
     def token(self) -> str:
@@ -1186,6 +1195,21 @@ class AppConfig(BaseModel):
             raise ValueError(
                 f"skill_sources {sorted(overlap)} collide with repository "
                 f"card names — pick distinct names")
+        for x in self.skill_sources:
+            backed = (x.backed_by or "").strip()
+            if not backed:
+                continue
+            if x.url.strip():
+                raise ValueError(
+                    f"skill source {x.name!r}: backed_by and url are "
+                    f"mutually exclusive — a backed source reads its "
+                    f"repository card's mirror")
+            if backed not in repo_names:
+                # also what refuses DELETING the backing card while a
+                # skill source still reads through it
+                raise ValueError(
+                    f"skill source {x.name!r}: backed_by {backed!r} names "
+                    f"no repository card (have: {sorted(repo_names)})")
         # make_run_id truncates the scrubbed-upper instance segment to 12
         # chars — refuse two PMO instances that would mint the same prefix
         # (CAKE-151). PMO names ONLY: repos and skill sources never prefix

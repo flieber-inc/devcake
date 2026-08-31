@@ -748,13 +748,19 @@ async def test_skill_source(name: str, *, config, repo_cache):
     if repo_cache is None:
         return {"ok": False, "error": "mirror cache unavailable — save the "
                                       "config and retry"}
+    backed = (getattr(inst, "backed_by", "") or "").strip()
     has_token = bool(inst.token or inst.token_ro)
     try:
         head = await repo_cache.remote_head(name)
         if not head:
             detail = ("could not reach the remote — check the URL, "
                       "token, and network")
-            if not has_token:
+            if backed:
+                # ADR-0039: the backing repo card owns URL + token — its
+                # own Test connection is where the fix lives
+                detail = (f"could not reach the remote through repository "
+                          f"card {backed!r} — test that card")
+            elif not has_token:
                 detail = ("could not reach the remote and no token is "
                           "stored — a public repository needs none; a "
                           "private one needs a Read token on this card")
@@ -762,10 +768,11 @@ async def test_skill_source(name: str, *, config, repo_cache):
                 "ok": False,
                 "skill_source": name,
                 "forge": inst.forge,
-                "repo": inst.url,
+                "repo": inst.url or f"backed by {backed}",
                 "detail": detail,
             })
         return {"ok": True, "skill_source": name, "forge": inst.forge,
-                "repo": inst.url, "remote_head": head}
+                "repo": inst.url or f"backed by {backed}",
+                "remote_head": head}
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": _probe_client_error(e)}

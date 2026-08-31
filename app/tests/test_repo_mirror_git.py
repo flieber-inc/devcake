@@ -300,3 +300,28 @@ def test_symref_head_branch_parser():
     assert _symref_head_branch(
         "ref: refs/heads/master\trefs/remotes/origin/HEAD\n"
         "0adc0adc\tHEAD\n") == ""
+
+
+
+
+def test_repo_backed_skill_source_reads_the_backing_mirror(rig):
+    """ADR-0039: a backed source has NO mirror of its own — reads resolve
+    to the backing repo card's bare mirror, and syncing the backed name
+    syncs the backing card under ITS lock and ledger entry (never two
+    locks over one bare repo)."""
+    origin, cache, tmp = _skills_origin(rig)
+    src = LocalSkill.model_construct(name="shelf", url="", default_branch="",
+                                     subdir="skills", backed_by="alpha")
+    cache.config.skill_sources = [src]
+    assert cache.mirror_name_of("shelf") == "alpha"
+    ok, why = run_coro(cache.ensure_fresh(["shelf"]))
+    assert ok, why
+    assert not cache.mirror_path("shelf").exists()   # one physical mirror
+    assert cache.mirror_path("alpha").is_dir()
+    sha = run_coro(cache.tree_head("shelf"))
+    assert sha and sha == run_coro(cache.tree_head("alpha"))
+    tree = run_coro(cache.read_skill_tree("shelf", "skills", sha))
+    assert set(tree) == {"tdd"}
+    assert run_coro(cache.read_skill_file(
+        "shelf", "skills", sha, "tdd", "SKILL.md"))
+    assert cache.has_last_good("shelf")   # resolves to the backing ledger

@@ -40,8 +40,16 @@ def _item_field(item, key: str) -> str:
 
 
 def repo_rename_anchor(item) -> str:
-    """The identity a repo/skill-source rename never changes: its URL."""
-    return _item_field(item, "url").rstrip("/").removesuffix(".git").lower()
+    """The identity a repo/skill-source rename never changes: its URL — or,
+    for a repo-backed skill source (no URL by construction, ADR-0039), its
+    backing-card citation. Two sources backed by the SAME card still share
+    an anchor (legal — different subdirs), so remove+rename in one Save
+    stays best-effort for that pair, exactly like two unconfigured cards."""
+    url = _item_field(item, "url").rstrip("/").removesuffix(".git").lower()
+    if url:
+        return url
+    backed = _item_field(item, "backed_by").lower()
+    return f"backed-by:{backed}" if backed else ""
 
 
 def pmo_rename_anchor(item) -> str:
@@ -363,6 +371,20 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
             except Exception:  # noqa: BLE001 — cleanup only; the config change is APPLIED
                 log.exception("could not delete mirror of removed %s %r",
                               scope, name)
+    if repo_cache is not None:
+        for src in getattr(config, "skill_sources", None) or []:
+            if not src.backed_by:
+                continue
+            # ADR-0039: a source flipped own-remote → backed keeps its name
+            # but must lose its OWN mirror — the backing card's serves it
+            # now; the old bare repo and its ledger/health row would
+            # otherwise linger forever. Idempotent (missing dir = no-op),
+            # best-effort like the removal cleanup above.
+            try:
+                repo_cache.delete_mirror(src.name)
+            except Exception:  # noqa: BLE001 — cleanup only; the config change is APPLIED
+                log.exception("could not delete mirror of now-backed "
+                              "skill source %r", src.name)
     # Per-repo auto_merge OFF→ON (founder request 2026-07-15, ADR-0020):
     # re-arm the deferred-merge window only for missions whose work repo
     # flipped — the next sweep posts a fresh window entry for those.

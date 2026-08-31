@@ -325,3 +325,27 @@ def test_repo_backed_skill_source_reads_the_backing_mirror(rig):
     assert run_coro(cache.read_skill_file(
         "shelf", "skills", sha, "tdd", "SKILL.md"))
     assert cache.has_last_good("shelf")   # resolves to the backing ledger
+
+
+def test_backed_source_branch_pin_is_honored_and_fails_loud(rig):
+    """ADR-0039: a backed source may pin a branch other than the backing
+    card's. An EXISTING pin serves that branch from the shared mirror and
+    probes it on the remote; a MISSING pin fails both surfaces loudly —
+    never a silent fallback onto the backing card's branch."""
+    origin, cache, tmp = _skills_origin(rig)
+    pinned = LocalSkill.model_construct(
+        name="pinned", url="", default_branch="side", subdir="",
+        backed_by="alpha")
+    broken = LocalSkill.model_construct(
+        name="broken", url="", default_branch="missing", subdir="",
+        backed_by="alpha")
+    cache.config.skill_sources = [pinned, broken]
+    assert run_coro(cache.sync_one("alpha")).ok
+    side_sha = sh("git", "-C", str(origin), "rev-parse", "side").strip()
+    assert run_coro(cache.tree_head("pinned")) == side_sha
+    assert run_coro(cache.remote_head("pinned")) == side_sha
+    # missing pinned branch: loud None on BOTH surfaces (an own-remote
+    # source with the same bad pin also fails; a HEAD fallback would have
+    # silently served alpha's main)
+    assert run_coro(cache.tree_head("broken")) is None
+    assert run_coro(cache.remote_head("broken")) is None

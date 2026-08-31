@@ -124,10 +124,28 @@ async def ensure_skill_sources_fresh(*, repo_cache,
     (they also land in the mirror ledger)."""
     if repo_cache is None:
         return True, {}
-    names = [s.name for s in (getattr(config, "skill_sources", None) or [])]
-    if not names:
+    sources = list(getattr(config, "skill_sources", None) or [])
+    if not sources:
         return True, {}
-    return await repo_cache.ensure_fresh(names)
+    ok, failures = await repo_cache.ensure_fresh([s.name for s in sources])
+    if not failures:
+        return ok, {}
+    # ensure_fresh keys failures by PHYSICAL mirror name (a backed source's
+    # backing card — ADR-0039); this endpoint's contract is source names,
+    # and the SPA renders them on a page that lists only sources, so re-key
+    # here while keeping the backing card visible in the reason.
+    resolver = getattr(repo_cache, "mirror_name_of", None)
+    resolve = resolver if callable(resolver) else (lambda n: n)
+    out: dict[str, str] = {}
+    claimed: set[str] = set()
+    for s in sources:
+        key = resolve(s.name)
+        if key in failures:
+            claimed.add(key)
+            out[s.name] = (failures[key] if key == s.name
+                           else f"via repo card {key}: {failures[key]}")
+    out.update({k: v for k, v in failures.items() if k not in claimed})
+    return ok, out
 
 
 async def refresh_skill_sources(*, repo_cache, config):

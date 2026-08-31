@@ -15,5 +15,10 @@ export function unusedRepoNames(cfg, devTypes) {
   for (const dt of Object.values(devTypes || {})) {
     for (const n of dt.memory_repos || []) selected.add(n);
   }
+  // a repo card BACKING a skill source (ADR-0039) is in use — flagging it
+  // unused would nudge a removal the config validator then refuses
+  for (const s of cfg?.skill_sources || []) {
+    if (s.backed_by) selected.add(s.backed_by);
+  }
   return (cfg?.repos || []).map((r) => r.name).filter((n) => !selected.has(n));
 }

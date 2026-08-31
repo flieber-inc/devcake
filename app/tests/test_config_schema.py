@@ -982,6 +982,13 @@ def test_repo_backed_skill_source_validation():
     with pytest.raises(Exception, match="names no repository card"):
         AppConfig(pmos=[], repos=[], skill_sources=[SkillSource(
             name="shelf", backed_by="work")])
+    # an unconfigured backing card would leave a source that can never
+    # sync — refused at save time, where the fix is obvious
+    with pytest.raises(Exception, match="no repository URL yet"):
+        AppConfig(pmos=[], repos=[RepoInstance(name="work")],
+                  skill_sources=[SkillSource(name="shelf", backed_by="work")])
+    # normalized at the model boundary: every consumer compares ONE string
+    assert SkillSource(name="shelf", backed_by="  work  ").backed_by == "work"
 
 
 def test_skill_source_url_and_forge_match_repo_instance():

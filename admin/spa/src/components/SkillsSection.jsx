@@ -165,7 +165,8 @@ function AddSkillDialog({ onClose, onSaved }) {
 
 // Skill viewer: store skills get editable Source + live Rendered; external
 // skills stay read-only with an honest repository notice (CAKE-166).
-function ViewSkillDialog({ name, onClose, skillSources = [], onSaved }) {
+function ViewSkillDialog({ name, onClose, skillSources = [], repos = [],
+                          onSaved }) {
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   const [file, setFile] = useState("SKILL.md");
@@ -218,8 +219,14 @@ function ViewSkillDialog({ name, onClose, skillSources = [], onSaved }) {
 
   const editable = detail?.source === "store";
   const external = detail?.source === "external";
+  const originSrc = external
+    ? skillSources.find((s) => s.name === detail.origin)
+    : null;
   const originUrl = external
-    ? (skillSources.find((s) => s.name === detail.origin)?.url || "")
+    ? (originSrc?.url
+      || (originSrc?.backed_by
+        ? (repos.find((r) => r.name === originSrc.backed_by)?.url || "")
+        : ""))
     : "";
   const md = isMarkdownPath(file);
   const showRendered = md && mode === "rendered";
@@ -353,7 +360,8 @@ function ViewSkillDialog({ name, onClose, skillSources = [], onSaved }) {
 }
 
 
-export default function SkillsSection({ setPageErr, skillSources = [] }) {
+export default function SkillsSection({ setPageErr, skillSources = [],
+                                        repos = [] }) {
   const [confirm, setConfirm] = useState(null); // delete confirms
   // skill store catalog (v1): store-listed when Gitea is up, bundled
   // fallback otherwise — `store` says which (and where to edit)
@@ -577,7 +585,7 @@ export default function SkillsSection({ setPageErr, skillSources = [] }) {
         onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
       {viewSkill && (
         <ViewSkillDialog name={viewSkill}
-          skillSources={skillSources}
+          skillSources={skillSources} repos={repos}
           onSaved={loadSkills}
           onClose={() => setViewSkill(null)} />
       )}

@@ -748,8 +748,14 @@ async def test_skill_source(name: str, *, config, repo_cache):
     if repo_cache is None:
         return {"ok": False, "error": "mirror cache unavailable — save the "
                                       "config and retry"}
-    backed = (getattr(inst, "backed_by", "") or "").strip()
-    has_token = bool(inst.token or inst.token_ro)
+    backed = inst.backed_by
+    backing = (next((r for r in config.repos if r.name == backed), None)
+               if backed else None)
+    # what the probe actually rides: the backing card's forge and remote for
+    # a backed source (ADR-0039), the card's own otherwise — one derivation
+    # for the failure and success payloads so the two can never diverge
+    forge_label = backing.forge if backing is not None else inst.forge
+    repo_label = inst.url or f"backed by {backed}"
     try:
         head = await repo_cache.remote_head(name)
         if not head:
@@ -757,22 +763,24 @@ async def test_skill_source(name: str, *, config, repo_cache):
                       "token, and network")
             if backed:
                 # ADR-0039: the backing repo card owns URL + token — its
-                # own Test connection is where the fix lives
+                # own Test connection is where the fix lives. A branch
+                # pinned on THIS card is probed too, so a missing pinned
+                # branch also lands here.
                 detail = (f"could not reach the remote through repository "
-                          f"card {backed!r} — test that card")
-            elif not has_token:
+                          f"card {backed!r} (or this card pins a branch "
+                          f"the remote lacks) — test that card")
+            elif not (inst.token or inst.token_ro):
                 detail = ("could not reach the remote and no token is "
                           "stored — a public repository needs none; a "
                           "private one needs a Read token on this card")
             return _with_error({
                 "ok": False,
                 "skill_source": name,
-                "forge": inst.forge,
-                "repo": inst.url or f"backed by {backed}",
+                "forge": forge_label,
+                "repo": repo_label,
                 "detail": detail,
             })
-        return {"ok": True, "skill_source": name, "forge": inst.forge,
-                "repo": inst.url or f"backed by {backed}",
-                "remote_head": head}
+        return {"ok": True, "skill_source": name, "forge": forge_label,
+                "repo": repo_label, "remote_head": head}
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": _probe_client_error(e)}

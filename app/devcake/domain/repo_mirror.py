@@ -406,10 +406,16 @@ class RepoCache:
         mirror-INELIGIBLE cards (bundled Gitea), whose `tree_head` has no
         mirror to read (PLAN_MEMORY §3.6). One `ls-remote` with the card's
         read token via askpass; None on any failure."""
-        if self.mirror_name_of(name) != name:
-            # repo-backed skill source: the backing card owns the remote,
-            # the URL, and the token — probe through it
-            return await self.remote_head(self.mirror_name_of(name))
+        pin = ""
+        backing = self.mirror_name_of(name)
+        if backing != name:
+            # repo-backed skill source: the BACKING card supplies remote,
+            # clone user, and token — but the SOURCE's branch pin (when
+            # set) still names the ref, so a bad pin fails THIS probe
+            # instead of riding the backing card's default to a false green
+            src = self._skill_source(name)
+            pin = (getattr(src, "default_branch", "") or "").strip()
+            name = backing
         inst = self.forges.instance(name)
         forge = self.forges.get(name)
         if inst is None or forge is None:
@@ -420,8 +426,8 @@ class RepoCache:
         clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
                       if forge is not None else self.clone_user_of(inst.forge))
         url = self._origin_url(url, clone_user)
-        ref = (f"refs/heads/{inst.default_branch}"
-               if inst.default_branch else "HEAD")
+        branch = pin or (inst.default_branch or "").strip()
+        ref = f"refs/heads/{branch}" if branch else "HEAD"
         r = await self.git(["ls-remote", url, ref], env=self._git_env(inst))
         if r.returncode != 0 or not (r.stdout or "").strip():
             return None
@@ -454,9 +460,18 @@ class RepoCache:
         # the card's OWN branch pin applies even when the physical mirror is
         # a backing repo card's (a backed source may track e.g. `stable`
         # while work happens on the backing card's default branch)
-        p = self.mirror_path(self.mirror_name_of(name))
-        refs = ([f"refs/heads/{inst.default_branch}"]
-                if inst is not None and inst.default_branch else []) + ["HEAD"]
+        physical = self.mirror_name_of(name)
+        p = self.mirror_path(physical)
+        branch = ((inst.default_branch or "").strip()
+                  if inst is not None else "")
+        if physical != name and branch:
+            # a backed source's explicit pin fails LOUD when the branch is
+            # missing — the shared mirror's HEAD is the BACKING card's
+            # branch, so falling back would silently serve the wrong one
+            # (an own-remote mirror's HEAD is its own branch: harmless)
+            refs = [f"refs/heads/{branch}"]
+        else:
+            refs = ([f"refs/heads/{branch}"] if branch else []) + ["HEAD"]
         for ref in refs:
             r = await self.git(["-C", str(p), "rev-parse", "--verify",
                                 f"{ref}^{{commit}}"])
@@ -521,7 +536,7 @@ class RepoCache:
                     getattr(self.config, "skill_sources", None) or []
                     # backed sources have no mirror of their own — their
                     # physical mirror warms with the backing repo card
-                    if x.configured and not (x.backed_by or "").strip()])
+                    if x.configured and self.mirror_name_of(x.name) == x.name])
         if names:
             await self.ensure_fresh(names)
             log.info("mirror warm-up finished: %d ok / %d total",

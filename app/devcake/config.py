@@ -424,9 +424,18 @@ class SkillSource(BaseModel):
         # values normalize so sync and the mirror reads compare one string
         return (v or "").strip()
 
+    @field_validator("backed_by")
+    @classmethod
+    def _backed_by_stripped(cls, v: str) -> str:
+        # normalized at the boundary so every consumer — the AppConfig
+        # membership check, mirror_name_of, the rename-citation rewrite —
+        # compares the SAME string; a padded value would validate (checks
+        # strip) yet dodge the rename mapping's exact-match lookup
+        return (v or "").strip()
+
     @property
     def configured(self) -> bool:
-        return bool(self.url.strip()) or bool(self.backed_by.strip())
+        return bool(self.url.strip()) or bool(self.backed_by)
 
     @property
     def token(self) -> str:
@@ -1195,8 +1204,9 @@ class AppConfig(BaseModel):
             raise ValueError(
                 f"skill_sources {sorted(overlap)} collide with repository "
                 f"card names — pick distinct names")
+        configured_repos = {r.name for r in self.repos if r.configured}
         for x in self.skill_sources:
-            backed = (x.backed_by or "").strip()
+            backed = x.backed_by
             if not backed:
                 continue
             if x.url.strip():
@@ -1210,6 +1220,15 @@ class AppConfig(BaseModel):
                 raise ValueError(
                     f"skill source {x.name!r}: backed_by {backed!r} names "
                     f"no repository card (have: {sorted(repo_names)})")
+            if backed not in configured_repos:
+                # an unconfigured backing card would leave the source
+                # configured=True yet unable to ever sync — every dispatch
+                # needing its skills fails with a message naming the
+                # backing card ("repo is no longer configured"); refuse at
+                # save time where the fix is obvious instead
+                raise ValueError(
+                    f"skill source {x.name!r}: backed_by {backed!r} has no "
+                    f"repository URL yet — set that card's URL first")
         # make_run_id truncates the scrubbed-upper instance segment to 12
         # chars — refuse two PMO instances that would mint the same prefix
         # (CAKE-151). PMO names ONLY: repos and skill sources never prefix

@@ -21,12 +21,20 @@ sync in the one dispatch gate, and its connection probe delegates to that
 card's remote, URL, and token.
 
 `backed_by` and `url` are mutually exclusive (config validation). The
-backing name must resolve to a configured repository card — which is also
-what refuses deleting the backing card while a source still reads through
-it. A rename of the backing card rewrites the citation like every other
-repo citation. `default_branch` and `subdir` keep their meaning on the
-backed card: a backed source may pin a branch (say `stable`) other than
-the one work happens on, because the shared mirror holds every branch.
+backing name must resolve to a CONFIGURED repository card (a URL-less card
+would leave a source that can never sync, failing with a message naming
+the wrong card) — the same check refuses deleting the backing card while a
+source still reads through it. A rename of the backing card rewrites the
+citation like every other repo citation; converting an own-remote source
+to backed deletes its old mirror (and with it the stale ledger/health
+row). `default_branch` and `subdir` keep their meaning on the backed
+card: a backed source may pin a branch (say `stable`) other than the one
+work happens on, because the shared mirror holds every branch. An
+EXISTING pin is honored end to end — reads serve it and the connection
+probe checks it on the remote, so a missing pinned branch fails loud on
+both surfaces, never a silent fallback. An EMPTY branch on a backed card
+means the BACKING card's branch (the shared mirror's HEAD), not the
+remote's own default.
 
 The 2026-08-14 ruling stands untouched: a skill source remains a
 first-class skills connection — its own card, its own `<source>/<skill>`
@@ -59,7 +67,7 @@ inference.
 and everything else to itself. Sync entry (`ensure_fresh`), stale-cache
 checks (`has_last_good`), the tree reads, and the remote probe all resolve
 through it, so the backed pair can never fetch one bare repo under two
-locks. The dispatch gate resolves skill cards before the needed-set union;
+locks. Both gates — mission dispatch and the steward context gate — resolve skill cards through `repo_sourcing.resolved_skill_cards` before the needed-set union, so run records (`mirror_repos`) snapshot PHYSICAL mirror names while `skill_repo_heads` provenance stays keyed by the source card;
 a backing card that also rides sourcing (it *is* the work or reference
 repo) classifies as sourcing — a fetch failure there defers dispatch and
 is never downgraded to a context-card stale/omit. Mirror warm-up skips

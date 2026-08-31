@@ -331,3 +331,31 @@ def test_gate_combines_eligible_filter_and_skill_card_union(tmp_path,
     assert len(calls) == 1
     assert asked and "skillcard" in asked[0]              # union half
     assert all("intmission1" not in a for a in asked)     # filter half
+
+
+def test_context_gate_backed_skill_card_downgrades_in_open_mode(tmp_path):
+    """ADR-0039: ensure_fresh keys a backed source's failure by its BACKING
+    card — the steward gate must classify that key as a context card
+    (toggle-governed stale/omit), exactly like dispatch's gate, never a
+    hard defer."""
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    svc.config.context_sourcing_strict = False
+    dt = svc.dev_types["steward"]
+    dt.skills = ["shelf/tdd"]
+
+    class Cache:
+        def mirror_name_of(self, name):
+            return "work" if name == "shelf" else name
+
+        async def ensure_fresh(self, names):
+            assert "shelf" not in names          # resolved before the union
+            bad = {n: "fetch: down" for n in names if n == "work"}
+            return (not bad), bad
+
+        def has_last_good(self, name):
+            return name == "work"
+
+    mgr.repo_cache = Cache()
+    ok, why, stale, omit = run_coro(svc._context_gate(dt, "home"))
+    assert ok and not why
+    assert stale == {"work"} and omit == set()

@@ -27,6 +27,12 @@ export default function SkillSourcesSection({
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
   const sources = cfg.skill_sources || [];
+  // Backed-by candidates: CONFIGURED repo cards only — the server refuses
+  // an unconfigured backing card, so the picker never offers one
+  const backedRepoOptions = (cfg.repos || [])
+    .filter((r) => (r.url || "").trim())
+    .map((r) => r.name)
+    .filter(Boolean);
   // stored tokens key on the source name — lock the name once saved, with
   // the same session-new / last-index rule as Repos and PMO cards
   const newNames = useNewNames(dr.server?.cfg.skill_sources, sources,
@@ -101,8 +107,6 @@ export default function SkillSourcesSection({
         const locked = nameLocked(src.name, idx);
         const tr = testResult[`skill:${src.name}`];
         const backed = (src.backed_by || "").trim();
-        const repoNames = (dr.draft.cfg.repos || [])
-          .map((r) => r.name).filter(Boolean);
         return (
         <div key={idx}
           className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
@@ -149,9 +153,12 @@ export default function SkillSourcesSection({
                   if (v) setField(`cfg.skill_sources.${idx}.url`, "");
                 }}>
                 <option value="">Own remote</option>
-                {repoNames.map((n) => (
+                {backedRepoOptions.map((n) => (
                   <option key={n} value={n}>{n}</option>
                 ))}
+                {backed && !backedRepoOptions.includes(backed) && (
+                  <option value={backed} disabled>{backed} (missing)</option>
+                )}
               </Select>
               {dr.errors[`cfg.skill_sources.${idx}.backed_by`] && (
                 <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
@@ -172,7 +179,7 @@ export default function SkillSourcesSection({
               </Select>
             </Field>
             )}
-            {!backed && (
+            {(!backed || (src.url || "").trim()) && (
             <Field label="Repository URL"
               help="HTTPS URL of the skills repository, e.g. https://github.com/you/skills.git.">
               <Input value={src.url || ""}
@@ -181,7 +188,9 @@ export default function SkillSourcesSection({
                   e.target.value)} />
             </Field>
             )}
-            <Field label="Branch" hint="Empty = the repository's default">
+            <Field label="Branch"
+              hint={backed ? "Empty = the backing card's branch"
+                : "Empty = the repository's default"}>
               <Input value={src.default_branch || ""}
                 aria-label={`Skill source ${idx + 1} branch`}
                 onChange={(e) => setField(`cfg.skill_sources.${idx}.default_branch`,

@@ -1,29 +1,32 @@
 // ADR-0039 — repo-backed skill sources in the Skill sources form: the
-// Backed-by select swaps the own-remote fields (forge/URL/tokens) for a
-// reads-through-the-card hint, clears a previously typed URL (server-side
-// the two are mutually exclusive), and a dangling backing name surfaces the
-// inline draft error.
+// Backed-by select swaps the own-remote fields for a reads-through-the-card
+// hint and clears a previously typed URL; only CONFIGURED repo cards are
+// offered; a dangling backing name renders as a disabled (missing) option
+// with the inline draft error; a row carrying BOTH url and backed_by (stale
+// rebase / out-of-band state) keeps its URL field visible so the
+// mutual-exclusion error never points at an invisible field.
 import { checked, gotoFresh, summary, withPage } from "./harness.mjs";
+
+const repo = (name, url) => ({
+  name, forge: "github", url, api_base: null, default_branch: "main",
+  auto_merge: false, auto_resolve_merge_conflicts: true,
+  merge_retry_window_minutes: 30, merge_settle_minutes: 0,
+});
+
+const src = (name, extra) => ({
+  name, forge: "github", url: "", default_branch: "", subdir: "",
+  backed_by: "", ...extra,
+});
 
 const CFG = {
   pmos: [],
-  repos: [{
-    name: "work",
-    forge: "github",
-    url: "https://github.com/example-org/work",
-    api_base: null,
-    default_branch: "main",
-    auto_merge: false,
-    auto_resolve_merge_conflicts: true,
-    merge_retry_window_minutes: 30,
-    merge_settle_minutes: 0,
-  }],
+  repos: [repo("work", "https://github.com/example-org/work"),
+          repo("idle", "")],                     // unconfigured — never offered
   skill_sources: [
-    { name: "shelf", forge: "github",
-      url: "https://github.com/example-org/skills",
-      default_branch: "", subdir: "", backed_by: "" },
-    { name: "dangling", forge: "github", url: "",
-      default_branch: "", subdir: "", backed_by: "ghost" },
+    src("shelf", { url: "https://github.com/example-org/skills" }),
+    src("dangling", { backed_by: "ghost" }),
+    src("conflicted", { url: "https://github.com/example-org/more",
+                        backed_by: "work" }),
   ],
   crons: [],
   dismissed_alerts: [],
@@ -77,11 +80,12 @@ await withPage(async (page) => {
 
   const backedSel = page.locator(
     'select[aria-label="Skill source 1 backed by"]');
-  await checked("own-remote card shows URL field and Backed-by select with repo options", async () => {
+  await checked("own-remote card shows URL field; Backed-by offers only configured repos", async () => {
     const urlField = page.locator('input[aria-label="Skill source 1 URL"]');
     const opts = await backedSel.locator("option").allInnerTexts();
     return (await urlField.count()) === 1
-      && opts.includes("Own remote") && opts.includes("work");
+      && opts.includes("Own remote") && opts.includes("work")
+      && !opts.some((t) => t.startsWith("idle"));
   });
 
   await backedSel.selectOption("work");
@@ -100,19 +104,25 @@ await withPage(async (page) => {
     return url === "";
   });
 
-  await checked("dangling backed_by shows the inline draft error", async () => {
+  await checked("dangling backed_by renders as a disabled (missing) option + draft error", async () => {
+    const sel2 = page.locator('select[aria-label="Skill source 2 backed by"]');
+    const opt = sel2.locator('option[value="ghost"]');
     const t = await page.locator("#skills-sources").innerText();
-    return /names no repository card/.test(t) && /ghost/.test(t);
+    return (await opt.count()) === 1
+      && (await opt.first().isDisabled())
+      && (await sel2.inputValue()) === "ghost"
+      && /names no repository card/.test(t) && /ghost/.test(t);
   });
 
   await checked("branch and folder stay editable on a backed card", async () => {
-    const sel2 = page.locator('select[aria-label="Skill source 2 backed by"]');
-    if ((await sel2.inputValue()) !== "ghost" && (await sel2.count()) !== 1) {
-      // ghost is not among the options — the select must still render
-      return (await sel2.count()) === 1;
-    }
     return (await page.locator('input[aria-label="Skill source 2 branch"]').count()) === 1
       && (await page.locator('input[aria-label="Skill source 2 folder"]').count()) === 1;
+  });
+
+  await checked("url + backed_by together keeps the URL field visible with the error", async () => {
+    const t = await page.locator("#skills-sources").innerText();
+    return (await page.locator('input[aria-label="Skill source 3 URL"]').count()) === 1
+      && /mutually exclusive/.test(t);
   });
 });
 

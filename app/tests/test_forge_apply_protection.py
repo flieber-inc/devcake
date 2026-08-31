@@ -448,8 +448,9 @@ def test_gitlab_apply_restores_protection_when_recreate_fails():
 
 
 def test_gitea_apply_empty_enable_status_check_does_not_invent_star():
-    """enable_status_check with empty contexts must not invent '*' (review #3);
-    write must emit exactly the discovered contexts."""
+    """enable_status_check + empty contexts is an unscoped CI gate (not a
+    missing one). When other dimensions already match, apply no-ops — and
+    must never surface '*' as a derived required_status_checks name."""
     from devcake.adapters.gitea.adapter import GiteaForge
 
     existing = {
@@ -460,10 +461,12 @@ def test_gitea_apply_empty_enable_status_check_does_not_invent_star():
         "status_check_contexts": [],
         "required_approvals": 0,
     }
-    writes: list[dict] = []
+    writes: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if request.method in ("POST", "PATCH", "PUT", "DELETE"):
+            writes.append(f"{request.method} {path}")
         if request.method == "GET" and path.endswith("/branches/main"):
             return httpx.Response(200, json={"commit": {"id": "abc"}})
         if request.method == "GET" and "/statuses/" in path:
@@ -472,13 +475,6 @@ def test_gitea_apply_empty_enable_status_check_does_not_invent_star():
             return httpx.Response(200, json=[existing])
         if request.method == "GET" and path.endswith("/branch_protections/main"):
             return httpx.Response(200, json=existing)
-        if request.method in ("POST", "PATCH") and "branch_protections" in path:
-            body = json.loads(request.content.decode())
-            writes.append(body)
-            # keep rule updated for subsequent reads
-            existing.update({k: v for k, v in body.items()})
-            existing["branch_name"] = "main"
-            return httpx.Response(200, json=existing)
         return httpx.Response(500, text=f"unexpected {request.method} {path}")
 
     forge = GiteaForge(
@@ -486,9 +482,93 @@ def test_gitea_apply_empty_enable_status_check_does_not_invent_star():
         transport=httpx.MockTransport(handler),
     )
     result = run_coro(forge.apply_default_branch_protection("main"))
-    assert result.outcome == "applied"
-    assert writes, "expected a protection write"
-    contexts = writes[0].get("status_check_contexts")
-    assert contexts == ["ci"]
-    assert "*" not in contexts
+    assert result.outcome == "already_as_strict"
+    assert result.shape.require_status_checks_unscoped is True
+    assert result.shape.required_status_checks == []
+    assert "*" not in (result.shape.required_status_checks or [])
     assert "*pipeline*" not in (result.shape.required_status_checks or [])
+    assert writes == []
+
+
+def _gitea_force_push_tighten_handler(
+        existing: dict, writes: list[dict]):
+    """MockTransport: force-push needs tighten; no discovered CI contexts."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/branches/main"):
+            return httpx.Response(200, json={"commit": {"id": "abc"}})
+        if request.method == "GET" and "/statuses/" in path:
+            return httpx.Response(200, json=[])
+        if request.method == "GET" and path.endswith("/branch_protections"):
+            return httpx.Response(200, json=[existing])
+        if request.method == "GET" and path.endswith("/branch_protections/main"):
+            return httpx.Response(200, json=existing)
+        if request.method in ("POST", "PATCH") and "branch_protections" in path:
+            body = json.loads(request.content.decode())
+            writes.append(body)
+            existing.update({k: v for k, v in body.items()})
+            existing["branch_name"] = "main"
+            return httpx.Response(200, json=existing)
+        return httpx.Response(500, text=f"unexpected {request.method} {path}")
+
+    return handler
+
+
+def test_gitea_apply_preserves_unscoped_status_check_when_contexts_empty():
+    """enable_status_check=true + empty contexts is an unscoped CI gate.
+    Tightening force-push must keep that gate (review round-2 #1)."""
+    from devcake.adapters.gitea.adapter import GiteaForge
+
+    existing = {
+        "branch_name": "main",
+        "enable_push": False,
+        "enable_force_push": True,
+        "enable_status_check": True,
+        "status_check_contexts": [],
+        "required_approvals": 0,
+    }
+    writes: list[dict] = []
+    forge = GiteaForge(
+        "https://git.example/o/r", "write-tok",
+        transport=httpx.MockTransport(
+            _gitea_force_push_tighten_handler(existing, writes)),
+    )
+    result = run_coro(forge.apply_default_branch_protection("main"))
+    assert result.outcome == "applied"
+    assert result.shape.allow_force_push is False
+    assert result.shape.require_status_checks_unscoped is True
+    assert writes, "expected a protection write to lock force-push"
+    assert writes[0].get("enable_force_push") is False
+    assert writes[0].get("enable_status_check") is True
+    assert writes[0].get("status_check_contexts") == ["*"]
+
+
+def test_gitea_apply_preserves_star_unscoped_status_check_on_force_push_tighten():
+    """Gitea's documented '*' pattern is the wire form of an unscoped CI gate.
+    Tightening force-push must not clear enable_status_check / '*' (review #2)."""
+    from devcake.adapters.gitea.adapter import GiteaForge
+
+    existing = {
+        "branch_name": "main",
+        "enable_push": False,
+        "enable_force_push": True,
+        "enable_status_check": True,
+        "status_check_contexts": ["*"],
+        "required_approvals": 0,
+    }
+    writes: list[dict] = []
+    forge = GiteaForge(
+        "https://git.example/o/r", "write-tok",
+        transport=httpx.MockTransport(
+            _gitea_force_push_tighten_handler(existing, writes)),
+    )
+    result = run_coro(forge.apply_default_branch_protection("main"))
+    assert result.outcome == "applied"
+    assert result.shape.allow_force_push is False
+    assert result.shape.require_status_checks_unscoped is True
+    assert "*" not in (result.shape.required_status_checks or [])
+    assert writes, "expected a protection write to lock force-push"
+    assert writes[0].get("enable_force_push") is False
+    assert writes[0].get("enable_status_check") is True
+    assert writes[0].get("status_check_contexts") == ["*"]

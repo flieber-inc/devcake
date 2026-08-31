@@ -293,12 +293,15 @@ class GiteaForge:
                 return None
         if not rule:
             return None
-        # Never invent a "*" context when enable_status_check is on with an
-        # empty list — that string is not a real check and must not be written
-        # back. Empty contexts + discovered names → apply writes the names.
+        # Named contexts only — never treat Gitea's "*" (or empty+enabled)
+        # as a derived check name. Those mean "any context must succeed" and
+        # map onto require_status_checks_unscoped (same role as GitLab Free's
+        # only_allow_merge_if_pipeline_succeeds).
         from ...ports.forge import real_status_checks
         checks = real_status_checks(
             list(rule.get("status_check_contexts") or []))
+        enable_status = bool(rule.get("enable_status_check"))
+        unscoped = enable_status and not checks
         return ProtectionShape(
             require_pull_request=not bool(rule.get("enable_push")),
             allow_force_push=bool(rule.get("enable_force_push")),
@@ -306,19 +309,29 @@ class GiteaForge:
             required_status_checks=checks,
             required_approving_review_count=int(
                 rule.get("required_approvals") or 0),
+            require_status_checks_unscoped=unscoped,
         )
 
     async def _write_protection_shape(
             self, branch: str, shape: ProtectionShape) -> None:
         from ...ports.forge import real_status_checks
         contexts = real_status_checks(list(shape.required_status_checks))
+        enable_status = bool(contexts) or bool(
+            shape.require_status_checks_unscoped)
+        # Vendor wire form of the unscoped flag when no named contexts exist
+        # (Gitea docs: empty list is invalid; use "*" for any-context). Never
+        # invent "*" as a DevCake-derived check name — only as this encoding.
+        wire_contexts = (
+            contexts if contexts
+            else (["*"] if shape.require_status_checks_unscoped else [])
+        )
         body = {
             "branch_name": branch,
             "enable_push": not shape.require_pull_request,
             "enable_force_push": bool(shape.allow_force_push),
             "required_approvals": int(shape.required_approving_review_count),
-            "enable_status_check": bool(contexts),
-            "status_check_contexts": contexts,
+            "enable_status_check": enable_status,
+            "status_check_contexts": wire_contexts,
         }
         existing = None
         try:

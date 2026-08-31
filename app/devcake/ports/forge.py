@@ -91,8 +91,10 @@ class ProtectionShape(BaseModel):
     required_status_checks: list[str] = Field(default_factory=list)
     required_approving_review_count: int = 0
     # True when the forge already requires *some* CI gate without named
-    # contexts (e.g. GitLab Free ``only_allow_merge_if_pipeline_succeeds``).
-    # Used for as-strict compare only — never serialized as a fake context.
+    # contexts (GitLab Free ``only_allow_merge_if_pipeline_succeeds``; Gitea
+    # ``enable_status_check`` with empty contexts or only ``*``). Used for
+    # as-strict compare / write — never treated as a derived check name
+    # (Gitea may emit ``*`` only as the vendor wire encoding of this flag).
     require_status_checks_unscoped: bool = False
 
 

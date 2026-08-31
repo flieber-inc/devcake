@@ -581,7 +581,8 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       {tokenCopy && (
         <TokenCopyModal mode="pmo"
           repos={dr.server.cfg.repos || []}
-          pmos={dr.server.cfg.pmos || []}
+          pmos={(dr.server.cfg.pmos || [])
+            .filter((p) => !newPmoNames.has(p.name))}
           onClose={() => {
             setTokenCopy(false);
             setSecretsEpoch((e) => e + 1);   // ✓/✗ badges reflect the copies

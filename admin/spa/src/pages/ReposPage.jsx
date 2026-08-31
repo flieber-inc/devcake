@@ -955,7 +955,8 @@ export default function ReposPage({ onHealthChange }) {
         onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
       {tokenCopy && (
         <TokenCopyModal mode="repo"
-          repos={dr.server.cfg.repos || []}
+          repos={(dr.server.cfg.repos || [])
+            .filter((r) => !newNames.has(r.name))}
           pmos={dr.server.cfg.pmos || []}
           onClose={() => {
             setTokenCopy(false);

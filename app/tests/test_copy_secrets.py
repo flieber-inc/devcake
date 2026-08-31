@@ -161,9 +161,16 @@ def test_unknown_cards_and_empty_shapes(tmp_path, monkeypatch):
              "targets": [{"scope": "repo", "name": "ghost"}]},
             {"source": {"scope": "skill", "name": "alpha"},
              "targets": [{"scope": "repo", "name": "beta"}]},
-            # source alone in targets = nothing to do
+            # unhashable scope must 422, never a TypeError 500
+            {"source": {"scope": ["repo"], "name": "alpha"},
+             "targets": [{"scope": "repo", "name": "beta"}]},
+            # the source among the targets is a caller bug — strict 422
             {"source": {"scope": "repo", "name": "alpha"},
-             "targets": [{"scope": "repo", "name": "alpha"}]}):
+             "targets": [{"scope": "repo", "name": "alpha"}]},
+            # so is a duplicate target (all-or-nothing doctrine)
+            {"source": {"scope": "repo", "name": "alpha"},
+             "targets": [{"scope": "repo", "name": "beta"},
+                         {"scope": "repo", "name": "beta"}]}):
         with pytest.raises(HTTPException) as e:
             _copy(cs, cfg, runtime, reloads, body)
         assert e.value.status_code == 422
@@ -178,3 +185,143 @@ def test_source_with_nothing_stored_refuses(tmp_path, monkeypatch):
             "targets": [{"scope": "repo", "name": "beta"}]})
     assert e.value.status_code == 422
     assert reloads == []
+
+
+def test_same_forge_different_host_refused(tmp_path, monkeypatch):
+    """Same forge id is NOT enough — gitea/gitlab self-host and GitHub has
+    Enterprise, so a PAT is only valid per host."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as store
+    from devcake.api import connections_service as cs
+
+    cfg = AppConfig(repos=[
+        RepoInstance(name="inhouse", forge="gitea",
+                     url="http://gitea:3000/org/inhouse"),
+        RepoInstance(name="external", forge="gitea",
+                     url="https://gitea.example.com/org/external"),
+    ], pmos=[])
+    store.write_connection_secret("repo", "inhouse", "token", "tok-a")
+    with pytest.raises(HTTPException) as e:
+        _run(cs.copy_secrets(
+            {"source": {"scope": "repo", "name": "inhouse"},
+             "targets": [{"scope": "repo", "name": "external"}]},
+            config=cfg, forge_runtime=_Runtime(), reload=lambda: None))
+    assert e.value.status_code == 422
+    assert "host" in str(e.value.detail)
+    assert store.read_connection_secret("repo", "external", "token") == ""
+
+
+def test_issues_board_host_must_match_the_repo_host(tmp_path, monkeypatch):
+    """A github_issues board on GHE must not take a github.com repo's PAT;
+    api.github.com counts as github.com via the registry alias groups."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as store
+    from devcake.api import connections_service as cs
+
+    cfg = AppConfig(
+        repos=[RepoInstance(name="alpha", forge="github",
+                            url="https://github.com/example-org/alpha")],
+        pmos=[PMOInstance(name="ghe", system="github_issues",
+                          team_key="org/board",
+                          api_base="https://ghe.corp/api/v3"),
+              PMOInstance(name="dotcom", system="github_issues",
+                          team_key="org/board2",
+                          api_base="https://api.github.com")])
+    store.write_connection_secret("repo", "alpha", "token", "ghp_x")
+    with pytest.raises(HTTPException) as e:
+        _run(cs.copy_secrets(
+            {"source": {"scope": "repo", "name": "alpha"},
+             "targets": [{"scope": "pmo", "name": "ghe"}]},
+            config=cfg, forge_runtime=_Runtime(), reload=lambda: None))
+    assert e.value.status_code == 422 and "host" in str(e.value.detail)
+    out = _run(cs.copy_secrets(
+        {"source": {"scope": "repo", "name": "alpha"},
+         "targets": [{"scope": "pmo", "name": "dotcom"}]},
+        config=cfg, forge_runtime=_Runtime(), reload=lambda: None))
+    assert out["results"][0]["copied"] == ["api_key"]
+
+
+def test_dry_run_reports_rows_and_writes_nothing(tmp_path, monkeypatch):
+    cs, store, cfg, runtime, reloads = _rig(tmp_path, monkeypatch)
+    store.write_connection_secret("repo", "alpha", "token", "ghp_write")
+
+    out = _run(cs.copy_secrets(
+        {"dry_run": True,
+         "source": {"scope": "repo", "name": "alpha"},
+         "targets": [{"scope": "repo", "name": "beta"},
+                     {"scope": "repo", "name": "gamma"},
+                     {"scope": "pmo", "name": "ghboard"},
+                     {"scope": "repo", "name": "ghost"}]},
+        config=cfg, forge_runtime=runtime, reload=lambda: reloads.append(1)))
+    rows = {(r["scope"], r["name"]): r for r in out["targets"]}
+    assert out["dry_run"] is True
+    assert rows[("repo", "beta")]["eligible"] is True
+    assert rows[("repo", "beta")]["receives"] == ["token"]
+    assert rows[("repo", "beta")]["skipped"] == ["reviewer_token", "token_ro"]
+    assert rows[("pmo", "ghboard")]["receives"] == ["api_key"]
+    assert rows[("repo", "gamma")]["eligible"] is False   # cross-forge
+    assert rows[("repo", "ghost")]["eligible"] is False   # unknown card
+    assert "reason" in rows[("repo", "ghost")]
+    # nothing written, no adapter rebuild
+    assert store.read_connection_secret("repo", "beta", "token") == ""
+    assert reloads == [] and runtime.cleared == []
+
+
+def test_mid_batch_write_failure_rebuilds_adapters_and_names_written(
+        tmp_path, monkeypatch):
+    """The 'no partial copy' promise is validation-side; a mid-batch DISK
+    failure must still rebuild adapters to match what reached the store
+    and say which targets were written."""
+    cs, store, cfg, runtime, reloads = _rig(tmp_path, monkeypatch)
+    store.write_connection_secret("repo", "alpha", "token", "ghp_write")
+    real = store.write_connection_fields
+    calls = []
+
+    def flaky(scope, name, fields):
+        calls.append(name)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        return real(scope, name, fields)
+
+    monkeypatch.setattr(store, "write_connection_fields", flaky)
+    with pytest.raises(HTTPException) as e:
+        _run(cs.copy_secrets(
+            {"source": {"scope": "repo", "name": "alpha"},
+             "targets": [{"scope": "repo", "name": "beta"},
+                         {"scope": "pmo", "name": "ghboard"}]},
+            config=cfg, forge_runtime=runtime,
+            reload=lambda: reloads.append(1)))
+    assert e.value.status_code == 500
+    assert "repo:beta" in str(e.value.detail)
+    assert reloads == [1]                       # adapters match the disk
+    assert store.read_connection_secret("repo", "beta", "token") == "ghp_write"
+
+
+def test_copy_writes_one_audit_event_with_names_only(tmp_path, monkeypatch):
+    cs, store, cfg, runtime, reloads = _rig(tmp_path, monkeypatch)
+    store.write_connection_secret("repo", "alpha", "token", "ghp_secret_value")
+    events = []
+    import devcake.settings_bundle as sb
+    monkeypatch.setattr(sb, "audit_event",
+                        lambda action, detail="": events.append(
+                            (action, detail)))
+    _copy(cs, cfg, runtime, reloads, {
+        "source": {"scope": "repo", "name": "alpha"},
+        "targets": [{"scope": "repo", "name": "beta"}]})
+    assert len(events) == 1
+    action, detail = events[0]
+    assert action == "secrets_copied"
+    assert "repo:alpha" in detail and "repo:beta" in detail
+    assert "ghp_secret_value" not in detail
+
+
+def test_write_connection_fields_is_one_file_update(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as store
+    store.write_connection_secret("repo", "beta", "reviewer_token", "keep")
+    store.write_connection_fields("repo", "beta",
+                                  {"token": "rw", "token_ro": "ro"})
+    assert store.read_connection_secret("repo", "beta", "token") == "rw"
+    assert store.read_connection_secret("repo", "beta", "token_ro") == "ro"
+    assert store.read_connection_secret("repo", "beta",
+                                        "reviewer_token") == "keep"

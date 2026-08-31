@@ -1,15 +1,21 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { get, send } from "../api.js";
-import { connRef } from "../lib/connectionFields.js";
+import {
+  CONNECTION_FIELD_LABELS, CONNECTION_FIELDS, connRef,
+} from "../lib/connectionFields.js";
 import Button from "./Button.jsx";
 import { Field, Select } from "./Field.jsx";
 import { Modal } from "./Modal.jsx";
 
 // Slot-for-slot token copy across connection cards (user-scoped PATs are
-// valid on every same-forge card, so one paste can feed the whole fleet).
-// Values never touch the browser: the server reads the source's store and
-// writes the targets' (POST /connections/copy-secrets). Saved cards only —
-// secrets key on the server-side instance name.
+// valid on every same-forge SAME-HOST card, so one paste can feed the
+// fleet). Values never touch the browser: the server reads the source's
+// store and writes the targets' (POST /connections/copy-secrets). The
+// SERVER also decides eligibility — picking a source fires a dry_run and
+// the target list renders from its rows, so no compatibility table is
+// mirrored client-side to drift. Saved cards only (secrets key on the
+// server-side instance name); the host pages pass lists already filtered
+// by their saved-name predicate.
 
 export const TOKEN_COPY_ENTRY = {
   menuLabel: "Copy tokens between connections",
@@ -17,82 +23,79 @@ export const TOKEN_COPY_ENTRY = {
     + "and reviewer slots each land in their own slot.",
 };
 
-const FIELD_LABEL = {
-  token: "Access token",
-  token_ro: "Read-only token",
-  reviewer_token: "Reviewer token",
-  api_key: "API key",
-};
-const REPO_FIELDS = ["token", "token_ro", "reviewer_token"];
-
 const keyOf = (scope, name) => `${scope}\0${name}`;
-
-/** Fields the source card can send to one target: {targetField: sourceField}.
- *  Mirrors connections_service._copy_plan — forge-issues PMO cards take a
- *  same-forge repo's write token as their API key. */
-function planFor(source, target) {
-  if (source.scope === "repo") {
-    if (target.scope === "repo") {
-      if (target.forge !== source.forge) return null;
-      return Object.fromEntries(REPO_FIELDS.map((f) => [f, f]));
-    }
-    if (target.system !== `${source.forge}_issues`) return null;
-    return { api_key: "token" };
-  }
-  if (target.scope !== "pmo" || target.system !== source.system) return null;
-  return { api_key: "api_key" };
-}
+const label = (f) => CONNECTION_FIELD_LABELS[f] || f;
 
 export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
   const cards = useMemo(() => [
-    ...(repos || []).map((r) => ({ scope: "repo", name: r.name, forge: r.forge })),
-    ...(pmos || []).map((p) => ({ scope: "pmo", name: p.name, system: p.system })),
+    ...(repos || []).map((r) => ({ scope: "repo", name: r.name })),
+    ...(pmos || []).map((p) => ({ scope: "pmo", name: p.name })),
   ], [repos, pmos]);
   const sources = cards.filter((c) => c.scope === mode);
 
   const [sourceKey, setSourceKey] = useState("");
   const [picked, setPicked] = useState(() => new Set());
-  const [presence, setPresence] = useState(null);   // {ref: {present}}
+  // presence decorates the SOURCE options only; a failed check keeps it
+  // null = unknown (advisory — never allowed to brick the picker)
+  const [presence, setPresence] = useState(null);
+  const [preview, setPreview] = useState(null);   // dry-run rows for source
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [results, setResults] = useState(null);
 
   useEffect(() => {
-    const refs = cards.flatMap((c) => c.scope === "repo"
-      ? REPO_FIELDS.map((f) => connRef("repo", c.name, f))
+    const refs = sources.flatMap((c) => c.scope === "repo"
+      ? CONNECTION_FIELDS.repo.map((f) => connRef("repo", c.name, f))
       : [connRef("pmo", c.name, "api_key")]);
     let dead = false;
     (async () => {
-      const out = {};
-      for (let i = 0; i < refs.length; i += 40) {
-        const chunk = refs.slice(i, i + 40);
-        try {
-          const res = await get("/secrets-check?conn=" + chunk.join(","));
-          Object.assign(out, res.conn || {});
-        } catch { /* presence is advisory — the copy itself still validates */ }
-      }
-      if (!dead) setPresence(out);
+      const chunks = [];
+      for (let i = 0; i < refs.length; i += 40) chunks.push(refs.slice(i, i + 40));
+      const parts = await Promise.all(chunks.map((chunk) =>
+        get("/secrets-check?conn=" + encodeURIComponent(chunk.join(",")))
+          .then((r) => r.conn || {})
+          .catch(() => null)));
+      if (dead) return;
+      if (parts.every((p) => p === null)) return;   // all failed: stay unknown
+      setPresence(Object.assign({}, ...parts.filter(Boolean)));
     })();
     return () => { dead = true; };
-  }, [cards]);
+    // sources derives from the cards prop — refetch only when it changes
+  }, [cards, mode]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const storedFields = (c) => (c.scope === "repo" ? REPO_FIELDS : ["api_key"])
+  const storedFields = (c) => (c.scope === "repo"
+    ? CONNECTION_FIELDS.repo : ["api_key"])
     .filter((f) => presence?.[connRef(c.scope, c.name, f)]?.present);
 
   const source = sources.find((c) => keyOf(c.scope, c.name) === sourceKey);
-  const eligible = useMemo(() => {
-    if (!source) return [];
-    return cards
-      .filter((c) => !(c.scope === source.scope && c.name === source.name))
-      .map((c) => ({ card: c, plan: planFor(source, c) }))
-      .filter((e) => e.plan !== null)
-      .map((e) => ({
-        ...e,
-        // what actually moves: mapped slots whose SOURCE side holds a value
-        receives: Object.keys(e.plan).filter((tf) =>
-          storedFields(source).includes(e.plan[tf])),
-      }));
-  }, [cards, source, presence]);
+
+  const chooseSource = async (key) => {
+    setSourceKey(key);
+    setPicked(new Set());
+    setPreview(null);
+    setErr("");
+    const chosen = sources.find((c) => keyOf(c.scope, c.name) === key);
+    if (!chosen) return;
+    setBusy(true);
+    try {
+      const out = await send("POST", "/connections/copy-secrets", {
+        dry_run: true,
+        source: { scope: chosen.scope, name: chosen.name },
+        targets: cards
+          .filter((c) => !(c.scope === chosen.scope && c.name === chosen.name))
+          .map((c) => ({ scope: c.scope, name: c.name })),
+      });
+      setPreview(out.targets || []);
+    } catch (e) {
+      setErr(String(e.message || e).replace(/^\d+ /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const eligible = (preview || []).filter(
+    (r) => r.eligible && r.receives.length);
+  const chosen = eligible.filter((r) => picked.has(keyOf(r.scope, r.name)));
 
   const toggle = (k) => setPicked((prev) => {
     const next = new Set(prev);
@@ -101,8 +104,6 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
     return next;
   });
 
-  const chosen = eligible.filter((e) => picked.has(keyOf(e.card.scope, e.card.name)));
-
   const doCopy = async () => {
     if (!source || !chosen.length || busy) return;
     setBusy(true);
@@ -110,7 +111,7 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
     try {
       const out = await send("POST", "/connections/copy-secrets", {
         source: { scope: source.scope, name: source.name },
-        targets: chosen.map((e) => ({ scope: e.card.scope, name: e.card.name })),
+        targets: chosen.map((r) => ({ scope: r.scope, name: r.name })),
       });
       setResults(out.results || []);
     } catch (e) {
@@ -127,13 +128,15 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
         <ul className="mb-4 space-y-1 text-sm">
           {results.map((r) => (
             <li key={keyOf(r.scope, r.name)} className="flex flex-wrap gap-x-2">
-              <span className="font-mono font-medium">{r.name}</span>
+              <span className="font-mono font-medium">
+                {r.scope === "pmo" ? "board " : "repo "}{r.name}
+              </span>
               <span className="text-neutral-600 dark:text-neutral-300">
                 {r.copied.length
-                  ? `✓ ${r.copied.map((f) => FIELD_LABEL[f] || f).join(", ")}`
+                  ? `✓ ${r.copied.map(label).join(", ")}`
                   : "nothing copied"}
                 {r.skipped.length
-                  ? ` · ${r.skipped.map((f) => FIELD_LABEL[f] || f).join(", ")} not stored on the source`
+                  ? ` · ${r.skipped.map(label).join(", ")} not stored on the source`
                   : ""}
               </span>
             </li>
@@ -153,23 +156,26 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
       </h4>
       <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
         Sends the source card&apos;s stored tokens to the cards you pick, each
-        into its own slot. Receiving cards&apos; existing values are replaced.
-        Applies immediately — not part of the draft Save.
+        into its own slot — same forge, same host only. Receiving cards&apos;
+        existing values are replaced. Applies immediately — not part of the
+        draft Save.
       </p>
 
-      <Field label="Copy from" hint="Only saved cards with stored tokens can send.">
+      <Field label="Copy from"
+        hint="Only saved cards with stored tokens can send.">
         <Select value={sourceKey} aria-label="Token copy source"
-          onChange={(e) => { setSourceKey(e.target.value); setPicked(new Set()); }}>
+          disabled={busy}
+          onChange={(e) => chooseSource(e.target.value)}>
           <option value="">Choose a card…</option>
           {sources.map((c) => {
-            const stored = storedFields(c);
+            const stored = presence === null ? null : storedFields(c);
             return (
               <option key={keyOf(c.scope, c.name)} value={keyOf(c.scope, c.name)}
-                disabled={presence !== null && !stored.length}>
+                disabled={stored !== null && !stored.length}>
                 {c.name}
-                {presence === null ? ""
+                {stored === null ? ""
                   : stored.length
-                    ? ` — ${stored.map((f) => FIELD_LABEL[f]).join(", ")}`
+                    ? ` — ${stored.map(label).join(", ")}`
                     : " — nothing stored"}
               </option>
             );
@@ -177,12 +183,11 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
         </Select>
       </Field>
 
-      {source && !eligible.length && (
+      {source && preview && !eligible.length && (
         <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
-          No other saved card can take this card&apos;s tokens
-          {source.scope === "repo"
-            ? ` (same-forge repositories and ${source.forge} issues boards only).`
-            : " (same-system PMO cards only)."}
+          No other saved card can take this card&apos;s tokens right now
+          (same forge and host only, and the source must hold the slot the
+          receiver needs).
         </p>
       )}
 
@@ -196,13 +201,13 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
               className="text-xs text-accent-700 underline-offset-2 hover:underline dark:text-accent-400"
               onClick={() => setPicked(chosen.length === eligible.length
                 ? new Set()
-                : new Set(eligible.map((e) => keyOf(e.card.scope, e.card.name))))}>
+                : new Set(eligible.map((r) => keyOf(r.scope, r.name))))}>
               {chosen.length === eligible.length ? "Deselect all" : "Select all"}
             </button>
           </div>
           <div className="divide-y divide-neutral-100 rounded-md border border-neutral-200 px-3 py-1 dark:divide-neutral-800 dark:border-neutral-800">
-            {eligible.map(({ card, receives }) => {
-              const k = keyOf(card.scope, card.name);
+            {eligible.map((r) => {
+              const k = keyOf(r.scope, r.name);
               const id = `token-copy-${encodeURIComponent(k)}`;
               return (
                 <div key={k} className="flex items-start gap-2.5 py-1.5">
@@ -211,14 +216,12 @@ export default function TokenCopyModal({ onClose, mode, repos, pmos }) {
                     onChange={() => toggle(k)} />
                   <label htmlFor={id} className="min-w-0 cursor-pointer">
                     <span className="block font-mono text-sm font-medium">
-                      {card.name}
+                      {r.name}
                     </span>
                     <span className="block text-xs text-neutral-500 dark:text-neutral-400">
-                      {card.scope === "pmo" && mode === "repo"
-                        ? `${card.system} board — gets the Access token as its API key`
-                        : receives.length
-                          ? `gets ${receives.map((f) => FIELD_LABEL[f]).join(", ")}`
-                          : "nothing to send yet"}
+                      {r.scope === "pmo" && source.scope === "repo"
+                        ? `issues board — gets the ${label("token")} as its ${label("api_key")}`
+                        : `gets ${r.receives.map(label).join(", ")}`}
                     </span>
                   </label>
                 </div>

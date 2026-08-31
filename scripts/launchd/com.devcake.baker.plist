@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   DevCake host baker — macOS LaunchAgent template.
-  Installed by ./up.sh via scripts/lib/baker_host.sh (placeholders replaced).
+  Installed by devcake up via scripts/lib/baker_host.sh (placeholders replaced).
   The baker stays a HOST process (sole docker-socket holder). Do not convert
   this into a container or grant any compose service the socket.
 

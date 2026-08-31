@@ -1,4 +1,4 @@
-"""``devcake up`` — absorb today's ``./up.sh`` bring-up (ADR-0038 Decision 1)."""
+"""``devcake up`` — the stack bring-up verb (ADR-0038 Decision 1)."""
 
 from __future__ import annotations
 

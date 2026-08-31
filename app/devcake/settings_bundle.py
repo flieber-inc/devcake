@@ -78,7 +78,7 @@ SETUP_ENV_VARS: list[tuple[str, bool]] = [
     ("OO_UI_URL", False),
     ("DOCKER_GID", True),
     ("DEVCAKE_TAG", True),
-    # ADR-0025: host-absolute workspace base — up.sh re-derives it on the
+    # ADR-0025: host-absolute workspace base — devcake up re-derives it on the
     # target host, so an exported value is verification-only like DOCKER_GID
     ("DEVCAKE_WS_HOST", True),
 ]
@@ -575,7 +575,7 @@ def generate_env_file(setup_env: dict) -> str:
     hints = {
         "DOCKER_GID": "# HOST-SPECIFIC — verify: stat -c %g /var/run/docker.sock",
         "DEVCAKE_TAG": "# HOST-SPECIFIC — must match your docker buildx bake tag",
-        "DEVCAKE_WS_HOST": "# HOST-SPECIFIC — absolute path; ./up.sh re-derives it",
+        "DEVCAKE_WS_HOST": "# HOST-SPECIFIC — absolute path; devcake up re-derives it",
     }
     for name, host in SETUP_ENV_VARS:
         if host:

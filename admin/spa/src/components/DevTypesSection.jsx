@@ -303,8 +303,8 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
           </p>
           {healthInfo?.bake_status?.baker_alive === false && (
             <p className="mb-3 text-sm text-red-600 dark:text-red-400">
-              The host baker is not running. Restart with ./up.sh
-              (or ./up.sh --foreground-baker when the parent may reap detached
+              The host baker is not running. Restart with devcake up
+              (or devcake up --foreground-baker when the parent may reap detached
               children), then prune again.
             </p>
           )}

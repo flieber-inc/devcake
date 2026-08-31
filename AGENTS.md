@@ -175,20 +175,20 @@ docker buildx bake all && docker compose up -d
 
 # ADR-0025: dev-run.yaml + compose + .env (DEVCAKE_WS_HOST) also deploy in
 # lockstep. dagu/dags is a LIVE :ro bind, so a new DAG goes live at `git pull`
-# before ./up.sh — stop dagu first: docker compose stop dagu && ./up.sh --bake
+# before devcake up — stop dagu first: docker compose stop dagu && devcake up --bake
 ```
 
 Optional tag pin (bake and compose must match):
 
 ```bash
 export DEVCAKE_TAG=$(git rev-parse --short HEAD)
-./up.sh --bake all            # upserts pin into .env + bake + compose
-# or without up.sh:
+devcake up --bake all            # upserts pin into .env + bake + compose
+# or without devcake up:
 docker buildx bake all
 docker compose up -d          # needs export still set, or DEVCAKE_TAG in .env
 ```
 
-`./up.sh` resolves `DEVCAKE_TAG` once (process env > `.env` > `latest`),
+`devcake up` resolves `DEVCAKE_TAG` once (process env > `.env` > `latest`),
 exports it for bake + compose, and **upserts it into `.env`** so a later plain
 `docker compose up -d` stays lockstep. Compose passes the pin into the app
 container, and **dispatch derives the harness image tags from it**

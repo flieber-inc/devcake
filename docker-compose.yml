@@ -1,8 +1,8 @@
 # DevCake runtime stack.
 #
 # Images are built ONLY via Bake (docker-bake.hcl) — compose never builds:
-#   ./up.sh --bake                  # discover DOCKER_GID + bake CP+hello + baker
-#   ./up.sh                         # day-to-day restart (re-discovers DOCKER_GID)
+#   devcake up --bake                  # discover DOCKER_GID + bake CP+hello + baker
+#   devcake up                         # day-to-day restart (re-discovers DOCKER_GID)
 #   docker buildx bake all          # first install / full upgrade (manual)
 #   docker buildx bake              # app + admin only
 #   docker buildx bake images       # Dev harnesses + hello
@@ -51,9 +51,9 @@ services:
       # agent containers never see it (ADR-0025)
       - mirrors:/mirrors
       # ADR-0025: per-run workspace tree. Host bind (NOT a named volume —
-      # the DAG needs per-run subpaths); up.sh upserts the HOST-ABSOLUTE
+      # the DAG needs per-run subpaths); devcake up upserts the HOST-ABSOLUTE
       # path into .env, `:?` fails loud if it is missing
-      - ${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}:/workspaces
+      - ${DEVCAKE_WS_HOST:?run devcake up — it derives the workspace base}:/workspaces
       # test fixture only: tests/test_entrypoint_render.py exercises the Dev
       # entrypoint's renderers by path; the app never imports this at runtime
       - ./images/common:/srv/images/common:ro
@@ -82,9 +82,9 @@ services:
       - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
       # ADR-0025: dev-run.yaml expands $DEVCAKE_WS_HOST in its per-run
       # workspace bind sources — resolved on the DAEMON host, so the value
-      # must be host-absolute (up.sh derives it; `:?` fails loud, because an
+      # must be host-absolute (devcake up derives it; `:?` fails loud, because an
       # EMPTY expansion would silently bind-mount junk at the host root)
-      - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}
+      - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run devcake up — it derives the workspace base}
       # 2.13 compat (measured at the 2026-08-13 drill): the 2.12 wiki/
       # documents store defaults to <dags_dir>/wiki and crash-loops the
       # server against our deliberately-RO dags bind (docs/14 §5 — trusted

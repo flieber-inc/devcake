@@ -26,7 +26,7 @@ GUI is up:
 - `REDIS_PASSWORD`, `DAGU_PASSWORD`, `ADMIN_USER`/`ADMIN_PASSWORD` (strong; boot refuses empty/default)
 - `OO_ROOT_PASSWORD`, `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD` (the OO service account; needs a special char)
 - `GITEA_ADMIN_PASSWORD` (the internal fallback forge's admin)
-- Leave `DOCKER_GID` blank — filled by `./up.sh`
+- Leave `DOCKER_GID` blank — filled by `devcake up`
 
 There are **no** `LINEAR_API_KEY`, `GITHUB_TOKEN`, `DEVCAKE_TEAM_KEY`, … lines
 anymore — those are v3 and were removed at v4.
@@ -35,7 +35,7 @@ anymore — those are v3 and were removed at v4.
 
 ```bash
 docker volume rm devcake_devcake_data          # DESTRUCTIVE — the operator drill
-./up.sh --bake                                 # discovers DOCKER_GID, bakes, ups
+devcake up --bake                                 # discovers DOCKER_GID, bakes, ups
 # App boot creates the OO ingest user from OO_INGEST_* (fail-loud).
 # Optional: dashboard + alerts (docs/12 §5):
 #   python3 scripts/provision_oo.py

@@ -24,9 +24,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# ONE derivation, shared with up.sh (ADR-0034: the two bring-up paths used
+# ONE derivation, shared with devcake up (ADR-0034: the two bring-up paths used
 # to derive independently — a standing drift surface). CI policy stays here:
-# permissive fallbacks (gid 0, cwd workspaces) instead of up.sh's hard fails.
+# permissive fallbacks (gid 0, cwd workspaces) instead of devcake up's hard fails.
 # shellcheck source=lib/stack_env.sh
 source "$(dirname "$0")/lib/stack_env.sh"
 
@@ -101,7 +101,7 @@ export DEVCAKE_WS_HOST
 # The dir must exist app-writable BEFORE compose up: dockerd auto-creates an
 # absent bind source ROOT-owned, and the app's boot writability probe would
 # then fail health forever (ADR-0025 R8). chmod only on the synthetic-env
-# (CI) path — a developer's real base keeps up.sh's 0700 posture.
+# (CI) path — a developer's real base keeps devcake up's 0700 posture.
 mkdir -p "$DEVCAKE_WS_HOST"
 if [[ "$WRITE_ENV" == "1" ]]; then
   chmod 0777 "$DEVCAKE_WS_HOST"

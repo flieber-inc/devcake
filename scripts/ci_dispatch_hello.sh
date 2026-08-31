@@ -3,7 +3,7 @@
 # Preconditions: compose stack up and healthy (app + admin + redis + dagu + …);
 # hello image present as devcake/dev-hello:${DEVCAKE_TAG:-latest}; ADMIN_* set.
 # This script does not bake or compose-up — bring the stack with
-# scripts/ci_compose_for_dispatch.sh (or ./up.sh) first.
+# scripts/ci_compose_for_dispatch.sh (or devcake up) first.
 # Used by scripts/ci_suite.sh and .github/workflows/ci.yml.
 set -euo pipefail
 

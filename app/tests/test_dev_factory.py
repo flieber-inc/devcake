@@ -748,7 +748,7 @@ def _cli_dir() -> Path:
 
 
 def _bringup_text() -> str:
-    """Bring-up orchestration after CAKE-177: cli/devcake_cli (not up.sh)."""
+    """Bring-up orchestration after CAKE-177: cli/devcake_cli."""
     root = _cli_dir()
     parts = [
         (root / "up.py").read_text(),
@@ -758,25 +758,7 @@ def _bringup_text() -> str:
     return "\n".join(parts)
 
 
-def _up_sh_shim_text() -> str:
-    candidates = [
-        Path(__file__).resolve().parents[2] / "up.sh",
-        Path("/srv/up.sh"),
-    ]
-    path = next((p for p in candidates if p.is_file()), None)
-    assert path is not None, "up.sh missing — bind /srv/up.sh"
-    return path.read_text()
-
-
-def test_up_sh_is_thin_shim_to_devcake_up():
-    """ADR-0038 Decision 4: up.sh execs the CLI; no second bring-up body."""
-    text = _up_sh_shim_text()
-    assert "exec devcake up" in text
-    assert "docker buildx bake" not in text
-    assert "devcake_baker_wait_liveness" not in text
-
-
-def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
+def test_up_default_bake_is_control_plane_and_starts_the_baker():
     text = _bringup_text()
     assert '["app", "admin", "hello"]' in text or "app admin hello" in text
     # Host baker entry is the CLI verb (ADR-0038 Decision 5); deprecated
@@ -829,7 +811,7 @@ def test_baker_systemd_unit_restarts_on_failure():
     assert "StartLimit" in unit
 
 
-def test_up_sh_loud_degraded_gap_on_respawn_fallback():
+def test_up_loud_degraded_gap_on_respawn_fallback():
     """When native supervisors are unavailable, degraded path must shout."""
     text = _bringup_text()
     helper = _baker_host_sh_text()
@@ -943,7 +925,7 @@ def _run_baker_host_driver(tmp_path: Path, body: str) -> subprocess.CompletedPro
 
 
 def test_baker_host_systemd_helpers_are_defined():
-    """Supervision chokepoint lives in baker_host.sh (not duplicated in up.sh)."""
+    """Supervision chokepoint lives in baker_host.sh (never duplicated in the CLI)."""
     helper = _baker_host_sh_text()
     assert "devcake_baker_systemd_available()" in helper
     assert "devcake_baker_systemd_install()" in helper
@@ -2052,7 +2034,7 @@ def _patch_once_compose(monkeypatch, listed):
 
 
 def test_once_hello_only_images_are_virgin(tmp_path, monkeypatch):
-    """Hello is baked by every ./up.sh — it is not evidence of staffing."""
+    """Hello is baked by every `devcake up --bake` — not evidence of staffing."""
     _load_factory()
     watch = _patch_once_compose(
         monkeypatch,

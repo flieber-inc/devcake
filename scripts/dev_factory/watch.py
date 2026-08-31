@@ -1,4 +1,4 @@
-"""Host baker loop. Started by up.sh — not a compose service.
+"""Host baker loop. Started by devcake up — not a compose service.
 
 Reads the keep-set the app published into the /data volume, validates it
 independently, compiles + probes, writes receipts and a status file the
@@ -54,7 +54,7 @@ RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
 OUTBOX = "harness_outbox"
 PRUNE_REQUEST = "harness_prune_request.json"
-# Host redirect target (up.sh / systemd / launchd / respawn). Cap keeps idle
+# Host redirect target (devcake up / systemd / launchd / respawn). Cap keeps idle
 # noise from filling disk.
 WATCH_LOG_CAP_BYTES = 2 * 1024 * 1024  # 2 MiB
 # Exclusive lock + pidfile so any supervisor combo cannot double-run the baker.
@@ -256,7 +256,7 @@ def compose_append(rel: str, text: str) -> None:
 
 
 def probe_app_live() -> bool:
-    """Same check as up.sh _app_live — the existing health chokepoint."""
+    """Same check as devcake up _app_live — the existing health chokepoint."""
     try:
         proc = subprocess.run(
             ["docker", "compose", "exec", "-T", "app", "python", "-c",
@@ -470,7 +470,7 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     trace_id, root_id = "", ""
     t0 = time.time_ns()
     if claimed is None:
-        # Hello is baked by every ./up.sh — not evidence of staffing
+        # Hello is baked by every devcake up — not evidence of staffing
         # (matches core.reconcile virgin semantics).
         has_dev = any(
             str(ref).startswith("devcake/dev-")
@@ -593,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
                 })
                 ship_dying_words(rec)
                 print("dev_factory: app is not healthy — exiting "
-                      "(restart with ./up.sh)", flush=True)
+                      "(restart with devcake up)", flush=True)
                 return 1
             delay = min(unhealthy_backoff_s(down_streak), remaining)
             print(f"dev_factory: app /health/live failed "
@@ -634,7 +634,7 @@ def main(argv: list[str] | None = None) -> int:
             if kind == "mismatch":
                 detail = (
                     "the checkout has moved since the app was baked; "
-                    "run ./up.sh --bake")
+                    "run devcake up --bake")
             else:
                 detail = "this app was built without the bake wrapper"
             publish_status(work, {

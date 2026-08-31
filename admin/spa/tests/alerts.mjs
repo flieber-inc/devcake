@@ -1,5 +1,5 @@
 // Baker-dead must paint like a circuit breaker: critical, not dismissable,
-// and the body names ./up.sh. Independent expected values are those literals.
+// and the body names devcake up. Independent expected values are those literals.
 import assert from "node:assert/strict";
 import deriveAlerts from "../src/lib/alerts.js";
 
@@ -26,8 +26,8 @@ check("a dead baker is a critical non-dismissable alert", () => {
   assert.equal(hit.severity, "critical");
   assert.equal(hit.dismissable, undefined);
   assert.match(hit.title, /baker/i);
-  assert.match(hit.body, /\.\/up\.sh/);
-  assert.match(hit.body, /\.\/up\.sh --foreground-baker/);
+  assert.match(hit.body, /devcake up/);
+  assert.match(hit.body, /devcake up --foreground-baker/);
 });
 
 check("an alive baker does not warn", () => {
@@ -53,8 +53,8 @@ check("dead baker with error detail includes the launch-failure cause", () => {
   assert.equal(hit.severity, "critical");
   assert.match(hit.body, /host baker has not checked in/);
   assert.match(hit.body, /ModuleNotFoundError: No module named 'x'/);
-  assert.match(hit.body, /\.\/up\.sh/);
-  assert.match(hit.body, /\.\/up\.sh --foreground-baker/);
+  assert.match(hit.body, /devcake up/);
+  assert.match(hit.body, /devcake up --foreground-baker/);
   assert.equal(alerts.some((a) => a.id === "baker-error"), false);
 });
 
@@ -68,7 +68,7 @@ check("dead baker without error detail stays generic", () => {
   const hit = alerts.find((a) => a.id === "baker-dead");
   assert.ok(hit, "baker-dead alert missing");
   assert.match(hit.body, /host baker last checked in 41s ago/);
-  assert.match(hit.body, /\.\/up\.sh/);
+  assert.match(hit.body, /devcake up/);
   assert.doesNotMatch(hit.body, /host baker died at launch/);
   assert.doesNotMatch(hit.body, /ModuleNotFoundError/);
 });

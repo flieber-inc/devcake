@@ -39,7 +39,7 @@ fi
 # install the suite used to bake app-test:latest from the working tree while
 # the dispatch battery graded the LIVE, pinned stack — green then proved a
 # MIX of two code versions. DEVCAKE_TAG now rides from .env into the bake
-# and every docker run below (tag lockstep, like up.sh); and when the live
+# and every docker run below (tag lockstep, like devcake up); and when the live
 # app container is not running the freshly-baked image, the run is loudly
 # labeled so a mixed-version green can never read as tree evidence.
 # shellcheck disable=SC1091
@@ -59,7 +59,7 @@ mixed_version_banner() {
     echo "⚠️  MIXED-VERSION RUN: the live app container is NOT running the"
     echo "    local devcake/app:${DEVCAKE_TAG:-latest} image (stack predates"
     echo "    the last bake). Unit lanes grade the TREE; the dispatch and"
-    echo "    contract batteries grade the LIVE STACK. Redeploy (./up.sh)"
+    echo "    contract batteries grade the LIVE STACK. Redeploy (devcake up)"
     echo "    before reading this green as evidence for the tree."
   fi
 }
@@ -97,7 +97,6 @@ docker run --rm \
   -v "$(pwd)/admin/spa/src/lib/registry_fallback.json:/srv/admin-registry-fallback.json:ro" \
   -v "$(pwd)/admin/spa/src/pages/RunsPage.jsx:/srv/admin-runs-page.jsx:ro" \
   -v "$(pwd)/scripts:/srv/repo-scripts:ro" \
-  -v "$(pwd)/up.sh:/srv/up.sh:ro" \
   -v "$(pwd)/cli:/srv/cli:ro" \
   -v "$(pwd)/pyproject.toml:/srv/pyproject.toml:ro" \
   -w /srv \

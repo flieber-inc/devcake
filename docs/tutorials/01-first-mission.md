@@ -44,7 +44,7 @@ Fill in **bootstrap only** (schema v4 — see `.env.example`):
   `GITEA_ADMIN_PASSWORD` (empty/`change-me*` refuse boot; `ADMIN_PASSWORD`
   must be ≥ 12 characters; `DEVCAKE_ALLOW_INSECURE=1` waives both — local
   sandbox only).
-- Leave `DOCKER_GID` blank — `./up.sh` discovers it from
+- Leave `DOCKER_GID` blank — `devcake up` discovers it from
   `/var/run/docker.sock` (or set manually with `stat -c %g /var/run/docker.sock`).
 
 **Do not** put Linear/forge/model tokens in `.env` for normal ops — Config page
@@ -53,8 +53,8 @@ stores them under `/data/secrets/` (ADR-0011).
 > ⚠️ Don't put inline comments after values in `.env`.
 
 ```bash
-./up.sh --bake            # DOCKER_GID + control plane + hello + host baker
-# Day-to-day (images already baked):  ./up.sh
+devcake up --bake            # DOCKER_GID + control plane + hello + host baker
+# Day-to-day (images already baked):  devcake up
 ```
 
 Open **http://localhost:8080** (loopback; admin user/password from `.env`).

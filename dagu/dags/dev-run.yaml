@@ -44,7 +44,7 @@ preconditions:
   # env in bind strings but NOT in precondition `condition:` fields, so the
   # literal never matched and every dev-run sat `dispatched` until the
   # startup grace killed it (measured live, SYS-HELLO-5). The empty/relative
-  # WS_HOST edge stays guarded by up.sh's absolute-path assert + the
+  # WS_HOST edge stays guarded by devcake up's absolute-path assert + the
   # in-container sentinel (exit 20); the daemon-autocreate residue remains
   # tracked debt (docs/14 §11).
 

@@ -1,4 +1,4 @@
-"""CAKE-177: ``devcake up/down/status`` public seams + ``up.sh`` shim."""
+"""CAKE-177: ``devcake up/down/status`` public seams (up.sh removed — cutover pin)."""
 
 from __future__ import annotations
 
@@ -141,13 +141,8 @@ def test_status_json_fields(monkeypatch, tmp_path, capsys):
     assert payload["compose_ok"] is True
 
 
-def test_up_sh_is_thin_shim():
+def test_up_sh_is_gone():
+    """ADR-0038 Decision 4 cutover: the shim is removed — `devcake up` is
+    the only bring-up entry. A resurrected up.sh would be a second body."""
     path = next((p for p in _UP_SH_CANDIDATES if p.is_file()), None)
-    assert path is not None, "up.sh missing — bind /srv/up.sh in pytest runner"
-    text = path.read_text(encoding="utf-8")
-    assert "devcake up" in text
-    assert "exec" in text
-    # Must not retain bake/compose orchestration body.
-    assert "docker buildx bake" not in text
-    assert "devcake_baker_wait_liveness" not in text
-    assert "upsert_env_var" not in text
+    assert path is None, f"up.sh must not exist (found {path})"

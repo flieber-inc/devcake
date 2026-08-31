@@ -1,4 +1,4 @@
-"""OpenObserve password-policy gate used by up.sh (CAKE-131).
+"""OpenObserve password-policy gate used by devcake up (CAKE-131).
 
 Public seam: scripts/lib/oo_password.sh — `require_oo_password VAR value`
 mirrors OpenObserve v0.91.5 src/config/src/utils/password.rs.

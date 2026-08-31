@@ -274,7 +274,7 @@ export default function deriveAlerts(health) {
     });
   }
 
-  // Host baker is a process started by ./up.sh, not a container. If its
+  // Host baker is a process started by devcake up, not a container. If its
   // heartbeat on /data is missing or stale, pins will not compile — same
   // honesty class as a tripped breaker: critical, not dismissable.
   const bake = health.bake_status || {};
@@ -290,8 +290,8 @@ export default function deriveAlerts(health) {
       body:
         (bake.baker_detail ? `${bake.baker_detail}.` : "") +
         cause +
-        " Harness images will not compile. Restart with ./up.sh " +
-        "(or ./up.sh --foreground-baker when the parent may reap detached " +
+        " Harness images will not compile. Restart with devcake up " +
+        "(or devcake up --foreground-baker when the parent may reap detached " +
         "children). The baker is a host process started with the app, not a " +
         "container.",
     });

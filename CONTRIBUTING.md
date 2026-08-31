@@ -18,7 +18,7 @@ DevCake images are **Bake-only**. Compose never builds them.
 
 | Do | Do not |
 |---|---|
-| `./up.sh --bake` (preferred first-time / lockstep path) | `docker compose build` |
+| `devcake up --bake` (preferred first-time / lockstep path) | `docker compose build` |
 | `docker buildx bake …` / `bake all` / `bake images` / `bake ci` | `docker compose up --build` for `devcake/*` images |
 | Rebake after edits under `app/`, `admin/`, or `images/` | Expect compose `build:` keys for DevCake images |
 
@@ -32,7 +32,7 @@ cp .env.example .env
 # Strong ADMIN / REDIS / DAGU / OO / GITEA passwords only.
 # Operator PMO/forge/model secrets go in the admin UI after up — not in .env.
 
-./up.sh --bake
+devcake up --bake
 # Admin UI: http://localhost:8080  (basic auth from .env)
 ```
 

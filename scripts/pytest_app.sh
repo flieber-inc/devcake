@@ -78,7 +78,6 @@ docker run --rm \
   -v "$(pwd)/admin/spa/src/lib/registry_fallback.json:/srv/admin-registry-fallback.json:ro" \
   -v "$(pwd)/admin/spa/src/pages/RunsPage.jsx:/srv/admin-runs-page.jsx:ro" \
   -v "$(pwd)/scripts:/srv/repo-scripts:ro" \
-  -v "$(pwd)/up.sh:/srv/up.sh:ro" \
   -v "$(pwd)/cli:/srv/cli:ro" \
   -v "$(pwd)/pyproject.toml:/srv/pyproject.toml:ro" \
   -w /srv \

@@ -304,3 +304,191 @@ def test_gitea_apply_no_reviewer_skips_required_approvals():
     assert result.outcome == "applied"
     assert result.shape.required_approving_review_count == 0
     assert posted.get("required_approvals", 0) == 0
+
+
+def test_github_apply_preserves_code_owners_and_restrictions():
+    """PUT must merge DevCake constraints into the existing classic rule —
+    never wipe require_code_owner_reviews or push restrictions (review #1)."""
+    from devcake.adapters.github.adapter import GitHubForge
+
+    existing = {
+        "url": "https://api.github.com/repos/o/r/branches/main/protection",
+        "required_status_checks": {
+            "strict": True,
+            "contexts": ["lint"],
+            "checks": [{"context": "lint", "app_id": -1}],
+        },
+        "enforce_admins": {"enabled": True},
+        "required_pull_request_reviews": {
+            "dismiss_stale_reviews": True,
+            "require_code_owner_reviews": True,
+            "required_approving_review_count": 1,
+            "require_last_push_approval": False,
+        },
+        "restrictions": {
+            "users": [{"login": "release-bot"}],
+            "teams": [{"slug": "releasers"}],
+            "apps": [],
+        },
+        "required_linear_history": {"enabled": True},
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+        "required_conversation_resolution": {"enabled": True},
+        "lock_branch": {"enabled": False},
+        "allow_fork_syncing": {"enabled": False},
+    }
+    put_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/branches/main"):
+            return httpx.Response(200, json={
+                "protected": True,
+                "commit": {"sha": "deadbeef"},
+            })
+        if request.method == "GET" and path.endswith("/status"):
+            return httpx.Response(200, json={
+                "statuses": [{"context": "ci", "state": "success"}],
+            })
+        if request.method == "GET" and "check-runs" in path:
+            return httpx.Response(200, json={"check_runs": []})
+        if request.method == "GET" and path.endswith("/protection"):
+            return httpx.Response(200, json=existing)
+        if request.method == "PUT" and path.endswith("/protection"):
+            body = json.loads(request.content.decode())
+            put_bodies.append(body)
+            return httpx.Response(200, json=existing)
+        return httpx.Response(500, text=f"unexpected {request.method} {path}")
+
+    forge = GitHubForge(
+        "https://github.com/o/r", "gh-write", "gh-reviewer",
+        transport=httpx.MockTransport(handler),
+    )
+    result = run_coro(forge.apply_default_branch_protection("main"))
+    assert result.outcome == "applied"
+    assert put_bodies, "expected a protection PUT"
+    body = put_bodies[0]
+    reviews = body["required_pull_request_reviews"]
+    assert reviews["require_code_owner_reviews"] is True
+    assert reviews["dismiss_stale_reviews"] is True
+    assert reviews["required_approving_review_count"] >= 1
+    assert body["restrictions"] is not None
+    # PUT form uses login / slug lists (GET returns objects).
+    assert body["restrictions"]["users"] == ["release-bot"]
+    assert body["restrictions"]["teams"] == ["releasers"]
+    assert body.get("required_linear_history") is True
+    assert body.get("required_conversation_resolution") is True
+    contexts = (body.get("required_status_checks") or {}).get("contexts") or []
+    assert "ci" in contexts and "lint" in contexts
+    assert body["allow_force_pushes"] is False
+    assert body["allow_deletions"] is False
+
+
+def test_gitlab_apply_restores_protection_when_recreate_fails():
+    """DELETE-then-POST must not leave the branch unprotected if POST fails
+    (review #2) — capture prior rule and restore before raising."""
+    from urllib.parse import unquote
+
+    from devcake.adapters.gitlab.adapter import GitLabForge
+
+    prior = {
+        "name": "main",
+        "push_access_levels": [{"access_level": 0}],
+        "merge_access_levels": [{"access_level": 40}],
+        "allow_force_push": False,
+    }
+    state = {"deleted": False, "restored": None, "posts": 0}
+    proj = {
+        "approvals_before_merge": 0,
+        "only_allow_merge_if_pipeline_succeeds": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = unquote(request.url.path)
+        method = request.method
+        if method == "GET" and path.endswith("/repository/branches/main"):
+            return httpx.Response(200, json={"commit": {"id": "abc"}})
+        if method == "GET" and "/repository/commits/" in path and path.endswith(
+                "/statuses"):
+            return httpx.Response(200, json=[{"name": "ci"}])
+        if method == "GET" and path.endswith("/protected_branches/main"):
+            if state["deleted"] and state["restored"] is None:
+                return httpx.Response(404, json={"message": "404"})
+            return httpx.Response(200, json=state["restored"] or prior)
+        if method == "GET" and path.rstrip("/").endswith("/projects/g/r"):
+            return httpx.Response(200, json=proj)
+        if method == "DELETE" and path.endswith("/protected_branches/main"):
+            state["deleted"] = True
+            return httpx.Response(204)
+        if method == "POST" and path.endswith("/protected_branches"):
+            state["posts"] += 1
+            if state["posts"] == 1:
+                # first recreate fails after DELETE
+                return httpx.Response(500, json={"message": "boom"})
+            # restore POST
+            body = json.loads(request.content.decode())
+            state["restored"] = {
+                **prior, **body, "name": body.get("name", "main")}
+            state["deleted"] = False
+            return httpx.Response(201, json=state["restored"])
+        if method == "PUT" and path.rstrip("/").endswith("/projects/g/r"):
+            return httpx.Response(200, json=proj)
+        return httpx.Response(500, text=f"unexpected {method} {path}")
+
+    forge = GitLabForge(
+        "https://gitlab.example/g/r", "gl-write", "gl-reviewer",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ForgeError):
+        run_coro(forge.apply_default_branch_protection("main"))
+    assert state["restored"] is not None, "expected restore of prior protection"
+    assert state["deleted"] is False
+    assert state["restored"].get("name") == "main"
+    assert state["restored"].get("allow_force_push") is False
+
+
+def test_gitea_apply_empty_enable_status_check_does_not_invent_star():
+    """enable_status_check with empty contexts must not invent '*' (review #3);
+    write must emit exactly the discovered contexts."""
+    from devcake.adapters.gitea.adapter import GiteaForge
+
+    existing = {
+        "branch_name": "main",
+        "enable_push": False,
+        "enable_force_push": False,
+        "enable_status_check": True,
+        "status_check_contexts": [],
+        "required_approvals": 0,
+    }
+    writes: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/branches/main"):
+            return httpx.Response(200, json={"commit": {"id": "abc"}})
+        if request.method == "GET" and "/statuses/" in path:
+            return httpx.Response(200, json=[{"context": "ci"}])
+        if request.method == "GET" and path.endswith("/branch_protections"):
+            return httpx.Response(200, json=[existing])
+        if request.method == "GET" and path.endswith("/branch_protections/main"):
+            return httpx.Response(200, json=existing)
+        if request.method in ("POST", "PATCH") and "branch_protections" in path:
+            body = json.loads(request.content.decode())
+            writes.append(body)
+            # keep rule updated for subsequent reads
+            existing.update({k: v for k, v in body.items()})
+            existing["branch_name"] = "main"
+            return httpx.Response(200, json=existing)
+        return httpx.Response(500, text=f"unexpected {request.method} {path}")
+
+    forge = GiteaForge(
+        "https://git.example/o/r", "write-tok",
+        transport=httpx.MockTransport(handler),
+    )
+    result = run_coro(forge.apply_default_branch_protection("main"))
+    assert result.outcome == "applied"
+    assert writes, "expected a protection write"
+    contexts = writes[0].get("status_check_contexts")
+    assert contexts == ["ci"]
+    assert "*" not in contexts
+    assert "*pipeline*" not in (result.shape.required_status_checks or [])

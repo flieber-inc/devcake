@@ -253,49 +253,96 @@ class GitLabForge:
                 return None
             return None
         approvals = 0
-        pipeline_checks: list[str] = []
+        pipeline_on = False
         try:
             proj = await self._req("GET", "")
             approvals = int(proj.get("approvals_before_merge") or 0)
-            if proj.get("only_allow_merge_if_pipeline_succeeds"):
-                # preserve non-empty discovered names if we can; else marker
-                pipeline_checks = ["*pipeline*"]
+            pipeline_on = bool(
+                proj.get("only_allow_merge_if_pipeline_succeeds"))
         except ForgeError:
             pass
         return ProtectionShape(
             require_pull_request=True,
             allow_force_push=bool(pb.get("allow_force_push")),
             allow_deletions=False,
-            required_status_checks=pipeline_checks,
+            # Free/CE has no per-context required-check list — never invent
+            # a sentinel name; use the unscoped flag for as-strict compare.
+            required_status_checks=[],
             required_approving_review_count=approvals,
+            require_status_checks_unscoped=pipeline_on,
         )
 
     async def _write_protection_shape(
             self, branch: str, shape: ProtectionShape) -> None:
-        # Idempotent protect: drop existing rule then recreate (GitLab has no
-        # full PATCH for access levels on Free).
+        """Protect the branch without leaving it unprotected on failure.
+
+        GitLab Free has no full PATCH for access levels, so access-level
+        changes still delete+recreate. Capture the prior rule first and
+        restore it if POST (or the following project PUT) fails after DELETE.
+        """
         qbranch = quote(branch, safe="")
+        prior: dict[str, Any] | None = None
         try:
-            await self._req("DELETE", f"/protected_branches/{qbranch}")
+            prior = await self._req("GET", f"/protected_branches/{qbranch}")
         except ForgeError as e:
-            if e.status not in (404,):
+            if e.status != 404:
                 raise
-        await self._req(
-            "POST", "/protected_branches",
-            json={
-                "name": branch,
-                "push_access_level": 0,       # No one — changes via MR only
-                "merge_access_level": 40,     # Maintainer
-                "allow_force_push": bool(shape.allow_force_push),
-            })
-        # Project-level merge gates (approvals + pipeline) — best-effort on
-        # Free/CE; 403 remaps via run_apply.
-        proj_body: dict[str, Any] = {
-            "approvals_before_merge": int(shape.required_approving_review_count),
-            "only_allow_merge_if_pipeline_succeeds": bool(
-                shape.required_status_checks),
+            prior = None
+
+        post_body = {
+            "name": branch,
+            "push_access_level": 0,       # No one — changes via MR only
+            "merge_access_level": 40,     # Maintainer
+            "allow_force_push": bool(shape.allow_force_push),
         }
-        await self._req("PUT", "", json=proj_body)
+        proj_body: dict[str, Any] = {
+            "approvals_before_merge": int(
+                shape.required_approving_review_count),
+            "only_allow_merge_if_pipeline_succeeds": bool(
+                shape.required_status_checks
+                or shape.require_status_checks_unscoped),
+        }
+
+        deleted = False
+        if prior is not None:
+            await self._req("DELETE", f"/protected_branches/{qbranch}")
+            deleted = True
+
+        try:
+            await self._req("POST", "/protected_branches", json=post_body)
+            # Project-level merge gates (approvals + pipeline) — Free/CE;
+            # 403 remaps via run_apply.
+            await self._req("PUT", "", json=proj_body)
+        except ForgeError:
+            if deleted and prior is not None:
+                await self._restore_protected_branch(prior)
+            raise
+
+    async def _restore_protected_branch(self, prior: dict[str, Any]) -> None:
+        """Best-effort recreate of a captured protected-branch rule."""
+        name = prior.get("name") or prior.get("name_regex")
+        if not name:
+            return
+        push_levels = prior.get("push_access_levels") or []
+        merge_levels = prior.get("merge_access_levels") or []
+        push = 0
+        merge = 40
+        if push_levels and isinstance(push_levels[0], dict):
+            push = int(push_levels[0].get("access_level", 0))
+        if merge_levels and isinstance(merge_levels[0], dict):
+            merge = int(merge_levels[0].get("access_level", 40))
+        body = {
+            "name": name,
+            "push_access_level": push,
+            "merge_access_level": merge,
+            "allow_force_push": bool(prior.get("allow_force_push")),
+        }
+        try:
+            await self._req("POST", "/protected_branches", json=body)
+        except ForgeError as e:
+            log.error(
+                "gitlab: failed to restore protected branch %s after "
+                "apply failure: %s", name, e)
 
     async def apply_default_branch_protection(
             self, branch: str = "main") -> ApplyProtectionResult:

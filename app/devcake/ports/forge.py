@@ -76,6 +76,10 @@ class BranchProtection(BaseModel):
     requires_reviews: Optional[bool] = None
 
 
+# Never invent or persist these as required-check context names (CAKE-181).
+_PROTECTION_CHECK_SENTINELS = frozenset({"*", "*pipeline*"})
+
+
 class ProtectionShape(BaseModel):
     """Desired or observed branch-protection shape for apply + no-weaken
     compare (CAKE-181). Richer than ``BranchProtection`` (health/Overview
@@ -86,6 +90,10 @@ class ProtectionShape(BaseModel):
     allow_deletions: bool = False
     required_status_checks: list[str] = Field(default_factory=list)
     required_approving_review_count: int = 0
+    # True when the forge already requires *some* CI gate without named
+    # contexts (e.g. GitLab Free ``only_allow_merge_if_pipeline_succeeds``).
+    # Used for as-strict compare only — never serialized as a fake context.
+    require_status_checks_unscoped: bool = False
 
 
 class ApplyProtectionResult(BaseModel):
@@ -102,18 +110,23 @@ def distinct_reviewer_configured(
     return bool(rev) and rev != write_token
 
 
+def real_status_checks(names: list[str] | None) -> list[str]:
+    """Drop empty / sentinel context names — never invent CI check ids."""
+    return sorted({c for c in (names or [])
+                   if c and c not in _PROTECTION_CHECK_SENTINELS})
+
+
 def derive_protection_shape(
         *, discovered_status_checks: list[str],
         has_distinct_reviewer: bool) -> ProtectionShape:
     """Target-repo-only desired shape: PR required, no force-push/delete,
     discovered check contexts (empty when no CI), one approval only when a
     distinct reviewer identity is configured."""
-    checks = sorted({c for c in discovered_status_checks if c})
     return ProtectionShape(
         require_pull_request=True,
         allow_force_push=False,
         allow_deletions=False,
-        required_status_checks=checks,
+        required_status_checks=real_status_checks(discovered_status_checks),
         required_approving_review_count=1 if has_distinct_reviewer else 0,
     )
 
@@ -132,6 +145,14 @@ def is_as_strict_as(
         return False
     if current.required_approving_review_count < desired.required_approving_review_count:
         return False
+    if desired.require_status_checks_unscoped and not (
+            current.require_status_checks_unscoped
+            or current.required_status_checks):
+        return False
+    # Unscoped CI gate (GitLab Free pipeline-succeeds) already requires CI;
+    # named contexts cannot be stricter on that forge.
+    if current.require_status_checks_unscoped:
+        return True
     have = set(current.required_status_checks)
     return all(c in have for c in desired.required_status_checks)
 
@@ -149,12 +170,15 @@ def merge_strictest(
             current.allow_force_push and desired.allow_force_push),
         allow_deletions=(
             current.allow_deletions and desired.allow_deletions),
-        required_status_checks=sorted(
-            set(current.required_status_checks)
-            | set(desired.required_status_checks)),
+        required_status_checks=real_status_checks(
+            list(current.required_status_checks)
+            + list(desired.required_status_checks)),
         required_approving_review_count=max(
             current.required_approving_review_count,
             desired.required_approving_review_count),
+        require_status_checks_unscoped=(
+            current.require_status_checks_unscoped
+            or desired.require_status_checks_unscoped),
     )
 
 

@@ -300,37 +300,178 @@ class GitHubForge:
 
     async def _write_protection_shape(
             self, branch: str, shape: ProtectionShape) -> None:
-        reviews = None
-        if shape.required_approving_review_count > 0:
+        """PUT classic protection merged into any existing rule.
+
+        GitHub's Update branch protection API **replaces** the rule. Reading
+        first and preserving unmodeled / stricter fields (code owners,
+        restrictions, linear history, conversation resolution, dismissal
+        flags, …) is required so apply never weakens what the operator
+        already configured.
+        """
+        existing: dict[str, Any] | None = None
+        try:
+            existing = await self._req("GET", f"/branches/{branch}/protection")
+        except ForgeError as e:
+            if e.status not in (404, 403):
+                raise
+            existing = None
+
+        body = self._classic_protection_put_body(existing, shape)
+        await self._req("PUT", f"/branches/{branch}/protection", json=body)
+
+    @staticmethod
+    def _enabled_flag(obj: Any, default: bool = False) -> bool:
+        if isinstance(obj, dict):
+            return bool(obj.get("enabled", default))
+        if isinstance(obj, bool):
+            return obj
+        return default
+
+    @classmethod
+    def _classic_protection_put_body(
+            cls, existing: dict[str, Any] | None,
+            shape: ProtectionShape) -> dict[str, Any]:
+        """Build a PUT payload: start from ``existing`` (when present), then
+        overlay DevCake's stricter constraints. Never invent
+        ``require_code_owner_reviews=false`` or ``restrictions=null`` unless
+        the current rule already has those disabled / absent."""
+        ex = existing or {}
+
+        # --- reviews -------------------------------------------------------
+        ex_reviews = ex.get("required_pull_request_reviews") or {}
+        if not isinstance(ex_reviews, dict):
+            ex_reviews = {}
+        review_count = max(
+            int(ex_reviews.get("required_approving_review_count") or 0),
+            int(shape.required_approving_review_count),
+        )
+        code_owners = bool(ex_reviews.get("require_code_owner_reviews"))
+        dismiss_stale = bool(ex_reviews.get("dismiss_stale_reviews"))
+        reviews: dict[str, Any] | None
+        if (shape.require_pull_request or ex_reviews
+                or review_count > 0 or code_owners):
             reviews = {
-                "required_approving_review_count":
-                    int(shape.required_approving_review_count),
-                "dismiss_stale_reviews": False,
-                "require_code_owner_reviews": False,
+                "required_approving_review_count": review_count,
+                "dismiss_stale_reviews": dismiss_stale,
+                "require_code_owner_reviews": code_owners,
             }
-        status_checks = None
-        if shape.required_status_checks:
-            status_checks = {
+            if "require_last_push_approval" in ex_reviews:
+                reviews["require_last_push_approval"] = bool(
+                    ex_reviews.get("require_last_push_approval"))
+            for key in ("dismissal_restrictions",
+                        "bypass_pull_request_allowances"):
+                if key in ex_reviews and ex_reviews[key] is not None:
+                    reviews[key] = cls._actor_restrictions_for_put(
+                        ex_reviews[key])
+        else:
+            reviews = None
+
+        # --- status checks -------------------------------------------------
+        ex_checks = ex.get("required_status_checks") or {}
+        if not isinstance(ex_checks, dict):
+            ex_checks = {}
+        contexts: list[str] = []
+        for c in ex_checks.get("contexts") or []:
+            if c:
+                contexts.append(str(c))
+        for c in ex_checks.get("checks") or []:
+            if isinstance(c, dict) and c.get("context"):
+                contexts.append(str(c["context"]))
+        contexts = sorted(
+            set(contexts) | set(shape.required_status_checks or []))
+        if contexts:
+            status_checks: dict[str, Any] | None = {
                 "strict": True,
-                "contexts": list(shape.required_status_checks),
+                "contexts": contexts,
             }
-        body = {
+        elif ex_checks:
+            status_checks = {
+                "strict": bool(ex_checks.get("strict", True)),
+                "contexts": [],
+            }
+        else:
+            status_checks = None
+
+        # --- restrictions (null disables — only null when already absent) -
+        restrictions = None
+        if ex.get("restrictions") is not None:
+            restrictions = cls._actor_restrictions_for_put(
+                ex.get("restrictions"))
+
+        force = bool(shape.allow_force_push)
+        deletions = bool(shape.allow_deletions)
+        if existing is not None:
+            force = force and cls._enabled_flag(
+                ex.get("allow_force_pushes"), False)
+            deletions = deletions and cls._enabled_flag(
+                ex.get("allow_deletions"), False)
+
+        body: dict[str, Any] = {
             "required_status_checks": status_checks,
             "enforce_admins": True,
             "required_pull_request_reviews": reviews,
-            "restrictions": None,
-            "allow_force_pushes": bool(shape.allow_force_push),
-            "allow_deletions": bool(shape.allow_deletions),
+            "restrictions": restrictions,
+            "allow_force_pushes": force,
+            "allow_deletions": deletions,
         }
-        # GitHub requires required_pull_request_reviews object (or null) when
-        # require_pr; null disables reviews but branch stays protected.
-        if shape.require_pull_request and reviews is None:
-            body["required_pull_request_reviews"] = {
-                "required_approving_review_count": 0,
-                "dismiss_stale_reviews": False,
-                "require_code_owner_reviews": False,
-            }
-        await self._req("PUT", f"/branches/{branch}/protection", json=body)
+
+        # Preserve unmodeled boolean gates from the existing rule.
+        for field in (
+            "required_linear_history",
+            "required_conversation_resolution",
+            "lock_branch",
+            "allow_fork_syncing",
+            "block_creations",
+        ):
+            if field in ex:
+                body[field] = cls._enabled_flag(ex.get(field), False)
+
+        return body
+
+    @staticmethod
+    def _actor_restrictions_for_put(obj: Any) -> dict[str, Any]:
+        """Normalize GET restrictions / allowlists into PUT actor lists
+        (usernames, team slugs, app ids)."""
+        if not isinstance(obj, dict):
+            return {"users": [], "teams": [], "apps": []}
+
+        def _users(items: list) -> list:
+            out = []
+            for u in items or []:
+                if isinstance(u, dict):
+                    login = u.get("login")
+                    if login:
+                        out.append(login)
+                elif u:
+                    out.append(u)
+            return out
+
+        def _teams(items: list) -> list:
+            out = []
+            for t in items or []:
+                if isinstance(t, dict):
+                    slug = t.get("slug")
+                    if slug:
+                        out.append(slug)
+                elif t:
+                    out.append(t)
+            return out
+
+        def _apps(items: list) -> list:
+            out = []
+            for a in items or []:
+                if isinstance(a, dict):
+                    if a.get("id") is not None:
+                        out.append(a["id"])
+                elif a is not None:
+                    out.append(a)
+            return out
+
+        return {
+            "users": _users(obj.get("users") or []),
+            "teams": _teams(obj.get("teams") or []),
+            "apps": _apps(obj.get("apps") or []),
+        }
 
     async def apply_default_branch_protection(
             self, branch: str = "main") -> ApplyProtectionResult:

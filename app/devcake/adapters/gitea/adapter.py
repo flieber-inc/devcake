@@ -293,27 +293,32 @@ class GiteaForge:
                 return None
         if not rule:
             return None
-        checks = list(rule.get("status_check_contexts") or [])
-        if rule.get("enable_status_check") and not checks:
-            checks = ["*"]
+        # Never invent a "*" context when enable_status_check is on with an
+        # empty list — that string is not a real check and must not be written
+        # back. Empty contexts + discovered names → apply writes the names.
+        from ...ports.forge import real_status_checks
+        checks = real_status_checks(
+            list(rule.get("status_check_contexts") or []))
         return ProtectionShape(
             require_pull_request=not bool(rule.get("enable_push")),
             allow_force_push=bool(rule.get("enable_force_push")),
             allow_deletions=False,  # protected branch cannot be deleted
-            required_status_checks=sorted({c for c in checks if c}),
+            required_status_checks=checks,
             required_approving_review_count=int(
                 rule.get("required_approvals") or 0),
         )
 
     async def _write_protection_shape(
             self, branch: str, shape: ProtectionShape) -> None:
+        from ...ports.forge import real_status_checks
+        contexts = real_status_checks(list(shape.required_status_checks))
         body = {
             "branch_name": branch,
             "enable_push": not shape.require_pull_request,
             "enable_force_push": bool(shape.allow_force_push),
             "required_approvals": int(shape.required_approving_review_count),
-            "enable_status_check": bool(shape.required_status_checks),
-            "status_check_contexts": list(shape.required_status_checks),
+            "enable_status_check": bool(contexts),
+            "status_check_contexts": contexts,
         }
         existing = None
         try:

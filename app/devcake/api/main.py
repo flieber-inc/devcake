@@ -757,6 +757,20 @@ async def test_forge(name: str):
                                                 forge_runtime=s.forge_runtime)
 
 
+@app.post("/api/v1/connections/forge/apply-protection")
+async def apply_forge_protection_bulk():
+    s = svc()
+    return await connections_service.apply_forge_protection_bulk(
+        config=s.config, forge_runtime=s.forge_runtime)
+
+
+@app.post("/api/v1/connections/forge/{name}/apply-protection")
+async def apply_forge_protection(name: str):
+    s = svc()
+    return await connections_service.apply_forge_protection(
+        name, config=s.config, forge_runtime=s.forge_runtime)
+
+
 @app.post("/api/v1/connections/skill/{name}/test")
 async def test_skill_source(name: str):
     s = svc()

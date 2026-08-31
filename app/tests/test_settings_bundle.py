@@ -1075,6 +1075,43 @@ def test_config_put_deletes_removed_skill_source_secrets(monkeypatch, tmp_path):
     assert secrets.read_connection_secret("skill", "shelf", "token_ro") == ""
 
 
+def test_config_put_deletes_removed_skill_source_mirror(monkeypatch, tmp_path):
+    """The removed card's ADR-0024 mirror goes with it — skill sources keep
+    a bare mirror in the SAME name namespace as repo cards, so leaving it
+    behind orphans <name>.git on the volume forever."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="shelf", url="https://github.com/acme/skills"),
+    ]
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "skill_ro_mirror_0062")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    class Cache:
+        def __init__(self):
+            self.deleted = []
+
+        def delete_mirror(self, name):
+            self.deleted.append(name)
+
+    cache = Cache()
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            {"skill_sources": []}, config=cfg, dev_types={}, managers={},
+            reload=lambda: None, repo_cache=cache))
+    assert cache.deleted == ["shelf"]
+
+
 def test_config_put_renames_skill_source_moves_secrets(monkeypatch, tmp_path):
     """In-place rename (same card index, new name) moves the connection
     secret file — tokens follow the new name; no orphan under the old."""

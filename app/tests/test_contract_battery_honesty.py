@@ -19,7 +19,7 @@ _SCRIPTS = next((p for p in _SCRIPT_ROOTS if p.is_dir()), None)
 
 # Documented check-id sets (plan lock). Counts are independent literals —
 # not recomputed from the scripts' check() call sites.
-EXPECTED_FORGE_ROWS = 13
+EXPECTED_FORGE_ROWS = 14  # CAKE-181 adds apply_default_branch_protection round-trip
 EXPECTED_PMO_ROWS = 14  # 1,2,3,4,5,5b,8,9,10,11,12,13,14,15
 
 
@@ -52,7 +52,7 @@ def _extract(path: Path) -> dict:
     return ns
 
 
-def test_forge_expected_rows_pinned_at_13():
+def test_forge_expected_rows_pinned_at_14():
     ns = _extract(_script("contract_tests_forge.py"))
     assert ns["EXPECTED_ROWS"] == EXPECTED_FORGE_ROWS
 
@@ -63,24 +63,26 @@ def test_pmo_expected_rows_pinned_at_14():
 
 
 def test_grader_rejects_short_all_pass_list():
-    """The self-grading bug: 12 PASS rows must not report as a green battery
-    when EXPECTED_ROWS is 13."""
+    """The self-grading bug: N-1 PASS rows must not report as a green battery
+    when EXPECTED_ROWS is N."""
     forge = _extract(_script("contract_tests_forge.py"))
-    short = [(str(i), f"check-{i}", "PASS") for i in range(1, 13)]
-    assert len(short) == 12
+    short = [(str(i), f"check-{i}", "PASS") for i in range(1, EXPECTED_FORGE_ROWS)]
+    assert len(short) == EXPECTED_FORGE_ROWS - 1
     assert forge["grade_contract_battery"](short, EXPECTED_FORGE_ROWS) != 0
 
 
 def test_grader_rejects_any_fail_even_at_full_count():
     forge = _extract(_script("contract_tests_forge.py"))
-    rows = [(str(i), f"check-{i}", "PASS") for i in range(1, 14)]
+    rows = [(str(i), f"check-{i}", "PASS")
+            for i in range(1, EXPECTED_FORGE_ROWS + 1)]
     rows[3] = ("4", "check-4", "FAIL — planted")
     assert forge["grade_contract_battery"](rows, EXPECTED_FORGE_ROWS) != 0
 
 
 def test_grader_accepts_full_pass_list():
     forge = _extract(_script("contract_tests_forge.py"))
-    rows = [(str(i), f"check-{i}", "PASS") for i in range(1, 14)]
+    rows = [(str(i), f"check-{i}", "PASS")
+            for i in range(1, EXPECTED_FORGE_ROWS + 1)]
     assert forge["grade_contract_battery"](rows, EXPECTED_FORGE_ROWS) == 0
 
 

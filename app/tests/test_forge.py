@@ -294,11 +294,14 @@ def _params(fn):
 # forge or a silent flip fails here instead of call sites guessing.
 _CAPABILITIES_MATRIX = {
     "github": dict(mergeable_tristate=True, self_approval_blocked=True,
-                   branch_protection_read="admin", pr_list_head_filter=True),
+                   branch_protection_read="admin", branch_protection_write=True,
+                   pr_list_head_filter=True),
     "gitlab": dict(mergeable_tristate=True, self_approval_blocked=False,
-                   branch_protection_read="maintainer", pr_list_head_filter=True),
+                   branch_protection_read="maintainer",
+                   branch_protection_write=True, pr_list_head_filter=True),
     "gitea": dict(mergeable_tristate=False, self_approval_blocked=True,
-                  branch_protection_read="admin", pr_list_head_filter=False),
+                  branch_protection_read="admin", branch_protection_write=True,
+                  pr_list_head_filter=False),
 }
 
 

@@ -29,9 +29,10 @@ import httpx
 
 import base64
 
-from ...ports.forge import (BranchProtection, ForgeCapabilities,
-                            ForgeDescriptor, ForgeError, ForgeHealth, PRFile,
-                            PRFilesResult, PullRequest)
+from ...ports.forge import (ApplyProtectionResult, BranchProtection,
+                            ForgeCapabilities, ForgeDescriptor, ForgeError,
+                            ForgeHealth, PRFile, PRFilesResult, ProtectionShape,
+                            PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -71,7 +72,8 @@ class GiteaForge:
     # PR-list head filter is IGNORED server-side (adapter filters client-side)
     capabilities = ForgeCapabilities(
         mergeable_tristate=False, self_approval_blocked=True,
-        branch_protection_read="admin", pr_list_head_filter=False)
+        branch_protection_read="admin", branch_protection_write=True,
+        pr_list_head_filter=False)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None,
@@ -254,6 +256,110 @@ class GiteaForge:
         return BranchProtection(
             protected=True,
             requires_reviews=bool(rule.get("required_approvals", 0) >= 1))
+
+    async def _discover_status_checks(self, branch: str) -> list[str]:
+        """Contexts reported on the default-branch HEAD (Gitea statuses API).
+        Empty when the repo has no CI — never invent names."""
+        try:
+            b = await self._req("GET", f"/branches/{branch}")
+        except ForgeError:
+            return []
+        sha = ((b.get("commit") or {}).get("id")
+               or (b.get("commit") or {}).get("sha") or "")
+        if not sha:
+            return []
+        try:
+            statuses = await self._req("GET", f"/statuses/{sha}") or []
+        except ForgeError:
+            return []
+        return sorted({s.get("context") for s in statuses
+                       if isinstance(s, dict) and s.get("context")})
+
+    async def _read_protection_shape(
+            self, branch: str) -> ProtectionShape | None:
+        try:
+            rule = await self._req("GET", f"/branch_protections/{branch}")
+        except ForgeError as e:
+            if e.status == 404:
+                return None
+            # list fallback (some Gitea builds prefer the collection)
+            try:
+                rules = await self._req("GET", "/branch_protections") or []
+            except ForgeError:
+                return None
+            rule = next((r for r in rules
+                         if r.get("branch_name") == branch), None)
+            if rule is None:
+                return None
+        if not rule:
+            return None
+        # Named contexts only — never treat Gitea's "*" (or empty+enabled)
+        # as a derived check name. Those mean "any context must succeed" and
+        # map onto require_status_checks_unscoped (same role as GitLab Free's
+        # only_allow_merge_if_pipeline_succeeds).
+        from ...ports.forge import real_status_checks
+        checks = real_status_checks(
+            list(rule.get("status_check_contexts") or []))
+        enable_status = bool(rule.get("enable_status_check"))
+        unscoped = enable_status and not checks
+        return ProtectionShape(
+            require_pull_request=not bool(rule.get("enable_push")),
+            allow_force_push=bool(rule.get("enable_force_push")),
+            allow_deletions=False,  # protected branch cannot be deleted
+            required_status_checks=checks,
+            required_approving_review_count=int(
+                rule.get("required_approvals") or 0),
+            require_status_checks_unscoped=unscoped,
+        )
+
+    async def _write_protection_shape(
+            self, branch: str, shape: ProtectionShape) -> None:
+        from ...ports.forge import real_status_checks
+        contexts = real_status_checks(list(shape.required_status_checks))
+        enable_status = bool(contexts) or bool(
+            shape.require_status_checks_unscoped)
+        # Vendor wire form of the unscoped flag when no named contexts exist
+        # (Gitea docs: empty list is invalid; use "*" for any-context). Never
+        # invent "*" as a DevCake-derived check name — only as this encoding.
+        wire_contexts = (
+            contexts if contexts
+            else (["*"] if shape.require_status_checks_unscoped else [])
+        )
+        body = {
+            "branch_name": branch,
+            "enable_push": not shape.require_pull_request,
+            "enable_force_push": bool(shape.allow_force_push),
+            "required_approvals": int(shape.required_approving_review_count),
+            "enable_status_check": enable_status,
+            "status_check_contexts": wire_contexts,
+        }
+        existing = None
+        try:
+            existing = await self._req("GET", f"/branch_protections/{branch}")
+        except ForgeError as e:
+            if e.status != 404:
+                raise
+        if existing is None:
+            await self._req("POST", "/branch_protections", json=body)
+        else:
+            patch = {k: v for k, v in body.items() if k != "branch_name"}
+            await self._req(
+                "PATCH", f"/branch_protections/{branch}", json=patch)
+
+    async def apply_default_branch_protection(
+            self, branch: str = "main") -> ApplyProtectionResult:
+        from ..protection_apply import run_apply_default_branch_protection
+        return await run_apply_default_branch_protection(
+            capabilities=self.capabilities,
+            write_token=self.token,
+            reviewer_token=self.reviewer_token,
+            branch=branch,
+            discover_status_checks=self._discover_status_checks,
+            read_protection_shape=self._read_protection_shape,
+            write_protection_shape=self._write_protection_shape,
+            forge_label="Gitea",
+            write_permission="repo admin (write:repository + owner/admin role)",
+        )
 
     async def pr_files(self, pr_number: int) -> PRFilesResult:
         """Changed files across the PR (paginated — large changesets)."""

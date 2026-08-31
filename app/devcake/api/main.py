@@ -757,6 +757,16 @@ async def test_forge(name: str):
                                                 forge_runtime=s.forge_runtime)
 
 
+@app.post("/api/v1/connections/copy-secrets")
+async def copy_connection_secrets(body: dict):
+    """Copy one card's stored tokens onto selected same-family cards
+    (values never ride the request or response)."""
+    s = svc()
+    return await connections_service.copy_secrets(
+        body, config=s.config, forge_runtime=s.forge_runtime,
+        reload=s.reload_connections, cycle_lock=s.poll_rt.lock)
+
+
 @app.post("/api/v1/connections/forge/apply-protection")
 async def apply_forge_protection_bulk():
     s = svc()

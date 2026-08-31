@@ -98,6 +98,118 @@ async def delete_secret(scope: str, instance: str, field: str, *,
     return {"present": False}
 
 
+def _copy_plan(source_scope: str, source, target_scope: str, target
+               ) -> dict[str, str] | str:
+    """{target_field: source_field} for one copy pair, or a refusal reason.
+
+    User-scoped tokens (a PAT) are valid across every card on the same
+    forge, so a repo card seeds same-forge repo cards field-for-field and
+    same-forge *_issues PMO cards' api_key (their key IS a forge PAT —
+    those systems address a repository, not a workspace). A PMO key maps
+    onto nothing narrower than its own system: pmo→pmo same-system only,
+    never pmo→repo (no way to tell which repo slot it should land in)."""
+    if source_scope == "repo":
+        if target_scope == "repo":
+            if target.forge != source.forge:
+                return (f"different forge ({target.forge} vs "
+                        f"{source.forge}) — its tokens cannot work there")
+            return {"token": "token", "token_ro": "token_ro",
+                    "reviewer_token": "reviewer_token"}
+        if target.system != f"{source.forge}_issues":
+            return (f"system {target.system!r} does not take a "
+                    f"{source.forge} token")
+        return {"api_key": "token"}
+    if target_scope != "pmo" or target.system != source.system:
+        return "a PMO key only fits PMO cards of the same system"
+    return {"api_key": "api_key"}
+
+
+async def copy_secrets(body: dict, *, config, forge_runtime, reload,
+                       cycle_lock: asyncio.Lock | None = None):
+    """Copy one card's stored tokens onto selected sibling cards, slot for
+    slot (write→write, read-only→read-only, reviewer→reviewer). VALUES
+    never ride the request or the response — the server reads the source's
+    store entries and writes the targets'. Everything is validated before
+    any write (the /secrets/clear contract): unknown cards, cross-forge or
+    cross-system pairs, and a source with nothing stored all refuse with
+    no partial copy. Fields the source lacks are per-target `skipped` —
+    the target's own stored value is left untouched, never deleted."""
+    cards = {"repo": {r.name: r for r in config.repos},
+             "pmo": {p.name: p for p in config.pmos}}
+
+    src = body.get("source")
+    if (not isinstance(src, dict) or src.get("scope") not in cards
+            or not isinstance(src.get("name"), str)):
+        raise HTTPException(
+            422, "source must be {scope: repo|pmo, name: <card>}")
+    src_scope, src_name = src["scope"], src["name"]
+    source = cards[src_scope].get(src_name)
+    if source is None:
+        raise HTTPException(404, f"no {src_scope} card named {src_name!r}")
+
+    raw_targets = body.get("targets")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise HTTPException(422, "targets must be a non-empty list of "
+                                 "{scope, name}")
+    plans: list[tuple[str, str, dict[str, str]]] = []
+    seen: set[tuple[str, str]] = set()
+    for t in raw_targets:
+        if (not isinstance(t, dict) or t.get("scope") not in cards
+                or not isinstance(t.get("name"), str)):
+            raise HTTPException(
+                422, "each target must be {scope: repo|pmo, name: <card>}")
+        scope, name = t["scope"], t["name"]
+        if (scope, name) == (src_scope, src_name) or (scope, name) in seen:
+            continue
+        seen.add((scope, name))
+        target = cards[scope].get(name)
+        if target is None:
+            # refuse rather than skip: writing by name would create an
+            # orphan secret file for a card that does not exist (the
+            # settings-bundle apply skips these for the same reason)
+            raise HTTPException(422, f"no {scope} card named {name!r}")
+        plan = _copy_plan(src_scope, source, scope, target)
+        if isinstance(plan, str):
+            raise HTTPException(422, f"{scope} {name!r}: {plan}")
+        plans.append((scope, name, plan))
+    if not plans:
+        raise HTTPException(422, "no targets besides the source itself")
+
+    values = {f: secrets_store.read_connection_secret(src_scope, src_name, f)
+              for f in sorted(_SECRET_FIELDS[src_scope])}
+    if not any(values.values()):
+        raise HTTPException(422, f"{src_scope} {src_name!r} has no stored "
+                                 f"tokens to copy")
+
+    results = []
+    async with _cycle(cycle_lock):
+        repo_written = False
+        for scope, name, plan in plans:
+            copied, skipped = [], []
+            for target_field in sorted(plan):
+                value = values[plan[target_field]]
+                if value:
+                    secrets_store.write_connection_secret(
+                        scope, name, target_field, value)
+                    copied.append(target_field)
+                else:
+                    skipped.append(target_field)
+            if copied and scope == "repo":
+                forge_runtime.clear_breaker(name)
+                repo_written = True
+            results.append({"scope": scope, "name": name,
+                            "copied": copied, "skipped": skipped})
+        if repo_written:
+            reset_health_caches()
+        # one rebuild for the whole batch — adapters capture credentials
+        # by VALUE at construction, same as put_secret
+        reload()
+    log.info("copied %s %s tokens onto %d card(s)", src_scope, src_name,
+             len(results))
+    return {"ok": True, "source": {"scope": src_scope, "name": src_name},
+            "results": results}
+
+
 async def put_harness_secret(var: str, body: dict, *, dev_types,
                              shared_breakers):
     """Store a harness/model key VALUE (e.g. ANTHROPIC_API_KEY)."""

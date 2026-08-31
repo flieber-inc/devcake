@@ -479,7 +479,7 @@ def test_setup_env_serialization_and_insecure_flag_exclusion(monkeypatch, tmp_pa
     assert "DEVCAKE_ALLOW_INSECURE" not in values
     assert "DOCKER_GID" in bundle["setup_env"]["host_specific"]
     # ADR-0025: the workspace base is a host-absolute path — exported for
-    # verification only, re-derived by up.sh on the target host
+    # verification only, re-derived by devcake up on the target host
     assert "DEVCAKE_WS_HOST" in bundle["setup_env"]["host_specific"]
     parsed = sb.validate_bundle(bundle)
     assert parsed["setup_env"]["values"].get("ADMIN_PASSWORD") == "hunter2-strong"

@@ -64,9 +64,9 @@ The deploy ritual from `docs/13` (deploy ordering — the DAG bind-mount
 goes live at `git pull`, so dagu must stop first):
 
 ```bash
-docker compose stop dagu    # belt-and-braces; up.sh re-asserts it
+docker compose stop dagu    # belt-and-braces; devcake up re-asserts it
 git pull                    # or: git checkout <pinned commit>
-./up.sh --bake              # bakes images + compose up, tag-lockstep
+devcake up --bake              # bakes images + compose up, tag-lockstep
 ```
 
 Record the deployed commit (`git describe --tags --always`) — field

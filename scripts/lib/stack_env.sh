@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Shared stack-env derivation (ADR-0034: one path per singular process).
-# up.sh and ci_compose_for_dispatch.sh both need DOCKER_GID and
+# devcake up and ci_compose_for_dispatch.sh both need DOCKER_GID and
 # DEVCAKE_WS_HOST; each used to derive them independently — a standing
 # drift surface between the deploy ritual and the CI bring-up (2026-08-12
-# audit). Sourced, not executed: POLICY stays with the caller (up.sh fails
+# audit). Sourced, not executed: POLICY stays with the caller (devcake up fails
 # hard, CI falls back to permissive defaults) — only the DERIVATION is one.
 
 # gid of the docker socket, validated numeric; empty output + rc 1 when the

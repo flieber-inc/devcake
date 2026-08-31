@@ -11,7 +11,7 @@ license = {text = "GPL-3.0-only"}
 requires-python = ">=3.12"
 keywords = ["devcake", "agents", "orchestration", "self-hosted"]
 # Host baker still imports scripts/dev_factory under PYTHONPATH=scripts:app
-# (supervisor / up.sh already export that pair). No runtime deps here —
+# (supervisor / devcake up already export that pair). No runtime deps here —
 # keep the console script thin (ADR-0038 Decision 3).
 dependencies = []
 

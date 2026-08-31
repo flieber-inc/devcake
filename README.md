@@ -233,7 +233,6 @@ uv tool install .          # or: pipx install .  → console script `devcake`
 devcake doctor             # named preflight + one-time remedies (--json ok)
 devcake up --bake          # auto-inits .env secrets, DOCKER_GID, control plane + hello + baker
 # Later restarts (images already baked):  devcake up
-# ./up.sh remains a thin shim over `devcake up` for muscle memory.
 
 # Configure in a browser: http://localhost:8080 — basic auth (from .env) →
 # Connections / Fleet / Settings → secrets + connection tests. Saving Dev
@@ -247,11 +246,10 @@ devcake setup --help    # PMO/repo wiring (secrets via env/file/stdin) + setting
 # Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
 ```
 
-`devcake up` is the supported start path (ADR-0038): it auto-generates missing
+`devcake up` is the only bring-up path (ADR-0038): it auto-generates missing
 bootstrap secrets into a mode-600 `.env`, upserts the docker socket group id,
-optionally bakes, then runs compose and installs the host baker. `./up.sh` is a
-thin shim that `exec`s `devcake up`. Control ports bind `127.0.0.1`. Images are
-**Bake-only** — compose never builds them.
+optionally bakes, then runs compose and installs the host baker. Control
+ports bind `127.0.0.1`. Images are **Bake-only** — compose never builds them.
 
 **macOS / Docker Desktop:** see [`docs/13-deployment.md`](docs/13-deployment.md) §8b before first `devcake up --bake` — socket gid, install gates, and the nested-engine probe.
 
@@ -276,7 +274,6 @@ After upgrades or changes under `app/`, `admin/`, or `images/`:
 
 ```bash
 devcake up --bake
-# or: ./up.sh --bake
 ```
 
 More detail: [`AGENTS.md`](AGENTS.md) · [`docs/13-deployment.md`](docs/13-deployment.md).

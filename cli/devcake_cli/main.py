@@ -50,7 +50,7 @@ _VERBS = frozenset(
 
 
 def parse_up_flags(argv: Sequence[str]) -> up.UpOptions | int:
-    """Parse ``up`` argv with the same vocabulary as ``./up.sh``.
+    """Parse ``up`` argv (flags, ``--bake`` targets, compose services).
 
     Returns ``UpOptions`` or an int exit code (0 for --help, 2 for usage).
     """

@@ -2,11 +2,11 @@
 # DevCake Gitea bootstrap wrapper (docs/16 M11, live-verified on
 # 1.24.7-rootless): config generation MUST precede any gitea CLI call —
 # `gitea migrate` fatals without app.ini, and app.ini only exists after the
-# image's docker-setup.sh (environment-to-ini) has run. Order:
-#   1. docker-setup.sh        — generates $GITEA_APP_INI from GITEA__* env
+# image's docker-setdevcake up (environment-to-ini) has run. Order:
+#   1. docker-setdevcake up        — generates $GITEA_APP_INI from GITEA__* env
 #   2. gitea migrate          — creates/updates the sqlite schema
 #   3. admin user ensure      — create, or password-resync if it exists
-#   4. exec the stock entrypoint (which re-runs docker-setup.sh harmlessly)
+#   4. exec the stock entrypoint (which re-runs docker-setdevcake up harmlessly)
 #
 # Failure posture (audit A27): a REAL admin-create failure kills the
 # container (compose healthcheck surfaces it) instead of being swallowed;
@@ -16,7 +16,7 @@
 # namespace.
 set -e
 
-/usr/local/bin/docker-setup.sh
+/usr/local/bin/docker-setdevcake up
 gitea -c "$GITEA_APP_INI" migrate
 
 if out=$(gitea -c "$GITEA_APP_INI" admin user create --admin \

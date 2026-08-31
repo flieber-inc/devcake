@@ -300,6 +300,10 @@ once docs and muscle memory move.
   `devcake up "$@"` when `devcake` is on `PATH`, or prints a loud “install
   the CLI (uv/pipx)” message and exits non-zero when it is missing.
 
+**Cutover executed (2026-08-31, founder call):** the shim is removed in the
+same change that updates every doc reference, per the clause above. `devcake
+up` is the only bring-up entry; a test pins that `up.sh` does not return.
+
 **Deploy ritual successor:** `devcake up --bake` (same
 `docker compose stop dagu` → pull → bake/up lockstep story from
 `docs/13-deployment.md`). `./up.sh --bake` remains valid while the shim

@@ -1,5 +1,5 @@
 # DevCake host baker — systemd user unit template.
-# Installed by ./up.sh via scripts/lib/baker_host.sh (placeholders replaced).
+# Installed by devcake up via scripts/lib/baker_host.sh (placeholders replaced).
 # The baker stays a HOST process (sole docker-socket holder). Do not convert
 # this into a container unit or grant any compose service the socket.
 #
@@ -7,7 +7,7 @@
 #   @REPO@          absolute checkout path (WorkingDirectory)
 #   @BAKER_EXEC@    full baker command — `<devcake> baker run` (uv/pipx CLI)
 #                   or the deprecated transition fallback `<python3> -m dev_factory`
-#   @PYTHONPATH@    scripts:app path pair matching up.sh exports
+#   @PYTHONPATH@    scripts:app path pair matching devcake up exports
 #   @ENV_FILE@      .factory/baker.env (OO ingest + DEVCAKE_* — mode 0600)
 #   @WATCH_LOG@     .factory/watch.log (append stdout/stderr)
 #

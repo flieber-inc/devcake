@@ -3,7 +3,7 @@
 Public seams under test:
 - root pyproject.toml / cli/ packaging metadata (name, console script)
 - `devcake_cli.main:main` argv dispatch → `dev_factory.watch.main`
-- supervisor / up.sh / displace string contracts for the new entry
+- supervisor / devcake up / displace string contracts for the new entry
 
 Does not re-test the baker conveyor (flock / keep-set / rotation) — those
 stay in test_dev_factory.py.

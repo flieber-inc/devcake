@@ -3,9 +3,9 @@
 Also owns the CLI-version semver shape (ADR-0034 / CAKE-87) — keep_set,
 config DevType.cli_version, and the host factory import this constant.
 
-Module scope must stay stdlib-only: the host baker (up.sh → bare
-`python3 -m dev_factory`, no venv) imports this module for the semver
-constant. The harness registry needs pydantic, which a host python
+Module scope must stay stdlib-only: the host baker (`devcake baker run`,
+or its deprecated `python3 -m dev_factory` alias — host python, no venv)
+imports this module for the semver constant. The harness registry needs pydantic, which a host python
 does not have — resolve_latest imports it at call time (app-side only).
 """
 

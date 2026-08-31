@@ -171,7 +171,7 @@ def test_dagu_socket_writability_polarity_matches_entrypoint_creds():
     compose exec) false-greens a root-owned 0660 socket; ``--user 1000:1``
     fails; ``--user 1000:0`` passes. Creates the stand-in as root inside the
     container, then re-runs with docker ``--user`` — the same identity switch
-    ``up.sh`` uses for the post-start gate. Skips when docker/image unavailable.
+    ``devcake up`` uses for the post-start gate. Skips when docker/image unavailable.
     """
     import pytest
 

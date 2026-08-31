@@ -53,7 +53,7 @@ def read_env_lines(path: Path) -> list[str]:
 
 
 def upsert_env_var(key: str, value: str, path: Path) -> None:
-    """Atomic same-filesystem upsert (mirrors up.sh OPS-L6 sibling-temp rename)."""
+    """Atomic same-filesystem upsert (mirrors devcake up OPS-L6 sibling-temp rename)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = read_env_lines(path) if path.is_file() else []
     replaced = False
@@ -89,7 +89,7 @@ def upsert_env_var(key: str, value: str, path: Path) -> None:
 
 
 def ensure_permission_floor(path: Path, mode: int = 0o600) -> None:
-    """Force mode every run (up.sh permission floor)."""
+    """Force mode every run (devcake up permission floor)."""
     if path.is_file():
         path.chmod(mode)
 

@@ -4,7 +4,7 @@
 # App local state (volume-mounted in containers; may appear locally during dev)
 /data/
 
-# Per-run Dev workspaces (ADR-0025) — up.sh defaults the host-bind base to
+# Per-run Dev workspaces (ADR-0025) — devcake up defaults the host-bind base to
 # ./workspaces inside this checkout; run content must never be committed
 /workspaces/
 
@@ -34,7 +34,7 @@ dagu/dags/.dag.index
 # BuildKit local bake cache (docker-bake.hcl BAKE_CACHE_DIR)
 .buildx-cache/
 
-# Host baker pid/log/work (up.sh starts it; not a compose service)
+# Host baker pid/log/work (devcake up starts it; not a compose service)
 .factory/
 
 # Gitea credential-bearing backup tarballs (scripts/backup_gitea.sh) — never commit

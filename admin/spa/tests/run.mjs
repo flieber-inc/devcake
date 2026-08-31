@@ -48,6 +48,7 @@ const SUITES = [
   "error_surface.mjs",
   "honesty_leftovers.mjs",
   "adapter_rename_ui.mjs",
+  "apply_protection_ui.mjs",
   "cake170_templates.mjs",
 ];
 

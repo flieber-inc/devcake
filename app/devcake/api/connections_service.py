@@ -380,6 +380,129 @@ async def test_forge(name: str, *, config, forge_runtime):
         return {"ok": False, "error": _probe_client_error(e)}
 
 
+def _work_eligible_repo(inst) -> str | None:
+    """Return a refusal reason when ``inst`` is not a work target for apply,
+    else None. Mirrors the single-endpoint gates (empty URL / reference-only)."""
+    if not inst.configured:
+        return ("repository URL is empty — the repo is idle until one "
+                "is set")
+    if inst.reference_only:
+        return ("reference-only repo — apply-protection is for work "
+                "repos with a write token")
+    return None
+
+
+async def _repo_looks_unprotected(forge, branch: str) -> bool:
+    """True when the thin health DTO says unprotected or the probe is unknown.
+
+    Bulk membership uses this filter; apply itself may still return
+    ``already_as_strict`` when the richer shape is already strict.
+    """
+    try:
+        prot = await forge.default_branch_protection(branch)
+    except Exception:  # noqa: BLE001 — membership probe: failure → treat as unprotected so the operator apply still runs
+        return True
+    if prot is None:
+        return True
+    return not bool(getattr(prot, "protected", False))
+
+
+async def apply_forge_protection(name: str, *, config, forge_runtime):
+    """Operator-explicit apply of default-branch protection for one work repo.
+
+    Never auto-runs on connect/create. Returns `{ok, repo, outcome, shape}` on
+    success or `{ok: false, repo, error, status?}` on refusal / ForgeError —
+    same family as the connection-test contract (never a 500 for vendor
+    capability/permission failures). Unknown repo → HTTP 404.
+    """
+    from ..settings_bundle import audit_event
+
+    inst = next((r for r in config.repos if r.name == name), None)
+    if inst is None:
+        raise HTTPException(404, f"no repo named {name!r}")
+    refuse = _work_eligible_repo(inst)
+    if refuse is not None:
+        out = {"ok": False, "repo": name, "error": refuse}
+        audit_event("forge_protection_applied",
+                    f"repo={name} error={out['error']}")
+        return out
+    f = forge_runtime.get(name)
+    if f is None:
+        out = {
+            "ok": False, "repo": name,
+            "error": "repo not active — save the config first, then apply",
+        }
+        audit_event("forge_protection_applied",
+                    f"repo={name} error={out['error']}")
+        return out
+    caps = getattr(f, "capabilities", None)
+    if caps is not None and not getattr(caps, "branch_protection_write", True):
+        out = {
+            "ok": False, "repo": name,
+            "error": "this forge does not support writing branch protection "
+                     "(capabilities.branch_protection_write=False)",
+        }
+        audit_event("forge_protection_applied",
+                    f"repo={name} error={out['error']}")
+        return out
+    try:
+        result = await f.apply_default_branch_protection(inst.default_branch)
+        reset_health_caches()
+        out = {
+            "ok": True,
+            "repo": name,
+            "outcome": result.outcome,
+            "shape": result.shape.model_dump(),
+        }
+        audit_event(
+            "forge_protection_applied",
+            f"repo={name} outcome={result.outcome}",
+        )
+        return out
+    except ForgeError as e:
+        status = e.status
+        err = redact(str(e))[:200]
+        out: dict = {"ok": False, "repo": name, "error": err}
+        if status is not None:
+            out["status"] = status
+        audit_event(
+            "forge_protection_applied",
+            f"repo={name} error={err}",
+        )
+        return out
+    except Exception as e:  # noqa: BLE001 — operator-apply contract: any unexpected failure → ok:False + redacted error, never a 500
+        err = _probe_client_error(e)
+        out = {"ok": False, "repo": name, "error": err}
+        audit_event(
+            "forge_protection_applied",
+            f"repo={name} error={err}",
+        )
+        return out
+
+
+async def apply_forge_protection_bulk(*, config, forge_runtime):
+    """Apply protection to every currently-unprotected work repo.
+
+    Membership: configured URL, not reference-only, active forge adapter, and
+    thin ``default_branch_protection`` is None or ``protected=False``. One
+    repo's 403 never aborts siblings — results are per-repo (same shape as
+    single). Skipped ineligible repos are omitted from ``results``.
+    """
+    results: list[dict] = []
+    for inst in config.repos:
+        if _work_eligible_repo(inst) is not None:
+            continue
+        f = forge_runtime.get(inst.name)
+        if f is None:
+            continue
+        if not await _repo_looks_unprotected(f, inst.default_branch):
+            continue
+        # Reuse the single chokepoint so audit + cache reset stay one path.
+        results.append(await apply_forge_protection(
+            inst.name, config=config, forge_runtime=forge_runtime))
+    return {"ok": True, "results": results}
+
+
 async def test_skill_source(name: str, *, config, repo_cache):
     """Read-only connectivity probe for a dedicated skill source (CAKE-146).
 

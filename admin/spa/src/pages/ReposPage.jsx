@@ -10,8 +10,14 @@ import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
+import InstantZone from "../components/InstantZone.jsx";
 import MoreMenu from "../components/MoreMenu.jsx";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "../components/ClearSecretsDialog.jsx";
+
+const APPLY_PROTECTION_DESC =
+  "Tightens default-branch rules from this repo's discovered CI and reviewer token; no-op if already as strict; fails loudly if the write token lacks admin permission. Applies immediately — does not wait for Save.";
+const BULK_APPLY_PROTECTION_DESC =
+  "Runs apply on every currently unprotected work repo. Per-repo results include already-strict no-ops and actionable 403s. Applies immediately — does not wait for Save.";
 import { AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
@@ -211,6 +217,8 @@ export default function ReposPage({ onHealthChange }) {
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
   const [testResult, setTestResult] = useState({});
+  const [applyResult, setApplyResult] = useState({}); // repo name → single/bulk member result
+  const [bulkApplyResult, setBulkApplyResult] = useState(null); // { results } | null
   const [clearErr, setClearErr] = useState("");
   const [internalRefresh, setInternalRefresh] = useState(0);
   const [giteaVariant, setGiteaVariant] = useState({});   // card idx → variant
@@ -369,12 +377,104 @@ export default function ReposPage({ onHealthChange }) {
     } else doRemove();
   };
 
+  const refreshHealthAfterApply = async () => {
+    try {
+      const h = await get("/health");
+      onHealthChange?.(h);
+    } catch {
+      // poll will catch up; apply already succeeded
+    }
+  };
+
+  const runApplyProtection = async (name, idx) => {
+    try {
+      const result = await send(
+        "POST", `/connections/forge/${encodeURIComponent(name)}/apply-protection`);
+      setApplyResult((prev) => ({ ...prev, [name]: result }));
+      if (typeof idx === "number") {
+        setExpandedRepos((prev) => new Set(prev).add(idx));
+      }
+      if (result?.ok) await refreshHealthAfterApply();
+      return result;
+    } catch (e) {
+      const result = { ok: false, repo: name, error: String(e.message || e) };
+      setApplyResult((prev) => ({ ...prev, [name]: result }));
+      if (typeof idx === "number") {
+        setExpandedRepos((prev) => new Set(prev).add(idx));
+      }
+      return result;
+    }
+  };
+
+  const requestApplyProtection = (repo, idx) => {
+    setConfirm({
+      title: `Apply branch protection on "${repo.name}"?`,
+      body: "Writes default-branch protection on the forge now (discovered CI checks; one approval only when a distinct reviewer token is stored). Already-as-strict is a no-op. A 403 means the write token lacks admin permission — fix the token, do not expect silent success. Overview's unprotected-branch alert clears after health refreshes.",
+      confirmLabel: "Apply protection now",
+      confirmKind: "primary",
+      action: async () => {
+        setConfirm(null);
+        await runApplyProtection(repo.name, idx);
+      },
+    });
+  };
+
+  const requestBulkApplyProtection = () => {
+    setConfirm({
+      title: "Apply protection to unprotected work repos?",
+      body: "Runs the same forge write on every currently unprotected work repo (skips reference-only and already-protected cards). Each repo returns applied, already_as_strict, or an actionable error (including 403). Nothing is applied on connect — only this confirm. Overview alerts clear after health refreshes for repos that become protected.",
+      confirmLabel: "Apply to unprotected repos",
+      confirmKind: "primary",
+      action: async () => {
+        setConfirm(null);
+        try {
+          const out = await send("POST", "/connections/forge/apply-protection");
+          const results = out?.results || [];
+          setBulkApplyResult({ results });
+          const byName = {};
+          for (const r of results) {
+            if (r?.repo) byName[r.repo] = r;
+          }
+          if (Object.keys(byName).length) {
+            setApplyResult((prev) => ({ ...prev, ...byName }));
+          }
+          if (results.some((r) => r?.ok)) await refreshHealthAfterApply();
+        } catch (e) {
+          setBulkApplyResult({
+            results: [{ ok: false, repo: "(bulk)", error: String(e.message || e) }],
+          });
+        }
+      },
+    });
+  };
+
+  const formatApplyResult = (r) => {
+    if (!r) return "";
+    if (r.ok) {
+      if (r.outcome === "already_as_strict") {
+        return `✓ already as strict — no forge write needed`;
+      }
+      return `✓ protection applied (${r.outcome || "applied"})`;
+    }
+    const status = r.status ? ` (${r.status})` : "";
+    return `✗ ${r.error || "apply failed"}${status}`;
+  };
+
   const repoCardMenuItems = (repo, idx) => {
     const items = [{
       label: "Rename adapter",
       desc: "Applies on Save — tokens, PMO citations, and the local mirror follow; past runs keep the old name.",
       onClick: () => { setRenameErr(""); setRenameFor({ idx, name: repo.name }); },
     }];
+    // Operator-explicit apply (CAKE-182): only on saved cards — the forge
+    // adapter is inactive until Save. Never auto-fires on connect/create.
+    if (repoIsSaved(repo.name, idx)) {
+      items.push({
+        label: "Apply branch protection…",
+        desc: APPLY_PROTECTION_DESC,
+        onClick: () => requestApplyProtection(repo, idx),
+      });
+    }
     if (cfg.repos.length > 0) {
       items.push({
         label: "Remove",
@@ -446,14 +546,20 @@ export default function ReposPage({ onHealthChange }) {
       <Section id="repository" title="Forge connections"
         description="Access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait."
         actions={
-          <MoreMenu label="More repository actions" items={[
-            { label: "Remove unused repositories…", danger: true,
-              desc: "Drop every repo no board or Dev Type selects as work, reference, or memory — their stored tokens are deleted on Save.",
-              onClick: removeUnusedRepos },
-            { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
-              desc: CLEAR_SECRETS_ENTRY.desc,
-              onClick: () => setClearSecrets(true) },
-          ]} />
+          <span className="flex flex-wrap items-center gap-2">
+            <ImmediateBadge text="protection apply is instant" />
+            <MoreMenu label="More repository actions" items={[
+              { label: "Apply protection to unprotected repos…",
+                desc: BULK_APPLY_PROTECTION_DESC,
+                onClick: requestBulkApplyProtection },
+              { label: "Remove unused repositories…", danger: true,
+                desc: "Drop every repo no board or Dev Type selects as work, reference, or memory — their stored tokens are deleted on Save.",
+                onClick: removeUnusedRepos },
+              { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
+                desc: CLEAR_SECRETS_ENTRY.desc,
+                onClick: () => setClearSecrets(true) },
+            ]} />
+          </span>
         }>
         {(filterActive || win.pageCount > 1) && (
           <div className="flex flex-wrap items-center gap-3">
@@ -526,6 +632,18 @@ export default function ReposPage({ onHealthChange }) {
                     {tr && (
                       <span className={`text-xs ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
                         {tr.ok ? "✓" : "✗"}
+                      </span>
+                    )}
+                    {applyResult[repo.name] && (
+                      <span className={`text-xs ${applyResult[repo.name].ok
+                        ? "text-green-700 dark:text-green-400"
+                        : "text-red-600"}`}
+                        data-testid={`apply-protection-result-${repo.name}`}>
+                        {applyResult[repo.name].ok
+                          ? (applyResult[repo.name].outcome === "already_as_strict"
+                            ? "as-strict"
+                            : "protected")
+                          : "apply ✗"}
                       </span>
                     )}
                     <span aria-hidden className="text-xs text-neutral-400">▸</span>
@@ -637,6 +755,16 @@ export default function ReposPage({ onHealthChange }) {
                   </span>
                 )}
               </div>
+              {applyResult[repo.name] && (
+                <InstantZone note="applies immediately — does not wait for Save">
+                  <p className={`text-sm ${applyResult[repo.name].ok
+                    ? "text-green-700 dark:text-green-400"
+                    : "text-red-600"}`}
+                    data-testid={`apply-protection-result-${repo.name}`}>
+                    {formatApplyResult(applyResult[repo.name])}
+                  </p>
+                </InstantZone>
+              )}
               {/* per-repo merge doctrine (ADR-0020) — not a deployment master switch */}
               <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
                 <SettingRow label="Auto-merge"
@@ -766,6 +894,37 @@ export default function ReposPage({ onHealthChange }) {
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />
+      {bulkApplyResult && (
+        <Modal onClose={() => setBulkApplyResult(null)}>
+          <h4 className="mb-2 text-base font-semibold tracking-tight">
+            Apply-protection results
+          </h4>
+          <div className="space-y-3">
+            {(bulkApplyResult.results || []).length === 0 ? (
+              <p className="text-sm text-neutral-600 dark:text-neutral-300">
+                No unprotected work repos to apply — reference-only and
+                already-protected cards were skipped.
+              </p>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {bulkApplyResult.results.map((r, i) => (
+                  <li key={`${r.repo || "r"}-${i}`}
+                    className={r.ok
+                      ? "text-green-700 dark:text-green-400"
+                      : "text-red-600"}>
+                    <span className="font-mono font-semibold">{r.repo || "?"}</span>
+                    {" — "}
+                    {formatApplyResult(r)}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex justify-end">
+              <Button kind="primary" onClick={() => setBulkApplyResult(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
       <PromptDialog open={!!renameFor}
         title={`Rename adapter "${renameFor?.name || ""}"`}
         label="New name" initial={renameFor?.name || ""}

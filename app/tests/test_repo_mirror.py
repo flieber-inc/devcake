@@ -721,3 +721,83 @@ def test_dispatch_without_external_skills_asks_for_no_cards(tmp_path):
     assert run is not None
     assert all("skillrepo" not in asked for asked in cache.asked)
     assert run.skill_repo_heads == {}
+
+
+# ── empty-branch default resolution (the card's "empty = remote default") ────
+
+def _skill_cache(tmp_path, *, script=None):
+    from devcake.config import SkillSource
+
+    class Skill(SkillSource):
+        @property
+        def token(self):  # type: ignore[override]
+            return ""
+
+        @property
+        def token_ro(self):  # type: ignore[override]
+            return "ro-s"
+
+    cache, calls, forges = make_cache(tmp_path, [], script=script)
+    cache.config.skill_sources = [
+        Skill(name="shelf", url="https://gitlab.com/o/skills")]
+    return cache, calls, forges
+
+
+def test_empty_branch_resolves_head_via_symref_probe(tmp_path):
+    def script(args):
+        if args[:1] == ["ls-remote"]:
+            return GitResult(0, "ref: refs/heads/trunk\tHEAD\nabc\tHEAD\n", "")
+        return None
+    cache, calls, _ = _skill_cache(tmp_path, script=script)
+    st = run_coro(cache.sync_one("shelf"))
+    assert st.ok, st.detail
+    probe = next(c for c in calls if c[:1] == ["ls-remote"])
+    assert "--symref" in probe and probe[-1] == "HEAD"
+    head = next(c for c in calls if "symbolic-ref" in c)
+    assert head[-1] == "refs/heads/trunk"
+
+
+def test_empty_branch_probe_error_keeps_stderr_and_latches_auth(tmp_path):
+    """A probe ERROR must never read as 'set Branch on the card': its own
+    stderr rides the ledger detail so an auth failure latches the breaker
+    exactly like a fetch auth failure would."""
+    def script(args):
+        if args[:1] == ["ls-remote"]:
+            return GitResult(128, "", "remote: … returned error: 401")
+        return None
+    cache, _, forges = _skill_cache(tmp_path, script=script)
+    st = run_coro(cache.sync_one("shelf"))
+    assert not st.ok and st.auth
+    assert "default-branch probe" in st.detail
+    assert "shelf" in forges.breakers
+    assert forges.breaker_fields["shelf"] == "token_ro"
+
+
+def test_resolved_branch_missing_from_fetch_fails_loud(tmp_path):
+    """symbolic-ref succeeds on a DANGLING ref — a probed default the fetch
+    never brought over (unborn HEAD / changed mid-sync) must not ledger a
+    green sync whose clones would check out nothing."""
+    def script(args):
+        if args[:1] == ["ls-remote"]:
+            return GitResult(0, "ref: refs/heads/main\tHEAD\nabc\tHEAD\n", "")
+        if "rev-parse" in args:
+            return GitResult(1, "", "")
+        return None
+    cache, _, _ = _skill_cache(tmp_path, script=script)
+    st = run_coro(cache.sync_one("shelf"))
+    assert not st.ok
+    assert "no such branch" in st.detail
+
+
+def test_delete_mirror_pops_bookkeeping_even_without_a_dir(tmp_path):
+    """A card whose first sync failed before init holds a ledger row but no
+    mirror dir — removal must still drop it, or /health keeps a ghost
+    failing row for a nonexistent card until restart."""
+    from devcake.domain.repo_mirror import MirrorStatus
+    cache, _, _ = make_cache(tmp_path, [R1])
+    cache.ledger["alpha"] = MirrorStatus(ok=False, detail="init failed")
+    cache._synced_mono["alpha"] = 1.0
+    assert not cache.mirror_path("alpha").exists()
+    cache.delete_mirror("alpha")
+    assert "alpha" not in cache.ledger
+    assert "alpha" not in cache._synced_mono

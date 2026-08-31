@@ -12,8 +12,8 @@ import subprocess
 
 import pytest
 
-from devcake.config import AppConfig, RepoInstance
-from devcake.domain.repo_mirror import RepoCache
+from devcake.config import AppConfig, RepoInstance, SkillSource
+from devcake.domain.repo_mirror import RepoCache, _symref_head_branch
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None,
                                 reason="no git binary")
@@ -42,9 +42,10 @@ def sh(*args, cwd=None):
     return r.stdout
 
 
-class LocalRepo(RepoInstance):
-    """A config card whose URL is a local origin (file path) and whose
-    tokens are empty — sync goes unauthenticated, like a public repo."""
+class _EmptyTokens:
+    """Secrets-store bypass shared by the Local* cards — sync goes
+    unauthenticated, like a public repo. ONE copy: the two card kinds must
+    not drift when the token seam changes."""
 
     @property
     def token(self):  # type: ignore[override]
@@ -53,6 +54,10 @@ class LocalRepo(RepoInstance):
     @property
     def token_ro(self):  # type: ignore[override]
         return ""
+
+
+class LocalRepo(_EmptyTokens, RepoInstance):
+    """A config card whose URL is a local origin (file path)."""
 
 
 class Forges:
@@ -240,3 +245,58 @@ def test_skill_reads_follow_upstream_commits_after_resync(rig):
     new = run_coro(cache.read_skill_file("alpha", "skills", sha2,
                                          "tdd", "SKILL.md"))
     assert b"body" in old and b"v2" in new
+
+
+# ── empty default_branch = "the repository's default" (the card contract) ────
+
+class LocalSkill(_EmptyTokens, SkillSource):
+    """A skill-source card over a local origin."""
+
+
+def _skill_rig(rig):
+    origin, cache, _ = rig
+    src = LocalSkill.model_construct(name="shelf", url=str(origin),
+                                     default_branch="", subdir="")
+    cache.config.skill_sources = [src]
+    return origin, cache
+
+
+def test_skill_source_empty_branch_resolves_the_remotes_head(rig):
+    """SPA hint 'Empty = the repository's default': HEAD must come from the
+    remote's symref — trunk here, NOT a git init default and NEVER the
+    invalid `refs/heads/` (which failed every sync after a good fetch)."""
+    origin, cache = _skill_rig(rig)
+    sh("git", "checkout", "-qb", "trunk", cwd=origin)
+    st = run_coro(cache.sync_one("shelf"))
+    assert st.ok, st.detail
+    head = sh("git", "-C", str(cache.mirror_path("shelf")),
+              "symbolic-ref", "HEAD").strip()
+    assert head == "refs/heads/trunk"
+    assert run_coro(cache.tree_head("shelf"))   # reads pin via mirror HEAD
+
+
+def test_skill_source_empty_branch_detached_remote_fails_actionably(rig):
+    """A remote with no HEAD symref (detached) cannot seed the mirror's
+    HEAD — the failure must name the card's Branch field, not surface
+    git's bare symbolic-ref refusal."""
+    origin, cache = _skill_rig(rig)
+    sh("git", "checkout", "-q", "--detach", cwd=origin)
+    st = run_coro(cache.sync_one("shelf"))
+    assert not st.ok
+    assert "default branch" in st.detail and "Branch" in st.detail
+
+
+def test_symref_head_branch_parser():
+    good = "ref: refs/heads/main\tHEAD\n0123abc\tHEAD\n"
+    assert _symref_head_branch(good) == "main"
+    assert _symref_head_branch("0123abc\tHEAD\n") == ""      # detached
+    assert _symref_head_branch("") == ""                     # empty remote
+    assert _symref_head_branch("ref: refs/tags/v1\tHEAD\n") == ""
+    # branch names may contain slashes
+    assert _symref_head_branch(
+        "ref: refs/heads/release/2.0\tHEAD\n") == "release/2.0"
+    # a clone-shaped remote also advertises refs/remotes/origin/HEAD — its
+    # line merely ENDS with HEAD and must never seed the branch
+    assert _symref_head_branch(
+        "ref: refs/heads/master\trefs/remotes/origin/HEAD\n"
+        "0adc0adc\tHEAD\n") == ""

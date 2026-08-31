@@ -309,6 +309,21 @@ class RepoInstance(BaseModel):
     def _url_shape(cls, v: str) -> str:
         return _validate_forge_url_shape(v)
 
+    @field_validator("default_branch")
+    @classmethod
+    def _branch_required(cls, v: str) -> str:
+        # Normalized at the boundary — sync, reads, DEVCAKE_DEFAULT_BRANCH,
+        # merge prompts, and claims must all compare ONE string — and
+        # NON-empty: unlike a skill source, a repo card's branch feeds
+        # container env and playbook instructions that break silently on
+        # "", so the sync-side default resolution must never mask it.
+        v = (v or "").strip()
+        if not v:
+            raise ValueError(
+                "default_branch must name a branch — repo cards have no "
+                "empty-means-remote-default contract")
+        return v
+
     @property
     def configured(self) -> bool:
         return bool(self.url.strip())
@@ -392,6 +407,13 @@ class SkillSource(BaseModel):
             raise ValueError(
                 f"subdir {v!r}: relative path inside the repo, no ..")
         return v
+
+    @field_validator("default_branch")
+    @classmethod
+    def _branch_stripped(cls, v: str) -> str:
+        # empty = the repository's default (the card contract); non-empty
+        # values normalize so sync and the mirror reads compare one string
+        return (v or "").strip()
 
     @property
     def configured(self) -> bool:

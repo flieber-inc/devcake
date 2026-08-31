@@ -49,6 +49,7 @@ const SUITES = [
   "honesty_leftovers.mjs",
   "adapter_rename_ui.mjs",
   "apply_protection_ui.mjs",
+  "token_copy.mjs",
   "cake170_templates.mjs",
 ];
 

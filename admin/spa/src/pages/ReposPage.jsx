@@ -13,6 +13,7 @@ import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import InstantZone from "../components/InstantZone.jsx";
 import MoreMenu from "../components/MoreMenu.jsx";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "../components/ClearSecretsDialog.jsx";
+import TokenCopyModal, { TOKEN_COPY_ENTRY } from "../components/TokenCopyModal.jsx";
 
 const APPLY_PROTECTION_DESC =
   "Tightens default-branch rules from this repo's discovered CI and reviewer token; no-op if already as strict; fails loudly if the write token lacks admin permission. Applies immediately — does not wait for Save.";
@@ -224,6 +225,7 @@ export default function ReposPage({ onHealthChange }) {
   const [giteaVariant, setGiteaVariant] = useState({});   // card idx → variant
   const [createFor, setCreateFor] = useState(null);       // card idx | null
   const [clearSecrets, setClearSecrets] = useState(false);
+  const [tokenCopy, setTokenCopy] = useState(false);
   const [secretsEpoch, setSecretsEpoch] = useState(0);
   // CAKE-156: discoverable draft rename (PromptDialog → setField; applies on Save)
   const [renameFor, setRenameFor] = useState(null); // { idx, name } | null
@@ -552,6 +554,9 @@ export default function ReposPage({ onHealthChange }) {
               { label: "Apply protection to unprotected repos…",
                 desc: BULK_APPLY_PROTECTION_DESC,
                 onClick: requestBulkApplyProtection },
+              { label: `${TOKEN_COPY_ENTRY.menuLabel}…`,
+                desc: TOKEN_COPY_ENTRY.desc,
+                onClick: () => setTokenCopy(true) },
               { label: "Remove unused repositories…", danger: true,
                 desc: "Drop every repo no board or Dev Type selects as work, reference, or memory — their stored tokens are deleted on Save.",
                 onClick: removeUnusedRepos },
@@ -948,6 +953,16 @@ export default function ReposPage({ onHealthChange }) {
           setRenameFor(null);
         }}
         onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
+      {tokenCopy && (
+        <TokenCopyModal mode="repo"
+          repos={(dr.server.cfg.repos || [])
+            .filter((r) => !newNames.has(r.name))}
+          pmos={dr.server.cfg.pmos || []}
+          onClose={() => {
+            setTokenCopy(false);
+            setSecretsEpoch((e) => e + 1);   // ✓/✗ badges reflect the copies
+          }} />
+      )}
       {clearSecrets && (
         <ClearSecretsDialog
           context="repos"

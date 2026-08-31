@@ -98,6 +98,231 @@ async def delete_secret(scope: str, instance: str, field: str, *,
     return {"present": False}
 
 
+def _url_host(url_or_base: str) -> str:
+    """Lowercased hostname of a URL or bare host ("" when empty or
+    unparsable) — the CAKE-113 shape from security.py's mono-repo check."""
+    from urllib.parse import urlsplit
+    v = (url_or_base or "").strip()
+    if not v:
+        return ""
+    parts = urlsplit(v if "://" in v else f"https://{v}")
+    return (parts.hostname or "").lower()
+
+
+def _hosts_equivalent(a: str, b: str, aliases) -> bool:
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    for group in aliases or []:
+        members = {h.lower() for h in group}
+        if a in members and b in members:
+            return True
+    return False
+
+
+def _pmo_host(pmo, info) -> str:
+    """The host a forge-issues board talks to: its api_base, else the
+    system's registered default host ("" = undeterminable)."""
+    return _url_host(pmo.api_base or "") or (info.default_host or "").lower()
+
+
+def _copy_plan(source_scope: str, source, target_scope: str, target
+               ) -> dict[str, str] | str:
+    """{target_field: source_field} for one copy pair, or a refusal reason
+    (a STRING return is the refusal — copy_secrets raises it as a 422 on a
+    real run and reports it as a `refused` row in dry-run).
+
+    Same forge is NOT enough: gitea and gitlab self-host and GitHub has
+    Enterprise, so a PAT is only fleet-valid on the SAME HOST. repo→repo
+    compares URL hosts; repo→board compares the repo host against the
+    board's api_base (or the system's registered default, honoring the
+    registry's alias groups — api.github.com ≡ github.com). A repo card
+    seeds same-forge same-host repo cards slot for slot, and that host's
+    *_issues board api_key from its WRITE token (the board's key IS a
+    forge PAT — those systems address a repository, not a workspace). A
+    PMO key maps onto nothing narrower than its own system + host:
+    pmo→pmo only, never pmo→repo. The `{forge}_issues` naming convention
+    is load-bearing (all registered systems follow it); a system that
+    breaks it must extend this table."""
+    from ..adapters.registry import PMO_SYSTEMS
+    if source_scope == "repo":
+        src_host = _url_host(source.url)
+        if not src_host:
+            return "the source card has no repository URL — set it first"
+        if target_scope == "repo":
+            if target.forge != source.forge:
+                return (f"different forge ({target.forge} vs "
+                        f"{source.forge}) — its tokens cannot work there")
+            tgt_host = _url_host(target.url)
+            if not tgt_host:
+                return "card has no repository URL yet — set it first"
+            if src_host != tgt_host:
+                return (f"different host ({tgt_host} vs {src_host}) — a "
+                        f"{source.forge} token is per host")
+            return {f: f for f in sorted(_SECRET_FIELDS["repo"])}
+        if target.system != f"{source.forge}_issues":
+            return (f"system {target.system!r} does not take a "
+                    f"{source.forge} token")
+        info = PMO_SYSTEMS.get(target.system)
+        tgt_host = _pmo_host(target, info) if info is not None else ""
+        if not tgt_host:
+            return "the board has no API base yet — set it first"
+        if not _hosts_equivalent(src_host, tgt_host,
+                                 info.host_aliases if info else []):
+            return (f"different host ({tgt_host} vs {src_host}) — a "
+                    f"{source.forge} token is per host")
+        return {"api_key": "token"}
+    if target_scope != "pmo" or target.system != source.system:
+        return "a PMO key only fits PMO cards of the same system"
+    info = PMO_SYSTEMS.get(source.system)
+    if info is not None and info.forge_issue:
+        a, b = _pmo_host(source, info), _pmo_host(target, info)
+        if (a or b) and not _hosts_equivalent(a, b, info.host_aliases):
+            return (f"different host ({b or 'unset'} vs {a or 'unset'}) — "
+                    f"its key is per host")
+    return {"api_key": "api_key"}
+
+
+async def copy_secrets(body: dict, *, config, forge_runtime, reload,
+                       cycle_lock: asyncio.Lock | None = None):
+    """Copy one card's stored tokens onto selected sibling cards, slot for
+    slot (write→write, read-only→read-only, reviewer→reviewer). VALUES
+    never ride the request or the response — the server reads the source's
+    store entries and writes the targets'.
+
+    Two modes. `dry_run: true` answers what WOULD happen: per-target rows
+    with the slots that would move (`receives`) and the mapped-but-empty
+    ones (`skipped`); ineligible or unknown targets come back as
+    non-eligible rows with the reason instead of failing the call, so a
+    stale client card list degrades readably. The REAL run is strict and
+    all-or-nothing up front (the /secrets/clear contract): an unknown
+    card, a duplicate target, the source among the targets, or an
+    incompatible pair each 422 with nothing written. Validation, the
+    source reads, and the writes all run under the poll-cycle lock so a
+    concurrent clear or rotation cannot interleave — a copy must never
+    resurrect a just-cleared token. A write failure mid-batch still
+    rebuilds the adapters to match the disk and names what was already
+    written. One audit event records source, targets, and field NAMES.
+    The skill scope is deliberately excluded: repo-backed sources need no
+    token of their own, and a read-token family can join later without
+    changing this shape."""
+    dry_run = bool(body.get("dry_run"))
+    src = body.get("source")
+    if (not isinstance(src, dict) or not isinstance(src.get("scope"), str)
+            or not isinstance(src.get("name"), str)):
+        raise HTTPException(
+            422, "source must be {scope: repo|pmo, name: <card>}")
+    raw_targets = body.get("targets")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise HTTPException(422, "targets must be a non-empty list of "
+                                 "{scope, name}")
+    for t in raw_targets:
+        if (not isinstance(t, dict) or not isinstance(t.get("scope"), str)
+                or not isinstance(t.get("name"), str)):
+            raise HTTPException(
+                422, "each target must be {scope: repo|pmo, name: <card>}")
+
+    async with _cycle(cycle_lock):
+        cards = {"repo": {r.name: r for r in config.repos},
+                 "pmo": {p.name: p for p in config.pmos}}
+        src_scope, src_name = src["scope"], src["name"]
+        if src_scope not in cards:
+            raise HTTPException(
+                422, "source must be {scope: repo|pmo, name: <card>}")
+        source = cards[src_scope].get(src_name)
+        if source is None:
+            raise HTTPException(404, f"no {src_scope} card named {src_name!r}")
+
+        values = {f: secrets_store.read_connection_secret(
+                      src_scope, src_name, f)
+                  for f in sorted(_SECRET_FIELDS[src_scope])}
+        if not any(values.values()):
+            raise HTTPException(422, f"{src_scope} {src_name!r} has no "
+                                     f"stored tokens to copy")
+
+        rows: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for t in raw_targets:
+            scope, name = t["scope"], t["name"]
+            refusal, plan = None, None
+            if scope not in cards:
+                refusal = "unknown scope — repo|pmo"
+            elif (scope, name) == (src_scope, src_name):
+                refusal = "the source itself"
+            elif (scope, name) in seen:
+                refusal = "duplicate target"
+            elif cards[scope].get(name) is None:
+                # refuse rather than skip: writing by name would create an
+                # orphan secret file for a card that does not exist (the
+                # settings-bundle apply skips these for the same reason)
+                refusal = f"no {scope} card named {name!r}"
+            else:
+                plan = _copy_plan(src_scope, source, scope,
+                                  cards[scope][name])
+                if isinstance(plan, str):
+                    refusal, plan = plan, None
+            seen.add((scope, name))
+            if refusal is not None:
+                if not dry_run:
+                    raise HTTPException(422, f"{scope} {name!r}: {refusal}")
+                rows.append({"scope": scope, "name": name,
+                             "eligible": False, "reason": refusal})
+                continue
+            rows.append({
+                "scope": scope, "name": name, "eligible": True,
+                "plan": plan,
+                "receives": sorted(f for f in plan if values[plan[f]]),
+                "skipped": sorted(f for f in plan if not values[plan[f]])})
+
+        if dry_run:
+            for row in rows:
+                row.pop("plan", None)
+            return {"ok": True, "dry_run": True,
+                    "source": {"scope": src_scope, "name": src_name},
+                    "targets": rows}
+
+        results: list[dict] = []
+        written: list[str] = []
+        repo_written = False
+        try:
+            for row in rows:
+                fields = {f: values[row["plan"][f]] for f in row["receives"]}
+                if fields:
+                    secrets_store.write_connection_fields(
+                        row["scope"], row["name"], fields)
+                    written.append(f"{row['scope']}:{row['name']}")
+                    if row["scope"] == "repo":
+                        forge_runtime.clear_breaker(row["name"])
+                        repo_written = True
+                results.append({"scope": row["scope"], "name": row["name"],
+                                "copied": row["receives"],
+                                "skipped": row["skipped"]})
+        except Exception as e:  # noqa: BLE001 — adapters must be rebuilt to match whatever reached the disk before the error surfaces
+            if repo_written:
+                reset_health_caches()
+            reload()
+            raise HTTPException(
+                500, f"copy interrupted after writing "
+                     f"{', '.join(written) or 'nothing'} — "
+                     f"{type(e).__name__}; re-run to complete") from e
+        if repo_written:
+            reset_health_caches()
+        # one rebuild for the whole batch — adapters capture credentials
+        # by VALUE at construction, same as put_secret
+        reload()
+
+    from ..settings_bundle import audit_event
+    audit_event("secrets_copied",
+                f"{src_scope}:{src_name} → " + "; ".join(
+                    f"{r['scope']}:{r['name']}"
+                    f"[{','.join(r['copied']) or '-'}]" for r in results))
+    log.info("copied %s %s tokens onto %d card(s)", src_scope, src_name,
+             len(results))
+    return {"ok": True, "source": {"scope": src_scope, "name": src_name},
+            "results": results}
+
+
 async def put_harness_secret(var: str, body: dict, *, dev_types,
                              shared_breakers):
     """Store a harness/model key VALUE (e.g. ANTHROPIC_API_KEY)."""

@@ -11,6 +11,7 @@ import InstantZone from "./InstantZone.jsx";
 import MoreMenu from "./MoreMenu.jsx";
 import RepoChips from "./RepoChips.jsx";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "./ClearSecretsDialog.jsx";
+import TokenCopyModal, { TOKEN_COPY_ENTRY } from "./TokenCopyModal.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "../lib/draftErrors.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
@@ -27,6 +28,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
   const [clearSecrets, setClearSecrets] = useState(false);
+  const [tokenCopy, setTokenCopy] = useState(false);
   const [secretsEpoch, setSecretsEpoch] = useState(0);
   const [clearReloadErr, setClearReloadErr] = useState("");
   // CAKE-156: discoverable draft rename (PromptDialog → setField; applies on Save)
@@ -230,6 +232,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
         })()}
         actions={
           <MoreMenu label="More PMO actions" items={[
+            { label: `${TOKEN_COPY_ENTRY.menuLabel}…`,
+              desc: TOKEN_COPY_ENTRY.desc,
+              onClick: () => setTokenCopy(true) },
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
               desc: CLEAR_SECRETS_ENTRY.desc,
               onClick: () => setClearSecrets(true) },
@@ -573,6 +578,16 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           setRenameFor(null);
         }}
         onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
+      {tokenCopy && (
+        <TokenCopyModal mode="pmo"
+          repos={dr.server.cfg.repos || []}
+          pmos={(dr.server.cfg.pmos || [])
+            .filter((p) => !newPmoNames.has(p.name))}
+          onClose={() => {
+            setTokenCopy(false);
+            setSecretsEpoch((e) => e + 1);   // ✓/✗ badges reflect the copies
+          }} />
+      )}
       {clearSecrets && (
         <ClearSecretsDialog
           context="pmo"

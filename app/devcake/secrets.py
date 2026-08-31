@@ -194,13 +194,23 @@ def cred_redact_key(dev_type: str, filename: str) -> str:
 
 def write_connection_secret(scope: str, instance: str, field: str,
                             value: str) -> None:
+    write_connection_fields(scope, instance, {field: value})
+
+
+def write_connection_fields(scope: str, instance: str,
+                            fields: dict[str, str]) -> None:
+    """Set several fields of ONE card's secrets file in a single atomic
+    write — the batch path (token copy) would otherwise pay a full
+    read-parse-fsync cycle per field on the same file. Redaction registers
+    per field, same as the single-field write."""
     path = _conn_path(scope, instance)
     data = _read_strict(path)
-    data[field] = value
+    data.update(fields)
     _atomic_write(path, data)
-    if value:
-        security.register_runtime_secret(
-            conn_redact_key(scope, instance, field), value)
+    for field, value in fields.items():
+        if value:
+            security.register_runtime_secret(
+                conn_redact_key(scope, instance, field), value)
 
 
 def read_connection_secret(scope: str, instance: str, field: str) -> str:

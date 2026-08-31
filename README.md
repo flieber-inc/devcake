@@ -135,7 +135,7 @@ Three different things are easy to conflate. Only the forge enforces the last:
 |---|---|---|
 | **`auto_merge`** (per repo, default **off**) | The **app** only | Off on a repo → app never merges that repo's PRs; parks at `DEVCAKE-MERGE` until a real merge is observed. On → app squash-merges after REVIEW approve. (ADR-0020) |
 | **Forge tokens** (Repositories page) | Devs + app | **Write** token: EXECUTE push + open PR; app also uses it to **merge** when auto-merge is on. **RO** token (recommended): non-EXECUTE stages clone without write. **Reviewer** token (**recommended** for formal PR/MR approval under branch protection; **app-only** — never injected into a Dev). |
-| **Branch protection** (on the forge UI) | Everyone with a token | Server rules on the **default branch** (require a PR, require ≥1 approval, no bypass for the Dev account). Token scopes usually **cannot** separate “push a feature branch” from “merge to main” — protection is what does. |
+| **Branch protection** (on the forge; the Repositories page can **apply** a derived baseline per repo or in bulk) | Everyone with a token | Server rules on the **default branch** (require a PR, require ≥1 approval, no bypass for the Dev account). Token scopes usually **cannot** separate “push a feature branch” from “merge to main” — protection is what does. |
 
 **Happy path with protection + tokens configured:**
 
@@ -219,17 +219,30 @@ real EXECUTE: §9.
 
 ## Quickstart
 
+> **Have an agent set it up for you.** Tell your CLI agent:
+> *“Read `.claude/skills/devcake-ops/SKILL.md` in this repo and help me set
+> up and manage DevCake.”* The skill teaches any capable agent the install,
+> preflight, bring-up, non-interactive configuration, day-to-day operations,
+> and upgrades — with JSON receipts and sealed exit codes it can assert on.
+> (Claude Code discovers it automatically when opened in this repo.)
+
 ```bash
 # Clone the remote or fork you intend to run:
 git clone <this-repo-url> && cd devcake
 uv tool install .          # or: pipx install .  → console script `devcake`
 devcake doctor             # named preflight + one-time remedies (--json ok)
 devcake up --bake          # auto-inits .env secrets, DOCKER_GID, control plane + hello + baker
-# Shim still works during the transition window: ./up.sh --bake
 # Later restarts (images already baked):  devcake up
-# Configure Dev Types in the admin UI — the host baker compiles those pins.
+# ./up.sh remains a thin shim over `devcake up` for muscle memory.
 
-# In a browser: http://localhost:8080  — basic auth → Connections / Fleet / Settings → secrets + connection tests
+# Configure in a browser: http://localhost:8080 — basic auth (from .env) →
+# Connections / Fleet / Settings → secrets + connection tests. Saving Dev
+# Types triggers the baker's harness bake; the first mission waits for it.
+
+# Or configure non-interactively (agents; same validation as the UI):
+devcake setup --same-harness claude-code --json     # first Dev roster
+devcake setup --help    # PMO/repo wiring (secrets via env/file/stdin) + settings-bundle import
+
 # Telemetry connectivity: app boot auto-provisions the OO ingest user from OO_INGEST_*.
 # Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
 ```
@@ -251,11 +264,13 @@ thin shim that `exec`s `devcake up`. Control ports bind `127.0.0.1`. Images are
    token (app-only formal approval — the security-relevant second identity).
 4. Leave each repo's **`auto_merge` off** until you want the **app** to merge that repo after REVIEW.
 
-1. [Tutorial 1 — first mission](docs/tutorials/01-first-mission.md)
-2. [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)
-3. [Tutorial 3 — MCP plugins](docs/tutorials/03-mcp-plugins.md)
-4. Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
-5. Pre-v1 host wipe-and-re-onboard: [host-refresh](docs/tutorials/host-refresh.md)
+Then, step by step:
+
+- [Tutorial 1 — first mission](docs/tutorials/01-first-mission.md)
+- [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)
+- [Tutorial 3 — MCP plugins](docs/tutorials/03-mcp-plugins.md)
+- Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
+- Pre-v1 host wipe-and-re-onboard: [host-refresh](docs/tutorials/host-refresh.md)
 
 After upgrades or changes under `app/`, `admin/`, or `images/`:
 

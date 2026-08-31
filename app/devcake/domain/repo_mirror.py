@@ -58,6 +58,17 @@ def sync_error_class(stderr: str) -> str:
     return "auth" if any(m in lowered for m in _AUTH_MARKERS) else "transient"
 
 
+def _symref_head_branch(stdout: str) -> str:
+    """Branch name from `ls-remote --symref <url> HEAD` output ("" when the
+    remote has no HEAD symref — an empty repository, or a server that omits
+    the capability). Only `refs/heads/*` counts: a detached or non-branch
+    HEAD cannot seed a mirror's HEAD."""
+    for line in (stdout or "").splitlines():
+        if line.startswith("ref: refs/heads/") and line.rstrip().endswith("HEAD"):
+            return line[len("ref: refs/heads/"):].split("\t", 1)[0].strip()
+    return ""
+
+
 class MirrorStatus:
     """Ledger row for one mirror. Plain object — /health serializes as_dict."""
     __slots__ = ("ok", "synced_at", "attempted_at", "detail", "auth")
@@ -317,14 +328,28 @@ class RepoCache:
 
         # HEAD — load-bearing: a bare init defaults HEAD to main/master; a
         # wrong HEAD makes `git clone file://…` check out nothing
+        branch = (inst.default_branch or "").strip()
+        if not branch:
+            # The card contract is "empty branch = the repository's default"
+            # (skill sources default to empty; SPA hint says so) — resolve it
+            # from the remote's HEAD symref. Never write the empty ref: git
+            # refuses `refs/heads/` and the sync would fail every cycle.
+            r = await self.git(["ls-remote", "--symref", expected_url, "HEAD"],
+                               env=env)
+            branch = _symref_head_branch(r.stdout) if r.returncode == 0 else ""
+            if not branch:
+                return await fail(
+                    "default branch: the card's branch is empty and the "
+                    "remote's HEAD does not name one (empty repository?) — "
+                    "set Branch on the card")
         r = await self.git(["-C", str(p), "symbolic-ref", "HEAD",
-                            f"refs/heads/{inst.default_branch}"], env=env)
+                            f"refs/heads/{branch}"], env=env)
         if r.returncode != 0:
             return await fail(f"symbolic-ref: {r.stderr}")
 
         if self.config.repo_mirror.lfs:
             r = await self.git(["-C", str(p), "lfs", "fetch", "origin",
-                                inst.default_branch], env=env)
+                                branch], env=env)
             if r.returncode != 0:
                 return await fail(f"lfs fetch: {r.stderr or r.stdout}")
 

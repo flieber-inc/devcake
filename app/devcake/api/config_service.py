@@ -338,14 +338,16 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         except Exception:  # noqa: BLE001 — cleanup is best-effort: the config change is APPLIED; a failure must not 500 it (audit A21); orphan named in the log
             log.exception("could not delete stored secrets of removed "
                           "%s instance %r", scope, name)
-        if scope == "repo" and repo_cache is not None:
+        if scope in ("repo", "skill") and repo_cache is not None:
             # ADR-0024: the removed card's mirror goes with it (same
-            # best-effort contract as the secret deletion above)
+            # best-effort contract as the secret deletion above). Skill
+            # sources maintain a mirror under the same namespace as repo
+            # cards, so both scopes clean up here.
             try:
                 repo_cache.delete_mirror(name)
             except Exception:  # noqa: BLE001 — cleanup only; the config change is APPLIED
-                log.exception("could not delete mirror of removed repo %r",
-                              name)
+                log.exception("could not delete mirror of removed %s %r",
+                              scope, name)
     # Per-repo auto_merge OFF→ON (founder request 2026-07-15, ADR-0020):
     # re-arm the deferred-merge window only for missions whose work repo
     # flipped — the next sweep posts a fresh window entry for those.

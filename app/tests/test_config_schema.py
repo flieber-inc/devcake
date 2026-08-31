@@ -943,6 +943,25 @@ def test_skill_sources_round_trip_validation_and_name_disjointness():
         "skills_subdir")
 
 
+def test_default_branch_boundary_normalization():
+    """Branch values normalize at the model so sync, reads, container env,
+    and claims compare ONE string; a repo card refuses an EMPTY branch —
+    its value feeds DEVCAKE_DEFAULT_BRANCH and merge prompts, which break
+    silently on "" (skill sources keep empty = the remote's default)."""
+    from pydantic import ValidationError
+
+    from devcake.config import RepoInstance, SkillSource
+
+    assert RepoInstance(name="r", url="https://github.com/o/r",
+                        default_branch=" main ").default_branch == "main"
+    with pytest.raises(ValidationError, match="must name a branch"):
+        RepoInstance(name="r", url="https://github.com/o/r",
+                     default_branch="  ")
+    assert SkillSource(name="s", url="https://github.com/o/s",
+                       default_branch=" trunk ").default_branch == "trunk"
+    assert SkillSource(name="s", url="https://github.com/o/s").default_branch == ""
+
+
 def test_skill_source_url_and_forge_match_repo_instance():
     """CAKE-65: SkillSource rejects the same malformed URL / unknown forge
     literals as RepoInstance — empty URL still allowed (unconfigured card)."""

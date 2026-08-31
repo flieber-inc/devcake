@@ -42,9 +42,10 @@ def sh(*args, cwd=None):
     return r.stdout
 
 
-class LocalRepo(RepoInstance):
-    """A config card whose URL is a local origin (file path) and whose
-    tokens are empty — sync goes unauthenticated, like a public repo."""
+class _EmptyTokens:
+    """Secrets-store bypass shared by the Local* cards — sync goes
+    unauthenticated, like a public repo. ONE copy: the two card kinds must
+    not drift when the token seam changes."""
 
     @property
     def token(self):  # type: ignore[override]
@@ -53,6 +54,10 @@ class LocalRepo(RepoInstance):
     @property
     def token_ro(self):  # type: ignore[override]
         return ""
+
+
+class LocalRepo(_EmptyTokens, RepoInstance):
+    """A config card whose URL is a local origin (file path)."""
 
 
 class Forges:
@@ -244,16 +249,8 @@ def test_skill_reads_follow_upstream_commits_after_resync(rig):
 
 # ── empty default_branch = "the repository's default" (the card contract) ────
 
-class LocalSkill(SkillSource):
-    """A skill-source card over a local origin — empty tokens, like LocalRepo."""
-
-    @property
-    def token(self):  # type: ignore[override]
-        return ""
-
-    @property
-    def token_ro(self):  # type: ignore[override]
-        return ""
+class LocalSkill(_EmptyTokens, SkillSource):
+    """A skill-source card over a local origin."""
 
 
 def _skill_rig(rig):
@@ -298,3 +295,8 @@ def test_symref_head_branch_parser():
     # branch names may contain slashes
     assert _symref_head_branch(
         "ref: refs/heads/release/2.0\tHEAD\n") == "release/2.0"
+    # a clone-shaped remote also advertises refs/remotes/origin/HEAD — its
+    # line merely ENDS with HEAD and must never seed the branch
+    assert _symref_head_branch(
+        "ref: refs/heads/master\trefs/remotes/origin/HEAD\n"
+        "0adc0adc\tHEAD\n") == ""

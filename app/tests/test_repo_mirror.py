@@ -771,3 +771,33 @@ def test_empty_branch_probe_error_keeps_stderr_and_latches_auth(tmp_path):
     assert "default-branch probe" in st.detail
     assert "shelf" in forges.breakers
     assert forges.breaker_fields["shelf"] == "token_ro"
+
+
+def test_resolved_branch_missing_from_fetch_fails_loud(tmp_path):
+    """symbolic-ref succeeds on a DANGLING ref — a probed default the fetch
+    never brought over (unborn HEAD / changed mid-sync) must not ledger a
+    green sync whose clones would check out nothing."""
+    def script(args):
+        if args[:1] == ["ls-remote"]:
+            return GitResult(0, "ref: refs/heads/main\tHEAD\nabc\tHEAD\n", "")
+        if "rev-parse" in args:
+            return GitResult(1, "", "")
+        return None
+    cache, _, _ = _skill_cache(tmp_path, script=script)
+    st = run_coro(cache.sync_one("shelf"))
+    assert not st.ok
+    assert "no such branch" in st.detail
+
+
+def test_delete_mirror_pops_bookkeeping_even_without_a_dir(tmp_path):
+    """A card whose first sync failed before init holds a ledger row but no
+    mirror dir — removal must still drop it, or /health keeps a ghost
+    failing row for a nonexistent card until restart."""
+    from devcake.domain.repo_mirror import MirrorStatus
+    cache, _, _ = make_cache(tmp_path, [R1])
+    cache.ledger["alpha"] = MirrorStatus(ok=False, detail="init failed")
+    cache._synced_mono["alpha"] = 1.0
+    assert not cache.mirror_path("alpha").exists()
+    cache.delete_mirror("alpha")
+    assert "alpha" not in cache.ledger
+    assert "alpha" not in cache._synced_mono

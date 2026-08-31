@@ -24,6 +24,12 @@ from ..settings_bundle import (BundleError, dry_run_adapters,
 log = logging.getLogger("devcake")
 
 
+# Scopes whose cards own a name-keyed ADR-0024 mirror — the rename and
+# removal cleanups below must treat them identically or one path orphans
+# what the other migrates.
+_MIRRORED_SCOPES = ("repo", "skill")
+
+
 def _item_name(item) -> str:
     return item["name"] if isinstance(item, dict) else item.name
 
@@ -312,7 +318,7 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
             except Exception:  # noqa: BLE001 — best-effort: config change is APPLIED; orphan named in the log
                 log.exception("could not rename %s secrets %r → %r",
                               scope, old_name, new_name)
-            if scope == "repo" and repo_cache is not None:
+            if scope in _MIRRORED_SCOPES and repo_cache is not None:
                 try:
                     repo_cache.rename_mirror(old_name, new_name)
                 except Exception:  # noqa: BLE001 — best-effort; config applied
@@ -332,17 +338,26 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
             log.exception("post-rename adapter rebuild failed — renamed "
                           "instances may stay degraded until the next "
                           "config save or boot")
+    renamed_onto = {new_name
+                    for pairs in (skill_renames, pmo_renames, repo_renames)
+                    for _, new_name in pairs}
     for scope, name in removed:                  # only once the new config took
         try:
             secrets_store.delete_connection_instance(scope, name)
         except Exception:  # noqa: BLE001 — cleanup is best-effort: the config change is APPLIED; a failure must not 500 it (audit A21); orphan named in the log
             log.exception("could not delete stored secrets of removed "
                           "%s instance %r", scope, name)
-        if scope in ("repo", "skill") and repo_cache is not None:
+        if (scope in _MIRRORED_SCOPES and repo_cache is not None
+                and name not in renamed_onto):
             # ADR-0024: the removed card's mirror goes with it (same
             # best-effort contract as the secret deletion above). Skill
             # sources maintain a mirror under the same namespace as repo
-            # cards, so both scopes clean up here.
+            # cards, so both scopes clean up here. Never delete a name a
+            # rename just migrated ONTO in this same Save (remove skill X
+            # + rename repo Y→X would destroy Y's live mirror). A same-name
+            # same-scope card added later cold-clones by design: mirrors
+            # are name-keyed, and inheriting a removed card's freshness
+            # without a URL check is the riskier direction.
             try:
                 repo_cache.delete_mirror(name)
             except Exception:  # noqa: BLE001 — cleanup only; the config change is APPLIED

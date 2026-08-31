@@ -60,12 +60,17 @@ def sync_error_class(stderr: str) -> str:
 
 def _symref_head_branch(stdout: str) -> str:
     """Branch name from `ls-remote --symref <url> HEAD` output ("" when the
-    remote has no HEAD symref — an empty repository, or a server that omits
-    the capability). Only `refs/heads/*` counts: a detached or non-branch
-    HEAD cannot seed a mirror's HEAD."""
+    remote has no HEAD symref — an empty repository, a detached HEAD, or a
+    server that omits the capability). Only the line whose TARGET field is
+    exactly HEAD counts — a clone-shaped remote also advertises
+    `refs/remotes/origin/HEAD`, whose line merely ENDS with HEAD — and only
+    a `refs/heads/*` symref can seed a mirror's HEAD."""
     for line in (stdout or "").splitlines():
-        if line.startswith("ref: refs/heads/") and line.rstrip().endswith("HEAD"):
-            return line[len("ref: refs/heads/"):].split("\t", 1)[0].strip()
+        ref_part, _, target = line.partition("\t")
+        if target.strip() != "HEAD":
+            continue
+        if ref_part.startswith("ref: refs/heads/"):
+            return ref_part[len("ref: refs/heads/"):].strip()
     return ""
 
 
@@ -329,11 +334,15 @@ class RepoCache:
         # HEAD — load-bearing: a bare init defaults HEAD to main/master; a
         # wrong HEAD makes `git clone file://…` check out nothing
         branch = (inst.default_branch or "").strip()
-        if not branch:
+        probed = not branch
+        if probed:
             # The card contract is "empty branch = the repository's default"
             # (skill sources default to empty; SPA hint says so) — resolve it
             # from the remote's HEAD symref. Never write the empty ref: git
             # refuses `refs/heads/` and the sync would fail every cycle.
+            # Probed EVERY sync on purpose: caching the last answer would
+            # quietly turn "the repository's default" into "the default as
+            # of some earlier sync"; the RTT rides alongside the fetch's.
             r = await self.git(["ls-remote", "--symref", expected_url, "HEAD"],
                                env=env)
             if r.returncode != 0:
@@ -352,6 +361,19 @@ class RepoCache:
                             f"refs/heads/{branch}"], env=env)
         if r.returncode != 0:
             return await fail(f"symbolic-ref: {r.stderr}")
+        if probed:
+            # symbolic-ref succeeds on a DANGLING ref — a resolved branch
+            # the fetch never brought over (unborn HEAD advertisement, or
+            # the remote default changed between fetch and probe) must not
+            # ledger a green sync whose clones check out nothing
+            r = await self.git(["-C", str(p), "rev-parse", "--verify",
+                                "--quiet", f"refs/heads/{branch}^{{commit}}"])
+            if r.returncode != 0:
+                return await fail(
+                    f"default branch: the remote's HEAD names {branch!r} "
+                    f"but the fetch brought no such branch (unborn HEAD, "
+                    f"or it changed mid-sync) — retried next cycle; a "
+                    f"Branch on the card pins it")
 
         if self.config.repo_mirror.lfs:
             r = await self.git(["-C", str(p), "lfs", "fetch", "origin",
@@ -504,7 +526,13 @@ class RepoCache:
 
     def delete_mirror(self, name: str) -> None:
         """Best-effort removal (repo card deleted / re-init). Rename-aside
-        first so an in-flight Dev clone keeps its inode; then remove."""
+        first so an in-flight Dev clone keeps its inode; then remove.
+        Bookkeeping pops run even with NO on-disk dir: a card whose first
+        sync failed before init holds a ledger row too, and a removed card
+        must never keep a ghost /health entry until restart."""
+        self.ledger.pop(name, None)
+        self._synced_mono.pop(name, None)
+        self._locks.pop(name, None)
         p = self.mirror_path(name)
         if not p.exists():
             return
@@ -514,9 +542,6 @@ class RepoCache:
             shutil.rmtree(stale, ignore_errors=True)
         except OSError:
             log.exception("could not remove mirror %s", name)
-        self.ledger.pop(name, None)
-        self._synced_mono.pop(name, None)
-        self._locks.pop(name, None)
 
     def rename_mirror(self, old: str, new: str) -> None:
         """Migrate on-disk mirror + ledger key with a repo card rename.

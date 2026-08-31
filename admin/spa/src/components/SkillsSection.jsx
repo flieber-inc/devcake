@@ -386,6 +386,25 @@ export default function SkillsSection({ setPageErr, skillSources = [],
       setPageErr(`restoring built-ins failed: ${String(e.message || e)}`);
     }
   };
+  const fetchExternal = async () => {
+    try {
+      const res = await send("POST", "/skills/sources/refresh");
+      await loadSkills();
+      const failed = Object.entries(res?.failures || {});
+      if (failed.length) {
+        // honest badge: a failed fetch must never show a green ✓
+        setSkillsMsg("");
+        setPageErr("skill source fetch failed for " +
+          failed.map(([n, r]) => `${n} (${r})`).join("; "));
+        return;
+      }
+      setSkillsMsg("✓ external skills fetched");
+      clearTimeout(skillsMsgTimer.current);
+      skillsMsgTimer.current = setTimeout(() => setSkillsMsg(""), 4000);
+    } catch (e) {
+      setPageErr(`skill source fetch failed: ${String(e.message || e)}`);
+    }
+  };
   const [addSkill, setAddSkill] = useState(false);
   const [viewSkill, setViewSkill] = useState(null);
   // Remember deep-link intent across the async /skills load so we can open
@@ -421,33 +440,49 @@ export default function SkillsSection({ setPageErr, skillSources = [],
           <>
             <ImmediateBadge text="add/delete/restore apply immediately" />
             {skillsCatalog.store?.enabled && (
-            <>
-            <Button icon={Plus} onClick={() => setAddSkill(true)}>
-              Add skill
-            </Button>
-            {/* no html_url → the menu would hold a single item; DESIGN §3
-                says a lone action stays a visible ghost button instead */}
-            {skillsCatalog.store?.html_url ? (
-              <MoreMenu label="More skill-store actions" items={[
-                {
+              <Button icon={Plus} onClick={() => setAddSkill(true)}>
+                Add skill
+              </Button>
+            )}
+            {(() => {
+              // The catalog's secondary actions: store actions when the
+              // store is enabled, PLUS the external-source fetch whenever
+              // sources are connected (independent of the store — external
+              // rows render on store-disabled stacks too). DESIGN §3: a
+              // lone action stays a visible ghost button; 2+ fold into ⋯.
+              const items = [];
+              if (skillsCatalog.store?.enabled && skillsCatalog.store?.html_url) {
+                items.push({
                   label: "Open the store in Gitea",
                   desc: "Skills live in a Git repo — edit them there directly.",
                   external: true,
                   onClick: () => window.open(skillsCatalog.store.html_url, "_blank", "noopener"),
-                },
-                {
+                });
+              }
+              if (skillsCatalog.store?.enabled) {
+                items.push({
                   label: "Restore built-in skills",
                   desc: "Re-adds any missing bundled skills. Never overwrites your edits.",
                   onClick: restoreBuiltins,
-                },
-              ]} />
-            ) : (
-              <Button kind="ghost" onClick={restoreBuiltins}>
-                Restore built-in skills
-              </Button>
-            )}
-          </>
-            )}
+                });
+              }
+              if (skillSources.length) {
+                items.push({
+                  label: "Fetch skills from external sources",
+                  desc: "Re-syncs every connected skill source's mirror and reloads the catalog. The same fetch runs automatically before any run that uses them.",
+                  onClick: fetchExternal,
+                });
+              }
+              if (!items.length) return null;
+              if (items.length === 1) {
+                return (
+                  <Button kind="ghost" onClick={items[0].onClick}>
+                    {items[0].label}
+                  </Button>
+                );
+              }
+              return <MoreMenu label="More skill-store actions" items={items} />;
+            })()}
             <a href="#/skill-sources"
               className="text-xs font-medium text-accent-700 underline underline-offset-2 dark:text-accent-300">
               Skill sources

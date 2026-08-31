@@ -229,7 +229,7 @@ real EXECUTE: §9.
 ```bash
 # Clone the remote or fork you intend to run:
 git clone <this-repo-url> && cd devcake
-uv tool install .          # or: pipx install .  → console script `devcake`
+uv tool install devcake-cli   # from PyPI — or from this checkout: uv tool install .
 devcake doctor             # named preflight + one-time remedies (--json ok)
 devcake up --bake          # auto-inits .env secrets, DOCKER_GID, control plane + hello + baker
 # Later restarts (images already baked):  devcake up

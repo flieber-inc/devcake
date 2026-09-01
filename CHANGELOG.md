@@ -16,6 +16,21 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — `/health` 500 (SPA "Backend unreachable") and aborted poll
+  sweeps once an internal mission repo is registered.** Internal (zero-repo)
+  repos are synthesized with hyphenated names the operator-card pattern
+  forbids; their token read-throughs went to the secrets store, whose name
+  check raised — outside the branch-protection probe's try on `/health`,
+  and outside `refresh_health`, where the cycle guard then dropped whole
+  poll cycles whenever a breaker was latched. Such rows now carry a
+  runtime-only `RepoInstance.internal` flag (they store no connection
+  secrets, so the read-throughs answer `""`), the branch-protection walk
+  skips them (an unactionable advisory) and maps any per-repo failure to
+  `None` (docs/15 §7 probe contract). A breaker latched on an internal repo
+  by a Dev-side `DEV_FORGE_AUTH` is no longer keyed on a row credential
+  field (there is none): it re-probes on the registered service-token
+  adapter and clears on ok instead of sticking until restart.
+
 ## v0.5.1 (2026-08-31)
 
 Patch release in the v0.5 "Java Lava" line.

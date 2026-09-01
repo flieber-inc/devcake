@@ -22,6 +22,7 @@ def _forge_runtime(*, last_full_probe_at=None, health=None, forges=None):
         health=health if health is not None else {},
         breakers={},
         forges=forges if forges is not None else {},
+        internal=set(),
         last_full_probe_at=last_full_probe_at,
         instance=lambda name: None,
     )
@@ -220,7 +221,7 @@ def test_branch_protection_probes_concurrently(monkeypatch):
 
     inst = SimpleNamespace(reference_only=False, default_branch="main")
     fr = SimpleNamespace(forges={f"r{i}": _Forge() for i in range(3)},
-                         instance=lambda name: inst)
+                         instance=lambda name: inst, internal=set())
     health_mod.reset_health_caches()
     out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
     assert out == {f"r{i}": {"rendezvous": True} for i in range(3)}
@@ -437,3 +438,64 @@ def test_redis_connect_env_is_shared_chokepoint(monkeypatch):
     services_src = services_path.read_text()
     assert "redis_connect_env" in health_src
     assert "redis_connect_env" in services_src
+
+
+def test_branch_protection_skips_internal_repos():
+    """Internal mission repos (ForgeRuntime.internal) are not operator work
+    cards: nobody watches the internal Gitea and apply-protection walks
+    config.repos only, so the unprotected-default-branch advisory would be
+    unactionable noise. Their rows are the real model_construct'd shape
+    (hyphenated name, `internal`), so a regression that consults the row
+    before the skip surfaces here too."""
+    from devcake.config import RepoInstance
+
+    class _Prot:
+        def model_dump(self):
+            return {"protected": False}
+
+    class _Forge:
+        async def default_branch_protection(self, branch):
+            return _Prot()
+
+    internal_name = "devcakeinternal-cs-22"
+    internal = RepoInstance.model_construct(
+        name=internal_name, forge="gitea", url="http://gitea/o/r.git",
+        default_branch="main", api_base=None, auto_merge=True,
+        auto_resolve_merge_conflicts=True, merge_retry_window_minutes=30,
+        _internal=True)
+    work = SimpleNamespace(reference_only=False, default_branch="main")
+    insts = {internal_name: internal, "work": work}
+    fr = SimpleNamespace(forges={"work": _Forge(), internal_name: _Forge()},
+                         instance=insts.get, internal={internal_name})
+    health_mod.reset_health_caches()
+    try:
+        out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
+    finally:
+        health_mod.reset_health_caches()
+    assert out == {"work": {"protected": False}}
+
+
+def test_branch_protection_maps_row_lookup_errors_to_none():
+    """Probe contract (docs/15 §7): whatever fails for one repo — here the
+    row's own secret read-through raising — that repo maps to None and
+    /health never 500s. Before this, the reference-only check sat outside
+    the probe's try and one bad row 500'd the whole payload."""
+    class _Forge:
+        async def default_branch_protection(self, branch):
+            raise AssertionError("must not be reached")
+
+    class _Inst:
+        default_branch = "main"
+
+        @property
+        def reference_only(self):
+            raise ValueError("invalid connection instance 'bad-name'")
+
+    fr = SimpleNamespace(forges={"bad": _Forge()}, instance=lambda n: _Inst(),
+                         internal=set())
+    health_mod.reset_health_caches()
+    try:
+        out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
+    finally:
+        health_mod.reset_health_caches()
+    assert out == {"bad": None}

@@ -28,7 +28,7 @@ def _internal_inst(name):
         name=name, forge="gitea", url=f"http://gitea:3300/devcake-internal/{name}.git",
         default_branch="main", api_base=None,
         auto_merge=True, auto_resolve_merge_conflicts=True,
-        merge_retry_window_minutes=30)
+        merge_retry_window_minutes=30, _internal=True)
 
 
 def test_rebuild_preserves_internal_registrations():
@@ -496,3 +496,92 @@ def test_token_ro_latch_stays_when_read_probe_unreadable(
     assert data["ok"] is False
     assert "nb" in rt.breakers
     assert rt.breaker_fields["nb"] == "token_ro"
+
+
+def test_refresh_all_probes_internal_repos_on_the_registered_adapter():
+    """An internal mission repo rides the full sweep like any registered
+    repo — on its app-side adapter, with no credential field, because its
+    row stores no connection secrets. Before `RepoInstance.internal` the
+    sweep raised out of the secrets name check on the hyphenated name, and
+    the cycle guard then dropped the WHOLE poll cycle whenever a breaker was
+    latched (or no full sweep had landed yet)."""
+    name = "devcakeinternal-cs-22"
+
+    class _Forge:
+        async def health_probe(self):
+            return ForgeHealth(ok=True, repository=f"devcake-internal/{name}",
+                               can_push=True, can_read=True)
+
+    rt = ForgeRuntime()
+    rt.register_internal(name, _internal_inst(name), _Forge())
+    health = run_coro(rt.refresh_all())
+    assert health[name]["ok"] is True
+    assert "credential_field" not in health[name]
+    assert rt.last_full_probe_at is not None
+    assert name not in rt.breakers
+
+
+def test_latched_internal_repo_reprobes_and_clears_on_the_registered_adapter():
+    """A definitive failure on an internal repo latches like any other
+    (schedule gate), and the per-cycle re-probe stays on the registered
+    adapter — there is no RepoInstance secret to re-key the probe on — so a
+    healed repo clears without a restart."""
+    name = "devcakeinternal-cs-22"
+    healed = {"now": False}
+
+    class _Forge:
+        async def health_probe(self):
+            if healed["now"]:
+                return ForgeHealth(ok=True, repository="x", can_push=True,
+                                   can_read=True)
+            return ForgeHealth(ok=False, repository="x", can_push=False,
+                               can_read=False,
+                               detail="repository access failed (HTTP 404)")
+
+    rt = ForgeRuntime()
+    rt.register_internal(name, _internal_inst(name), _Forge())
+    run_coro(rt.refresh_all())
+    assert name in rt.breakers
+    healed["now"] = True
+    run_coro(rt.refresh_all())
+    assert name not in rt.breakers
+
+
+def test_latched_internal_repo_heals_on_its_registered_adapter_not_a_row_secret():
+    """finalize latches an internal work repo keyed on "token" after a
+    Dev-side DEV_FORGE_AUTH. An internal row has no RepoInstance secret to
+    re-key the probe on — its Dev pair is minted by the internal forge and
+    the registered adapter carries the service token — so the re-probe must
+    stay on the registered adapter and an ok must clear the latch. Otherwise
+    the factory builds a field-keyed adapter with an EMPTY token, every
+    probe fails, and the mission stays gated until a restart."""
+    name = "devcakeinternal-cs-22"
+    factory_calls: list = []
+
+    class _Forge:
+        def __init__(self, ok: bool):
+            self.ok = ok
+
+        async def health_probe(self):
+            if self.ok:
+                return ForgeHealth(ok=True, repository="x", can_push=True,
+                                   can_read=True)
+            return ForgeHealth(ok=False, repository="x", can_push=False,
+                               can_read=False, detail="HTTP 401")
+
+    def make_forge(inst, credential_field=None):
+        # mirrors adapters.registry.make_forge: an adapter keyed on a field
+        # authenticates with THAT row secret — empty for an internal row
+        factory_calls.append(credential_field)
+        tok = inst.token if credential_field == "token" else inst.token_ro
+        return _Forge(ok=bool(tok))
+
+    rt = ForgeRuntime()
+    rt.rebuild([], make_forge)
+    rt.register_internal(name, _internal_inst(name), _Forge(ok=True))
+    rt.latch(name, "repository credential rejected in RUN-1",
+             credential_field="token")
+    assert name in rt.breakers
+    run_coro(rt.refresh_all())
+    assert name not in rt.breakers
+    assert factory_calls == []

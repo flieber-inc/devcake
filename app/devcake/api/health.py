@@ -91,19 +91,25 @@ async def _branch_protection(forge_runtime) -> dict:
         out: dict = {}
 
         async def _probe(name: str, f) -> None:
-            inst = forge_runtime.instance(name)
-            # reference-only repos: DevCake never pushes or merges there, so
-            # the unprotected-default-branch advisory would be pure noise
-            if inst is not None and inst.reference_only:
+            # internal mission repos (ForgeRuntime.internal) are not operator
+            # work cards — nobody watches the internal Gitea and apply-
+            # protection walks config.repos only — so the advisory would be
+            # unactionable noise; skipped before the row is even consulted
+            if name in forge_runtime.internal:
                 return
-            async with sem:
-                try:
+            try:
+                inst = forge_runtime.instance(name)
+                # reference-only repos: DevCake never pushes or merges there, so
+                # the unprotected-default-branch advisory would be pure noise
+                if inst is not None and inst.reference_only:
+                    return
+                async with sem:
                     async with asyncio.timeout(_PROTECTION_PROBE_TIMEOUT):
                         prot = await f.default_branch_protection(
                             inst.default_branch if inst else "main")
                     out[name] = prot.model_dump() if prot else None
-                except Exception:  # noqa: BLE001 — probe contract: failure/timeout → None (advisory omitted); /health must never 500
-                    out[name] = None
+            except Exception:  # noqa: BLE001 — probe contract: any per-repo failure (row lookup, timeout, forge) → None (advisory omitted); /health must never 500
+                out[name] = None
 
         await asyncio.gather(*(_probe(n, f)
                                for n, f in list(forge_runtime.forges.items())))

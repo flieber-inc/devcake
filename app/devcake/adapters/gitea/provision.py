@@ -733,10 +733,13 @@ class GiteaProvisioner:
         mission's Dev write token (write:repository only → issue-scope 403s;
         review finding #1) — the mission's pair is the Dev's, via runspec.
         model_construct: internal repo names carry hyphens / exceed the
-        operator-name pattern by design — synthesized, not input. Always
-        auto-merge: the zip deliverable only posts after merge, and no human
-        watches the internal Gitea (operators wanting doctrine control
-        create the repo as a config card instead — ADR-0020)."""
+        operator-name pattern by design — synthesized, not input — and the
+        row is flagged `internal`: it stores no connection secrets, so the
+        token read-throughs answer "" rather than raising out of the secrets
+        name check (/health, the forge sweep). Always auto-merge: the zip
+        deliverable only posts after merge, and no human watches the internal
+        Gitea (operators wanting doctrine control create the repo as a config
+        card instead — ADR-0020)."""
         from ...config import RepoInstance
         from ..registry import make_gitea_adapter   # keeps redaction registration
         svc = self.service_tokens() or {}
@@ -746,5 +749,5 @@ class GiteaProvisioner:
             name=creds.repo_name, forge="gitea", url=creds.clone_url,
             default_branch="main", api_base=None,
             auto_merge=True, auto_resolve_merge_conflicts=True,
-            merge_retry_window_minutes=30)
+            merge_retry_window_minutes=30, _internal=True)
         return inst, adapter

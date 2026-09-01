@@ -212,6 +212,15 @@ class ForgeRuntime:
         if name not in self.forges:
             log.warning("breaker latch for unregistered repo %s dropped", name)
             return
+        inst = self.instances.get(name)
+        if credential_field is not None and inst is not None and inst.internal:
+            # An internal row stores no RepoInstance secret to heal on — its
+            # Dev pair is minted by the internal forge and the registered
+            # adapter carries the service token. A field-keyed latch would
+            # re-probe on a factory adapter with an EMPTY token and never
+            # clear; unkeyed, the per-cycle service-token probe clears it and
+            # the next dispatch remints the pair.
+            credential_field = None
         if name not in self.breakers:
             from ..security import redact
             log.error("forge breaker LATCHED for repo %s: %s", name, reason)

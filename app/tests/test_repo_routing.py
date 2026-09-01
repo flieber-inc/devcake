@@ -1121,3 +1121,7 @@ def test_gitea_mission_repo_binding_row(monkeypatch):
     assert inst.auto_resolve_merge_conflicts is True
     assert inst.merge_retry_window_minutes == 30
     assert adapter is not None and hasattr(adapter, "merge")
+    # the row stores no connection secrets (config.RepoInstance.internal):
+    # the hyphenated name would otherwise raise in the secrets name check
+    assert inst.internal is True
+    assert inst.token == "" and inst.token_ro == ""

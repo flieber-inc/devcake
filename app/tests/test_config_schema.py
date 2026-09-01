@@ -1013,3 +1013,37 @@ def test_skill_source_url_and_forge_match_repo_instance():
     assert SkillSource(name="shelf", url="").url == ""
     assert SkillSource(name="shelf",
                        url="https://github.com/o/skills").configured
+
+
+def test_internal_repo_instance_stores_no_connection_secrets():
+    """An internal (zero-repo) mission repo row (ADR-0010) is synthesized via
+    model_construct with a hyphenated name the operator-card pattern forbids.
+    It stores no connection secrets — the app-side adapter carries the
+    service token and the mission's Dev pair rides the runspec — so the token
+    read-throughs answer "" without consulting the secrets store, whose
+    instance-name check raises on the hyphen (the 500 on /health)."""
+    inst = RepoInstance.model_construct(
+        name="devcakeinternal-cs-22", forge="gitea",
+        url="http://gitea:3000/devcake-internal/devcakeinternal-cs-22.git",
+        default_branch="main", api_base=None, auto_merge=True,
+        auto_resolve_merge_conflicts=True, merge_retry_window_minutes=30,
+        _internal=True)
+    assert inst.internal is True
+    assert inst.token == ""
+    assert inst.token_ro == ""
+    assert inst.reviewer_token == ""
+    assert inst.reference_only is False
+
+
+def test_internal_flag_is_never_operator_input():
+    """`internal` is runtime-only: a stray key on an incoming row is ignored,
+    not refused (ADR-0030 `managed` precedent) — a config card cannot opt
+    into it — and it never rides a dump into config, a bundle, or the SPA
+    card scaffold (which is derived from model_fields)."""
+    card = RepoInstance(name="main", url="https://github.com/o/r",
+                        internal=True, _internal=True)
+    assert card.internal is False
+    assert "internal" not in card.model_dump()
+    assert "internal" not in card.model_dump(mode="json")
+    assert "internal" not in RepoInstance.model_fields
+    assert "_internal" not in RepoInstance.model_fields

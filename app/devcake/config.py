@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 log = logging.getLogger("devcake.config")
 
@@ -298,6 +298,19 @@ class RepoInstance(BaseModel):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
     # name. An optional read-only token for non-EXECUTE stages; when absent,
     # every stage receives the WRITE token — /health warns.
+    #
+    # Internal (zero-repo) mission repos (ADR-0010) are synthesized rows, not
+    # cards: model_construct'd by the internal forge with hyphenated names the
+    # card pattern above forbids, registered at runtime, never in
+    # config.repos. They store NO connection secrets — the app-side adapter
+    # carries the service token and the mission's Dev pair rides the runspec
+    # — so the read-throughs answer "" instead of asking the secrets store,
+    # whose instance-name check raises on the hyphen (the /health 500 and
+    # the aborted poll sweep, 2026-09). A PRIVATE attribute, not a field:
+    # never parsed from input, never in a dump, a schema, or the SPA card
+    # scaffold (model_fields, gen_spa_contracts) — only the internal forge's
+    # model_construct(_internal=True) sets it; read it via `internal`.
+    _internal: bool = PrivateAttr(default=False)
 
     @field_validator("forge")
     @classmethod
@@ -329,19 +342,27 @@ class RepoInstance(BaseModel):
         return bool(self.url.strip())
 
     @property
-    def token(self) -> str:
+    def internal(self) -> bool:
+        """Synthesized internal mission repo row (ADR-0010) — see _internal."""
+        return self._internal
+
+    def _connection_secret(self, field: str) -> str:
+        if self.internal:      # synthesized row — no connection secrets stored
+            return ""
         from . import secrets
-        return secrets.read_connection_secret("repo", self.name, "token")
+        return secrets.read_connection_secret("repo", self.name, field)
+
+    @property
+    def token(self) -> str:
+        return self._connection_secret("token")
 
     @property
     def token_ro(self) -> str:
-        from . import secrets
-        return secrets.read_connection_secret("repo", self.name, "token_ro")
+        return self._connection_secret("token_ro")
 
     @property
     def reviewer_token(self) -> str:
-        from . import secrets
-        return secrets.read_connection_secret("repo", self.name, "reviewer_token")
+        return self._connection_secret("reviewer_token")
 
     @property
     def reference_only(self) -> bool:

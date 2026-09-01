@@ -94,8 +94,51 @@ devcake_baker_launchd_available() {
   return 0
 }
 
-# Stop a prior flock-respawn supervisor (if any) so it cannot race a native
-# systemd/launchd install. Best-effort — missing pidfile is fine.
+# A pid is "alive" for handoff purposes only while it can still hold locks
+# and pidfiles: a zombie (exited, unreaped) cannot, so it counts as gone.
+# Usage: devcake_baker_pid_alive <pid>
+devcake_baker_pid_alive() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r "/proc/${pid}/status" ]] \
+      && grep -q '^State:[[:space:]]*Z' "/proc/${pid}/status" 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+# Wait for a pid we just signalled to actually exit. The handoff must never
+# race a predecessor still releasing its lock or pidfile: on 2026-09-01 a
+# fixed 0.3s sleep launched the successor supervisor into a lock the
+# stopped one's orphans still held, and `devcake up` left the baker dead.
+# Past the budget (integer seconds; DEVCAKE_BAKER_EXIT_WAIT, default 5)
+# escalate to SIGKILL and confirm. Returns 1 only if it survived even that.
+# Usage: devcake_baker_wait_exit <pid> [seconds]
+devcake_baker_wait_exit() {
+  local pid="$1" seconds="${2:-${DEVCAKE_BAKER_EXIT_WAIT:-5}}" ticks=0 budget
+  budget=$((seconds * 10))
+  while devcake_baker_pid_alive "$pid"; do
+    if [[ "$ticks" -ge "$budget" ]]; then
+      echo "── pid ${pid} did not exit within ${seconds}s of SIGTERM — sending SIGKILL" >&2
+      kill -9 "$pid" 2>/dev/null || true
+      for ticks in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 0.1
+        devcake_baker_pid_alive "$pid" || return 0
+      done
+      return 1
+    fi
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  return 0
+}
+
+# Stop the degraded respawn supervisor (if its pidfile names a live one) and
+# WAIT for it to exit — it holds the respawn lock. Runs before a native
+# systemd/launchd install, and first thing in `devcake up` (before the baker
+# is killed) so the loop cannot respawn into the handoff. Best-effort — a
+# missing pidfile is fine.
+# Usage: devcake_baker_stop_respawn_supervisor <factory_dir>
 devcake_baker_stop_respawn_supervisor() {
   local factory_dir="$1"
   local respawn_pidfile="${factory_dir}/watch.respawn.pid"
@@ -103,9 +146,10 @@ devcake_baker_stop_respawn_supervisor() {
   [[ -f "$respawn_pidfile" ]] || return 0
   old="$(cat "$respawn_pidfile" 2>/dev/null || true)"
   if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
-    echo "── stopping degraded respawn supervisor (pid ${old}) before native install"
+    echo "── stopping degraded respawn supervisor (pid ${old}) before handoff"
     kill "$old" 2>/dev/null || true
-    sleep 0.3
+    devcake_baker_wait_exit "$old" \
+      || echo "── respawn supervisor ${old} survived SIGKILL — continuing" >&2
   fi
   rm -f "$respawn_pidfile"
 }
@@ -347,14 +391,16 @@ devcake_baker_respawn_install() {
   mkdir -p "$factory_dir" || return 1
   devcake_baker_write_env_file "$factory_dir" "$logfile" || return 1
 
-  # Stop a prior respawn supervisor if we know its pid.
+  # Stop a prior respawn supervisor if we know its pid — and wait for it:
+  # it holds the lock the successor needs (2026-09-01 handoff failure).
   respawn_pidfile="${factory_dir}/watch.respawn.pid"
   if [[ -f "$respawn_pidfile" ]]; then
     old="$(cat "$respawn_pidfile" 2>/dev/null || true)"
     if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
       echo "── restarting degraded respawn supervisor (was pid ${old})"
       kill "$old" 2>/dev/null || true
-      sleep 0.3
+      devcake_baker_wait_exit "$old" \
+        || echo "── respawn supervisor ${old} survived SIGKILL — continuing" >&2
     fi
     rm -f "$respawn_pidfile"
   fi
@@ -526,6 +572,7 @@ devcake_baker_displace_orphans() {
   else
     reason="pre-supervisor sweep"
   fi
+  local killed=""
   while read -r pid age; do
     [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || continue
     [[ "$pid" == "$self" ]] && continue
@@ -533,8 +580,14 @@ devcake_baker_displace_orphans() {
     [[ -n "$age" ]] || age="unknown"
     echo "── displacing leftover host baker (pid ${pid}, age ${age}) — ${reason}"
     kill "$pid" 2>/dev/null || true
+    killed="${killed} ${pid}"
   done < <(devcake_baker_list_factory_bakers "$factory_dir" || true)
-  sleep 0.3
+  # waited, not slept: a displaced baker still holds watch.lock until it is
+  # gone, and the successor's baker would bounce off it
+  for pid in $killed; do
+    devcake_baker_wait_exit "$pid" \
+      || echo "── leftover baker ${pid} survived SIGKILL — continuing" >&2
+  done
 }
 
 # Prepare the baker pidfile for a new launch:
@@ -551,7 +604,8 @@ devcake_baker_prepare_pidfile() {
   if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
     echo "── restarting host baker (was pid ${old})"
     kill "$old" 2>/dev/null || true
-    sleep 0.3
+    devcake_baker_wait_exit "$old" \
+      || echo "── host baker ${old} survived SIGKILL — continuing" >&2
     return 0
   fi
   if [[ -n "$old" ]]; then

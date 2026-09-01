@@ -30,8 +30,13 @@ mkdir -p "$FACTORY_DIR"
 : >>"$LOGFILE"
 
 # Exclusive supervisor lock (Linux flock(1); this path is Linux-without-systemd).
+# Bounded wait, not -n: the predecessor `devcake up` just stopped may still be
+# releasing this lock for a moment; only a lock that STAYS held is a second
+# supervisor. The fd is closed for every child below (9>&-): neither the baker
+# nor the backoff sleep may inherit the lock, or a stopped supervisor's orphans
+# would block its successor (the 2026-09-01 handoff failure).
 exec 9>"$LOCKFILE"
-if ! flock -n 9; then
+if ! flock -w "${DEVCAKE_RESPAWN_LOCK_WAIT:-10}" 9; then
   echo "devcake baker-respawn: another respawn supervisor holds ${LOCKFILE} — exiting" >&2
   exit 0
 fi
@@ -53,7 +58,7 @@ BACKOFF=2
 echo "devcake baker-respawn: supervising baker (repo=${REPO})" >>"$LOGFILE"
 while true; do
   echo "devcake baker-respawn: starting ${BAKER_EXEC}" >>"$LOGFILE"
-  ${BAKER_EXEC} >>"$LOGFILE" 2>&1 &
+  ${BAKER_EXEC} >>"$LOGFILE" 2>&1 9>&- &
   baker_pid=$!
   printf '%s\n' "$baker_pid" >"$PIDFILE"
   set +e
@@ -61,7 +66,7 @@ while true; do
   rc=$?
   set -e
   echo "devcake baker-respawn: baker exited rc=${rc}; restarting in ${BACKOFF}s" >>"$LOGFILE"
-  sleep "$BACKOFF"
+  sleep "$BACKOFF" 9>&-
   if [[ "$BACKOFF" -lt 30 ]]; then
     BACKOFF=$((BACKOFF * 2))
     [[ "$BACKOFF" -gt 30 ]] && BACKOFF=30

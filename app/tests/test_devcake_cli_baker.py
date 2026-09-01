@@ -175,3 +175,121 @@ def test_cmdline_matcher_accepts_legacy_and_cli_entries(tmp_path):
     )
     assert result.returncode == 0, result.stderr + result.stdout
     assert "OK" in result.stdout
+
+
+# ── degraded (flock respawn) supervisor handoff ─────────────────────────────
+# 2026-09-01: `devcake up` on WSL2 left the host baker dead. The old loop's
+# lock fd was inherited by its children (the baker, the backoff sleep), so a
+# stopped supervisor's orphans kept the lock; the install slept a fixed 0.3s
+# and the new supervisor gave up on a busy lock at once ("died at launch").
+# Seams: scripts/lib/baker_respawn.sh (the loop) and the baker_host.sh
+# install / stop functions `devcake up` runs. Real processes, no docker.
+
+
+def _factory_sandbox(tmp_path: Path) -> dict[str, Path]:
+    """Throwaway repo layout for the supervisor scripts: `scripts/` links to
+    the real tree, `.factory/` is empty, and a `devcake` on PATH whose
+    `baker run` idles until SIGTERM (no conveyor, no docker)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "scripts").symlink_to(_scripts_root(), target_is_directory=True)
+    factory = repo / ".factory"
+    factory.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "devcake"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        '[[ "${1:-} ${2:-}" == "baker run" ]] || exit 64\n'
+        "echo fake-baker: up\n"
+        "trap 'exit 0' TERM\n"
+        "while :; do sleep 0.2; done\n"
+    )
+    fake.chmod(0o700)
+    return {"repo": repo, "factory": factory, "bin": bin_dir,
+            "log": factory / "watch.log", "pidfile": factory / "watch.pid"}
+
+
+def _run_driver(tmp_path: Path, sandbox: dict[str, Path], body: str):
+    driver = tmp_path / "driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -uo pipefail\n"
+        f'export PATH="{sandbox["bin"]}:$PATH"\n'
+        f'source "{_baker_host_sh_path()}"\n'
+        f'REPO="{sandbox["repo"]}"; FACTORY="{sandbox["factory"]}"\n'
+        f'LOG="{sandbox["log"]}"; PIDFILE="{sandbox["pidfile"]}"\n'
+        'LOCK="$FACTORY/watch.respawn.lock"\n'
+        # a live baker pid in the pidfile, or failure after ~6s
+        "wait_baker() { local i b; for i in $(seq 1 60); do sleep 0.1;\n"
+        '  b="$(cat "$PIDFILE" 2>/dev/null || true)";\n'
+        '  [[ -n "$b" ]] && kill -0 "$b" 2>/dev/null && { echo "$b"; return 0; }; done; return 1; }\n'
+        + body
+    )
+    driver.chmod(0o700)
+    return subprocess.run(["bash", str(driver)], capture_output=True,
+                          text=True, cwd=str(tmp_path), timeout=90)
+
+
+def test_respawn_lock_is_not_inherited_by_the_baker_child(tmp_path):
+    """The supervisor's lock must die with the supervisor: with the baker
+    still running as an orphan, the lock is free for a successor."""
+    sb = _factory_sandbox(tmp_path)
+    result = _run_driver(tmp_path, sb, (
+        'bash "$REPO/scripts/lib/baker_respawn.sh" "$REPO" "$FACTORY" "$LOG" "$PIDFILE" >>"$LOG" 2>&1 &\n'
+        "sup=$!\n"
+        'baker="$(wait_baker)" || { echo NO_BAKER; cat "$LOG"; exit 1; }\n'
+        'kill -9 "$sup"; sleep 0.3\n'
+        'kill -0 "$baker" 2>/dev/null || { echo BAKER_DIED_WITH_SUPERVISOR; exit 1; }\n'
+        'if flock -n "$LOCK" true; then echo LOCK_FREE; else echo LOCK_HELD; fi\n'
+        'kill "$baker" 2>/dev/null; true\n'
+    ))
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "LOCK_FREE" in result.stdout, result.stdout
+
+
+def test_respawn_install_outlasts_a_predecessor_still_releasing_the_lock(tmp_path):
+    """`devcake up` stops the previous supervisor and launches a successor.
+    A predecessor may keep its lock for a moment after SIGTERM (winding
+    down); the install must wait for it to exit rather than launch into the
+    held lock and report the successor dead at launch."""
+    sb = _factory_sandbox(tmp_path)
+    result = _run_driver(tmp_path, sb, (
+        # predecessor: holds the lock, exits ~1.4s after SIGTERM
+        "bash -c 'exec 9>\"$1\"; flock 9; trap \"sleep 1.2; exit 0\" TERM; "
+        "while :; do sleep 0.2; done' _ \"$LOCK\" &\n"
+        "old=$!\n"
+        'echo "$old" >"$FACTORY/watch.respawn.pid"\n'
+        "sleep 0.4\n"
+        'flock -n "$LOCK" true && { echo PREDECESSOR_NOT_HOLDING; exit 1; }\n'
+        'if devcake_baker_respawn_install "$REPO" "$FACTORY" "$LOG" "$PIDFILE"; then '
+        "echo INSTALL_OK; else echo INSTALL_FAILED; fi\n"
+        'kill -0 "$old" 2>/dev/null && echo PREDECESSOR_STILL_ALIVE\n'
+        'sup="$(cat "$FACTORY/watch.respawn.pid" 2>/dev/null || true)"; '
+        'b="$(cat "$PIDFILE" 2>/dev/null || true)"\n'
+        'kill "$sup" 2>/dev/null; sleep 0.2; kill "$b" "$old" 2>/dev/null; true\n'
+    ))
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "INSTALL_OK" in result.stdout, result.stdout + result.stderr
+    assert "supervised by flock respawn loop" in result.stdout, result.stdout
+    assert "PREDECESSOR_STILL_ALIVE" not in result.stdout, result.stdout
+
+
+def test_stop_respawn_supervisor_escalates_when_sigterm_is_ignored(tmp_path):
+    """Stopping a supervisor that ignores SIGTERM must still end with it
+    gone (SIGKILL past the wait budget) and its pidfile removed — the
+    handoff never proceeds against a predecessor that is still alive."""
+    sb = _factory_sandbox(tmp_path)
+    result = _run_driver(tmp_path, sb, (
+        "bash -c 'trap \"\" TERM; while :; do sleep 0.2; done' &\n"
+        "old=$!\n"
+        'echo "$old" >"$FACTORY/watch.respawn.pid"\n'
+        "sleep 0.2\n"
+        'DEVCAKE_BAKER_EXIT_WAIT=1 devcake_baker_stop_respawn_supervisor "$FACTORY"\n'
+        "sleep 0.2\n"
+        'if kill -0 "$old" 2>/dev/null; then echo STILL_ALIVE; kill -9 "$old"; else echo GONE; fi\n'
+        '[[ -f "$FACTORY/watch.respawn.pid" ]] && echo PIDFILE_LEFT; true\n'
+    ))
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "GONE" in result.stdout, result.stdout + result.stderr
+    assert "PIDFILE_LEFT" not in result.stdout, result.stdout

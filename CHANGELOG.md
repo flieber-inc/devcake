@@ -16,6 +16,44 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.1 (2026-08-31)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.1).
+
+- **Fixed — skill-source mirror lifecycle** (#373). A skill source with an
+  empty Branch field failed every sync (`symbolic-ref` refuses the empty
+  ref) despite the card promising "empty = the repository's default": the
+  sync now resolves the remote's HEAD symref (anchored on the exact HEAD
+  target line, verified to exist post-fetch; probe errors keep their own
+  stderr so auth failures latch the breaker). Skill-source removals AND
+  renames now handle the mirror like repo cards, a rename target is never
+  deleted by a same-Save removal, and `default_branch` normalizes at the
+  model — a repo card refuses an empty branch outright (its value feeds
+  the container env and merge prompts), so empty-means-default stays a
+  skill-source-only contract.
+- **New — repo-backed skill sources** (#374,
+  [ADR-0039](docs/adr/0039-repo-backed-skill-sources.md)). A skill source
+  may declare `backed_by: <repo card>` instead of a URL: no mirror, no
+  sync, no token of its own — reads serve from the backing card's mirror,
+  freshness rides that card's sync in the one dispatch gate (shared by the
+  steward gate), and the connection probe delegates to that card while
+  honoring the source's own branch pin. Sharing is declared config data,
+  never runtime URL inference; the backing card must be configured, is
+  refused deletion while cited, and follows renames.
+- **New — token copy between connections** (#375). "Copy tokens between
+  connections…" behind the ⋯ menu on the Repositories and PMO pages: one
+  card's stored tokens land on selected siblings slot for slot (write /
+  read-only / reviewer), families are same forge **and same host**, a
+  repo's write token can seed that host's `*_issues` board key, and the
+  target list renders from a server `dry_run` — values never ride a
+  request or response, and one `secrets_copied` audit event records names
+  only.
+- **New — fetch external skills from the catalog** (#376). The Fleet →
+  Skills ⋯ menu gains "Fetch skills from external sources", sharing the
+  refresh chokepoint with Skill sources' "Update now" — per-source failure
+  reasons, never a green ✓ over a failed fetch.
+
 ## v0.5.0 "Java Lava" (2026-08-31)
 
 First release in the v0.5 "Java Lava" line.

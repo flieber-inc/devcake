@@ -979,7 +979,11 @@ def test_baker_host_restarts_live_pid(tmp_path):
     killed = tmp_path / "killed"
     result = _run_baker_host_driver(tmp_path, f"""
 kill() {{
-  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  # alive until signalled — the handoff waits for each pid to exit
+  if [[ "${{1:-}}" == "-0" ]]; then
+    grep -qx -- "${{2:-}}" "{killed}" 2>/dev/null && return 1
+    return 0
+  fi
   echo "$1" >> "{killed}"
   return 0
 }}
@@ -1002,7 +1006,11 @@ def test_baker_host_displace_orphans_kills_foreign_spares_keep_pid(tmp_path):
     killed = tmp_path / "killed"
     result = _run_baker_host_driver(tmp_path, f"""
 kill() {{
-  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  # alive until signalled — the handoff waits for each pid to exit
+  if [[ "${{1:-}}" == "-0" ]]; then
+    grep -qx -- "${{2:-}}" "{killed}" 2>/dev/null && return 1
+    return 0
+  fi
   echo "$1" >> "{killed}"
   return 0
 }}
@@ -1031,7 +1039,11 @@ def test_baker_host_displace_orphans_kills_all_without_keep_pid(tmp_path):
     killed = tmp_path / "killed"
     result = _run_baker_host_driver(tmp_path, f"""
 kill() {{
-  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  # alive until signalled — the handoff waits for each pid to exit
+  if [[ "${{1:-}}" == "-0" ]]; then
+    grep -qx -- "${{2:-}}" "{killed}" 2>/dev/null && return 1
+    return 0
+  fi
   echo "$1" >> "{killed}"
   return 0
 }}
@@ -1058,7 +1070,11 @@ def test_baker_host_displace_orphans_never_kills_self(tmp_path):
     killed = tmp_path / "killed"
     result = _run_baker_host_driver(tmp_path, f"""
 kill() {{
-  if [[ "${{1:-}}" == "-0" ]]; then return 0; fi
+  # alive until signalled — the handoff waits for each pid to exit
+  if [[ "${{1:-}}" == "-0" ]]; then
+    grep -qx -- "${{2:-}}" "{killed}" 2>/dev/null && return 1
+    return 0
+  fi
   echo "$1" >> "{killed}"
   return 0
 }}

@@ -536,10 +536,14 @@ def _start_baker(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
     env["DEVCAKE_FACTORY_DIR"] = str(factory)
     env["DEVCAKE_FACTORY_LOG"] = str(logfile)
 
-    # prepare pidfile + displace via baker_host.sh chokepoint
+    # prepare pidfile + displace via baker_host.sh chokepoint. Order matters:
+    # a degraded respawn supervisor goes FIRST (and is waited for), or it
+    # respawns the baker we are about to kill straight into the handoff and
+    # its orphans hold the respawn lock the successor needs (2026-09-01).
     prep = f"""
 set -euo pipefail
 source "{repo / "scripts/lib/baker_host.sh"}"
+devcake_baker_stop_respawn_supervisor {factory.as_posix()!r}
 devcake_baker_prepare_pidfile {pidfile.as_posix()!r}
 devcake_baker_displace_orphans {factory.as_posix()!r}
 """

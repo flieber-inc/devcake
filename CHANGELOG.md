@@ -30,6 +30,15 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   by a Dev-side `DEV_FORGE_AUTH` is no longer keyed on a row credential
   field (there is none): it re-probes on the registered service-token
   adapter and clears on ok instead of sticking until restart.
+- **Fixed — `devcake up` could leave the host baker dead on the degraded
+  (flock respawn) path.** The respawn loop's lock fd was inherited by its
+  children, so a stopped supervisor's orphans (the backoff `sleep`, the
+  baker) kept the lock; the install slept a fixed 0.3 s and the successor
+  gave up on the busy lock at once ("respawn supervisor died at launch").
+  The handoff is now ordered and waited — supervisor first, then baker,
+  each waited for with SIGKILL escalation (`DEVCAKE_BAKER_EXIT_WAIT`) — the
+  loop closes its lock fd for every child, and a successor waits up to
+  `DEVCAKE_RESPAWN_LOCK_WAIT` seconds for a predecessor still releasing it.
 
 ## v0.5.1 (2026-08-31)
 

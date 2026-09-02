@@ -46,10 +46,18 @@ uv tool install devcake-cli   # from PyPI (or: pipx install devcake-cli)
 devcake --help                # verify the console script resolves
 ```
 
-When operating a checkout day to day, prefer installing from it
-(`uv tool install .` at the repo root) and re-run that after every
-`git pull` — the CLI is versioned with the tree, and PyPI releases can
-lag it.
+When operating a checkout day to day, prefer installing from it — the
+CLI is versioned with the tree, and PyPI releases can lag it. Three
+routes exist, and each has its own refresh rule after a `git pull`:
+
+| Route | Install | After `git pull` |
+|---|---|---|
+| PyPI tool | `uv tool install devcake-cli` | `uv tool upgrade devcake-cli` (once the release is published) |
+| Checkout tool (snapshot) | `uv tool install .` at the repo root | re-run `uv tool install .` |
+| Editable venv | `uv venv && uv pip install -e .` (or `uv sync`) | nothing — it imports from the tree |
+
+`uv tool upgrade` only knows tools installed with `uv tool install`; on an
+editable venv it reports "not installed", which is not an error.
 
 ## 3. Preflight — `devcake doctor`
 
@@ -155,7 +163,7 @@ docker compose logs --tail=100 app     # or dagu, admin, openobserve, gitea
 
 ```bash
 git pull
-uv tool install .         # keep the CLI in lockstep with the tree
+uv tool install .         # checkout tool install only — editable venv: nothing; PyPI: uv tool upgrade devcake-cli
 devcake status            # pick a quiet moment (no active runs)
 devcake up --bake         # rebake + restart; receipts stay honest
 ```

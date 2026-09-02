@@ -10,6 +10,7 @@
  *   templateName: string,
  *   text: string,
  *   maxDecompositionDepth?: number | null,
+ *   planApproval?: boolean,
  * }} opts
  * @returns {string[]}
  */
@@ -18,6 +19,7 @@ export function templateSoftWarnings({
   templateName,
   text,
   maxDecompositionDepth,
+  planApproval,
 }) {
   const body = text || "";
   const name = templateName || "";
@@ -55,6 +57,23 @@ export function templateSoftWarnings({
       + `decomposition depth (${shown}) cannot reach the Dev `
       + "prompt; re-add the placeholder or switch to a built-in "
       + "template",
+    );
+  }
+
+  // Plan approval (docs/03 §2a): a planning-stage template without the
+  // placeholder cannot tell Devs that a gated board parks plans by itself,
+  // so they may hand off to ask for approval instead.
+  if (
+    planApproval
+    && ["ONBOARD", "PLAN", "EXECUTE"].includes(mt)
+    && !body.includes("{plan_approval_rule}")
+  ) {
+    warns.push(
+      `${mt}: active prompt template '${name}' has no `
+      + "{plan_approval_rule} placeholder — a board with Plan approval on "
+      + "cannot tell its Devs that plans park for a person automatically, "
+      + "so they may hand off to ask for approval instead; re-add the "
+      + "placeholder or switch to a built-in template",
     );
   }
 

@@ -83,6 +83,21 @@ def _identifying_prompt(mgr, dev_type: DevType) -> str:
     return text
 
 
+def plan_approval_rule(mgr, mtype) -> str:
+    """The per-board {plan_approval_rule} text for a stage prompt (docs/03
+    §2a): one of the three prompts.PLAN_APPROVAL_RULE_* wordings while the
+    instance gates plans, "" otherwise. REVIEW never carries it — a review
+    neither produces nor implements a plan."""
+    if not mgr.instance.plan_approval:
+        return ""
+    from ... import prompts   # lazy, as decomposition_rule below
+    return {
+        MissionType.ONBOARD: prompts.PLAN_APPROVAL_RULE_ONBOARD,
+        MissionType.PLAN: prompts.PLAN_APPROVAL_RULE_PLAN,
+        MissionType.EXECUTE: prompts.PLAN_APPROVAL_RULE_EXECUTE,
+    }.get(MissionType(mtype), "")
+
+
 def decomposition_rule(mgr, live: Mission) -> str:
     """The per-mission {decomposition_rule} line for ONBOARD prompts
     (ADR-0012): mirrors the finalizer's gate exactly — a Dev told
@@ -565,11 +580,13 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 decomposition_rule=decomposition_rule(mgr, live),
+                plan_approval_rule=plan_approval_rule(mgr, mtype),
                 discoveries_cap=mgr.config.budgets.discoveries_per_run),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=_pb("PLAN"),
                 reference_repos=ref_note,
-                blocker_repos=blocker_note),
+                blocker_repos=blocker_note,
+                plan_approval_rule=plan_approval_rule(mgr, mtype)),
             MissionType.EXECUTE: lambda: execute_prompt(
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
@@ -577,6 +594,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
                 playbook=_pb("EXECUTE"),
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
+                plan_approval_rule=plan_approval_rule(mgr, mtype),
                 discoveries_cap=mgr.config.budgets.discoveries_per_run),
             MissionType.REVIEW: lambda: review_prompt(
                 ident, live, playbook=_pb("REVIEW"),

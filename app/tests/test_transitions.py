@@ -1745,6 +1745,48 @@ def test_plan_approval_is_not_a_hand_off(tmp_path, monkeypatch):
     assert later.verdict.startswith("handed off")
 
 
+def test_dispatch_plan_approval_rule_follows_the_board_toggle(
+        tmp_path, monkeypatch):
+    """Dispatch renders the per-board rule into the planning-stage
+    prompts only while the board gates plans; REVIEW never carries it."""
+    from devcake.domain.orchestrator import dispatch
+    m = mission("backlog", {"DEVCAKE"})
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    for mt in MissionType:
+        assert dispatch.plan_approval_rule(mgr, mt) == ""
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    for mt in (MissionType.ONBOARD, MissionType.PLAN, MissionType.EXECUTE):
+        assert "DEVCAKE-NEEDS-HUMAN" in dispatch.plan_approval_rule(mgr, mt)
+    assert dispatch.plan_approval_rule(mgr, MissionType.REVIEW) == ""
+
+
+def test_plan_approval_note_leads_with_what_is_being_approved(
+        tmp_path, monkeypatch):
+    """The approval request must be understandable by the person asked to
+    approve it: it names the plan file, carries the plan's outline (its
+    headings), and states the approve and change actions — on both plan
+    sources."""
+    plan = ("# Build the auth-service pages\n\n## Pages\n- overview.md\n\n"
+            "## Sensitive files\n- terraform/config.auto.tfvars (path only)\n")
+    for outcome, stage, labels in (
+            ("planned", "PLAN", {"DEVCAKE", "DEVCAKE-PLAN"}),
+            ("plan_needed", "ONBOARD", {"DEVCAKE"})):
+        m = mission("in_progress", labels)
+        mgr, fake, _store = make_mgr(tmp_path / outcome, m)
+        monkeypatch.setattr(mgr.instance, "plan_approval", True)
+        run_coro(transitions.transition(
+            mgr, _run(stage, "DEVCAKE-PLAN" if stage == "PLAN" else None),
+            {"outcome": outcome, "summary": "s"}, plan))
+        note = next(c for c in fake.comments if "DEVCAKE-NEEDS-HUMAN" in c)
+        assert "PLAN_1.md" in note
+        assert "What you are approving" in note
+        for heading in ("Build the auth-service pages", "Pages",
+                        "Sensitive files"):
+            assert heading in note
+        assert "remove the `DEVCAKE-NEEDS-HUMAN`" in note
+        assert "DEVCAKE-PLAN" in note                     # the change path
+
+
 GITHUB_COMMENT_MAX = 65536
 _PART_LINE = re.compile(r"^Part (\d+) of (\d+)$")
 

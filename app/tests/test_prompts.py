@@ -257,3 +257,50 @@ def test_steward_prompt_operator_template_and_code_owned_contract():
     # empty template falls back to the shipped default
     p3 = steward_prompt("ID", [m], template="  ")
     assert "RELATIONS STEWARD" in p3
+
+
+def test_plan_approval_rule_interpolated_on_planning_stages():
+    """Plan approval (docs/03 §2a) is invisible to a Dev unless the prompt
+    says so: ONBOARD, PLAN and EXECUTE render the per-board rule through
+    {plan_approval_rule}; an empty rule renders to nothing; operator
+    templates without the placeholder degrade gracefully."""
+    from devcake.prompts import plan_prompt
+    renders = (lambda **kw: onboard_prompt("ID", M, **kw),
+               lambda **kw: plan_prompt("ID", M, **kw),
+               lambda **kw: execute_prompt("ID", M, "repo", GH_PR, **kw))
+    for fn in renders:
+        assert "GATE-SENTINEL-7" in fn(plan_approval_rule="GATE-SENTINEL-7")
+        assert "GATE-SENTINEL-7" not in fn()
+    legacy = "no placeholder here {key}"
+    assert (onboard_prompt("ID", M, playbook=legacy, plan_approval_rule="A")
+            == onboard_prompt("ID", M, playbook=legacy,
+                              plan_approval_rule="B"))
+
+
+def test_default_playbooks_carry_plan_approval_rule():
+    from devcake.prompts import DEFAULT_PLAYBOOKS, PLAYBOOK_VARS
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+    for preset in (DEFAULT_PLAYBOOKS, CS_PLAYBOOKS):
+        for mt in ("ONBOARD", "PLAN", "EXECUTE"):
+            assert "{plan_approval_rule}" in preset[mt], mt
+        assert "{plan_approval_rule}" not in preset["REVIEW"]
+    for mt in ("ONBOARD", "PLAN", "EXECUTE"):
+        assert "plan_approval_rule" in PLAYBOOK_VARS[mt]
+    assert "plan_approval_rule" not in PLAYBOOK_VARS["REVIEW"]
+
+
+def test_plan_approval_rule_texts_name_the_mechanics():
+    """The wordings are the product's answer to a Dev inventing its own
+    gate (a field triage returned human_needed to ask for approval and the
+    human got a hand-off wall instead of a plan): they say DevCake parks
+    the ticket, a person releases it, and human_needed is never the way
+    to ask; EXECUTE learns its plan is already approved."""
+    from devcake.prompts import (PLAN_APPROVAL_RULE_EXECUTE,
+                                 PLAN_APPROVAL_RULE_ONBOARD,
+                                 PLAN_APPROVAL_RULE_PLAN)
+    for txt in (PLAN_APPROVAL_RULE_ONBOARD, PLAN_APPROVAL_RULE_PLAN,
+                PLAN_APPROVAL_RULE_EXECUTE):
+        assert "DEVCAKE-NEEDS-HUMAN" in txt
+    assert "human_needed" in PLAN_APPROVAL_RULE_ONBOARD
+    assert "never" in PLAN_APPROVAL_RULE_ONBOARD.lower()
+    assert "approved" in PLAN_APPROVAL_RULE_EXECUTE

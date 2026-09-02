@@ -26,12 +26,12 @@ from ..ports.forge import mission_branch
 PLAYBOOK_VARS: dict[str, tuple[str, ...]] = {
     "ONBOARD": ("key", "priority", "url", "title", "branch", "description",
                 "project_note", "repo_options", "reference_repos",
-                "blocker_repos", "decomposition_rule"),
+                "blocker_repos", "decomposition_rule", "plan_approval_rule"),
     "PLAN": ("key", "priority", "url", "title", "description",
-             "reference_repos", "blocker_repos"),
+             "reference_repos", "blocker_repos", "plan_approval_rule"),
     "EXECUTE": ("key", "priority", "url", "title", "repo_name",
                 "pr_instructions", "default", "branch", "description",
-                "reference_repos", "blocker_repos"),
+                "reference_repos", "blocker_repos", "plan_approval_rule"),
     "REVIEW": ("key", "priority", "url", "title", "branch", "description",
                "reference_repos", "blocker_repos"),
 }
@@ -121,7 +121,7 @@ Write EXACTLY one of:
   parallel. Only earlier parts may be referenced — never a part's own index or
   a later one.
   {decomposition_rule}
-
+{plan_approval_rule}
 Your final message should be a concise assessment summary — it becomes part of the
 mission's permanent transcript in the PMO system.
 """
@@ -129,6 +129,42 @@ mission's permanent transcript in the PMO system.
 # Appended to ONBOARD/EXECUTE/REVIEW (not PLAN: plan mode is read-only — the
 # entrypoint synthesizes its result.json, so it cannot emit this outcome).
 # Concatenated AFTER .format(), so single braces are literal here.
+# {plan_approval_rule} wordings (docs/03 §2a). Dispatch renders one of these
+# into ONBOARD / PLAN / EXECUTE while the board's PMOInstance.plan_approval
+# is on, and "" otherwise (dispatch.plan_approval_rule). The gate is
+# otherwise invisible to a Dev: in the field a careful triage returned
+# human_needed to ASK for approval, and the human got a hand-off wall of
+# text instead of a plan to approve. These lines say who parks, who
+# releases, and that human_needed is never the way to ask.
+PLAN_APPROVAL_RULE_ONBOARD = """
+### This board requires a human to approve every plan — DevCake enforces it
+The moment you attach a plan (PLAN.md with `plan_needed`) or split the
+mission, DevCake parks the ticket under `DEVCAKE-NEEDS-HUMAN` with the plan
+for a person to read, and a person releases it. So: write the plan and
+return. NEVER ask for approval in a comment, and NEVER return `human_needed`
+just to request it — `human_needed` is for real obstacles only (missing
+access, a repository you cannot find, a brief that cannot be made sound).
+Write the plan for the person who will approve it: what will change, where,
+and why, in its first lines.
+"""
+
+PLAN_APPROVAL_RULE_PLAN = """
+### This board requires a human to approve every plan — DevCake enforces it
+Your plan will be shown to a person, who releases the ticket by removing
+`DEVCAKE-NEEDS-HUMAN` before anything is built. Lead with a short summary a
+reviewer can approve at a glance (what changes, where, why), then the
+details. Do not ask for approval inside the plan and do not stop for it:
+produce the plan and finish.
+"""
+
+PLAN_APPROVAL_RULE_EXECUTE = """
+### This plan has been approved by a person
+This board requires human approval of plans, and the ticket cannot reach
+this step while `DEVCAKE-NEEDS-HUMAN` is on it — someone removed it after
+reading the plan. Do not look for an approval comment and do not hand off to
+request one; implement the approved plan.
+"""
+
 HUMAN_HANDOFF = """
 ### Blocked on a human?
 If you hit an obstacle only a human can clear — a missing permission or
@@ -252,6 +288,7 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
                    reference_repos: str = "",
                    blocker_repos: str = "",
                    decomposition_rule: str = "",
+                   plan_approval_rule: str = "",
                    discoveries_cap: int = 3) -> str:
     """repo_options: the multi-repo triage section (item 2 full scope) —
     dispatch builds it from the instance's repo set; empty for single-repo
@@ -269,7 +306,8 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "repo_options": repo_options,
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos,
-         "decomposition_rule": decomposition_rule})
+         "decomposition_rule": decomposition_rule,
+         "plan_approval_rule": plan_approval_rule})
     return (identifying_prompt + "\n" + text
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
@@ -294,7 +332,7 @@ doc, a dependency surprise), end the plan with a section titled exactly
 (paths, error text, the reproducing command). These are leads for the
 pipeline, not plan content; the EXECUTE step verifies and carries them
 forward.
-
+{plan_approval_rule}
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
 - Title: **{title}**
@@ -306,14 +344,16 @@ forward.
 def plan_prompt(identifying_prompt: str, mission: Mission,
                 playbook: str | None = None,
                 reference_repos: str = "",
-                blocker_repos: str = "") -> str:
+                blocker_repos: str = "",
+                plan_approval_rule: str = "") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["PLAN"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
          "title": mission.title,
          "description": mission.description or "(no description)",
          "reference_repos": reference_repos,
-         "blocker_repos": blocker_repos})
+         "blocker_repos": blocker_repos,
+         "plan_approval_rule": plan_approval_rule})
     return (identifying_prompt + "\n" + text + HUMAN_COMMENTS_NOTE
             + UPSTREAM_ACTIVITY_NOTE)
 
@@ -333,7 +373,7 @@ SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 /workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
 job is to sync `{branch}` with the default branch, resolve the merge
 conflicts, and push — do NOT redo or extend the mission's implementation.
-
+{plan_approval_rule}
 ### Binding rules (violations fail the run)
 1. Make ALL code changes inside /workspace/repo/{repo_name}/ and nowhere else —
    never modify another repository. This rule is about the code you change; it
@@ -372,6 +412,7 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
                    playbook: str | None = None,
                    reference_repos: str = "",
                    blocker_repos: str = "",
+                   plan_approval_rule: str = "",
                    discoveries_cap: int = 3) -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
     (docs/06) — placeholders: {key} {title} {default} {branch}. It is
@@ -387,7 +428,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "pr_instructions": pr, "default": default_branch, "branch": branch,
          "description": mission.description or "(no description)",
          "reference_repos": reference_repos,
-         "blocker_repos": blocker_repos})
+         "blocker_repos": blocker_repos,
+         "plan_approval_rule": plan_approval_rule})
     return (identifying_prompt + "\n" + text
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)

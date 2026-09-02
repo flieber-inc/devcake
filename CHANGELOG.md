@@ -16,8 +16,13 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.3 (2026-09-02)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.3).
+
 - **Fixed — a discovery batch could be closed as "run record cleared"
-  one minute after it was posted.** The harvest posts the discovery
+  one minute after it was posted** (#386). The harvest posts the discovery
   marker before the close wrote the run's result onto its record, and the
   poll-cycle sweep read a record without a result as cleared, writing a
   permanent `to=-` receipt; a sweep landing in that few-second window
@@ -26,7 +31,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   non-terminal record as in flight (held, nothing posted), reserving the
   unroutable disposition for an absent or terminal record (docs/03).
 - **Fixed — `devcake-repo:` markers written as URL slugs gated every
-  child of a multi-repo decomposition.** The triage prompt lists each
+  child of a multi-repo decomposition** (#385). The triage prompt lists each
   repository as card name, workspace folder and URL on one line, and Devs
   (humans too) reach for the folder or URL slug — whose hyphens make the
   marker unparseable, so the children never dispatched. A marker that is
@@ -37,7 +42,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   Decomposition inherits the parent's marker through the same resolver,
   and the triage prompt says which value is the marker.
 - **Fixed — plan approval was invisible to the Dev and opaque to the
-  human.** On a board with Plan approval on, a careful triage returned
+  human** (#384). On a board with Plan approval on, a careful triage returned
   `human_needed` to ask for approval and the person received a hand-off
   wall of text with no plan attached. The ONBOARD, PLAN and EXECUTE
   playbooks now carry `{plan_approval_rule}`, rendered while the board

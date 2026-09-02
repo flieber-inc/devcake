@@ -16,6 +16,17 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — `devcake-repo:` markers written as URL slugs gated every
+  child of a multi-repo decomposition.** The triage prompt lists each
+  repository as card name, workspace folder and URL on one line, and Devs
+  (humans too) reach for the folder or URL slug — whose hyphens make the
+  marker unparseable, so the children never dispatched. A marker that is
+  not a card name but equals exactly one work repository's URL slug now
+  resolves to that card (an exact secondary key on operator config, never
+  the default fall-through the marker doctrine forbids); zero or several
+  matches still gate, and the reason lists every card with its slug.
+  Decomposition inherits the parent's marker through the same resolver,
+  and the triage prompt says which value is the marker.
 - **Fixed — plan approval was invisible to the Dev and opaque to the
   human.** On a board with Plan approval on, a careful triage returned
   `human_needed` to ask for approval and the person received a hand-off

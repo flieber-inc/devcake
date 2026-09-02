@@ -259,7 +259,7 @@ def test_resolve_repo_history_assembly(tmp_path):
     import devcake.domain.repo_routing as rr
     got = []
     orig = rr.resolve_repo
-    def spy(mission, instance, names, history):
+    def spy(mission, instance, names, history, **kw):
         got.append([r.run_id for r in history])
         return orig(mission, instance, {"alpha", "beta"}, history)
     rr.resolve_repo = spy
@@ -300,7 +300,7 @@ def test_resolve_repo_sticky_survives_mixed_naive_aware_created_at(tmp_path):
     )
     orig = rr.resolve_repo
 
-    def spy(mission, instance, names, history):
+    def spy(mission, instance, names, history, **kw):
         return orig(mission, instance, {"alpha", "beta"}, history)
 
     rr.resolve_repo = spy
@@ -1125,3 +1125,72 @@ def test_gitea_mission_repo_binding_row(monkeypatch):
     # the hyphenated name would otherwise raise in the secrets name check
     assert inst.internal is True
     assert inst.token == "" and inst.token_ro == ""
+
+
+REPO_URLS = {"alpha": "https://forge.example/team/billing-api.git",
+             "beta": "https://forge.example/team/Inventory-Sync"}
+
+
+def test_slug_alias_resolves_to_the_card():
+    """Field finding (a multi-repo decomposition on a field board): a triage Dev, shown the card name
+    next to the folder and the URL, wrote the URL slug — and a slug's
+    hyphens make the marker unparseable, so five children gated. A marker
+    that matches exactly one configured WORK repo's URL slug now resolves
+    to that card: an exact secondary key on operator-owned config, never a
+    fall-through to the default."""
+    assert resolve_repo(_m("`devcake-repo:billing-api`"), INST_SET, REPOS,
+                        [], repo_urls=REPO_URLS) == ("alpha", None)
+    # case- and .git-insensitive
+    assert resolve_repo(_m("`devcake-repo:inventory-sync`"), INST_SET,
+                        REPOS, [], repo_urls=REPO_URLS) == ("beta", None)
+    # a strictly parseable token that is not a card but IS a slug aliases too
+    urls = {"alpha": "https://forge.example/team/Ledger", "beta": "https://x/b"}
+    assert resolve_repo(_m("`devcake-repo:ledger`"), INST_SET, REPOS, [],
+                        repo_urls=urls) == ("alpha", None)
+    # the card name itself still wins outright
+    assert resolve_repo(_m("`devcake-repo:beta`"), INST_SET, REPOS, [],
+                        repo_urls=REPO_URLS) == ("beta", None)
+    # without URL knowledge nothing changes: today's unparseable gate
+    name, reason = resolve_repo(_m("`devcake-repo:billing-api`"), INST_SET,
+                                REPOS, [])
+    assert name is None and "unparseable" in reason
+    # sticky routing compares RESOLVED names: alias == sticky is fine,
+    # alias != sticky gates like any mid-mission marker change
+    assert resolve_repo(_m("`devcake-repo:billing-api`"), INST_SET, REPOS,
+                        [_run("alpha")], repo_urls=REPO_URLS) == ("alpha", None)
+    name, reason = resolve_repo(_m("`devcake-repo:billing-api`"), INST_SET,
+                                REPOS, [_run("beta")], repo_urls=REPO_URLS)
+    assert name is None and "changed mid-mission" in reason
+
+
+def test_slug_alias_gates_when_ambiguous_reference_or_unknown():
+    """Anything that does not map to exactly one work repo still gates,
+    and the reason names the cards so the fix on the ticket is immediate."""
+    dup = {"alpha": "https://forge.example/a/billing-api",
+           "beta": "https://forge.example/b/billing-api"}
+    name, reason = resolve_repo(_m("`devcake-repo:billing-api`"), INST_SET,
+                                REPOS, [], repo_urls=dup)
+    assert name is None and "ambiguous" in reason
+    assert "alpha" in reason and "beta" in reason
+    # slug of a REFERENCE repo: the reference gate, naming the card
+    inst_ref = PMOInstance(name="linear", team_key="DEV", repos=["alpha"],
+                           reference_repos=["beta"])
+    name, reason = resolve_repo(_m("`devcake-repo:inventory-sync`"),
+                                inst_ref, REPOS, [], repo_urls=REPO_URLS)
+    assert name is None and "REFERENCE" in reason and "beta" in reason
+    # unknown token: gate, and the hint lists each card WITH its slug
+    name, reason = resolve_repo(_m("`devcake-repo:core-svc`"), INST_SET,
+                                REPOS, [], repo_urls=REPO_URLS)
+    assert name is None and "unparseable" in reason
+    assert "alpha (billing-api)" in reason
+    assert "beta (inventory-sync)" in reason
+
+
+def test_resolve_marker_helper_for_inheritance():
+    """decomposition inherits the PARENT's marker onto every child through
+    the same resolver, so a slug-marked parent still stamps card names."""
+    from devcake.domain.repo_routing import resolve_marker
+    assert resolve_marker("`devcake-repo:billing-api`", REPOS, REPO_URLS) == "alpha"
+    assert resolve_marker("`devcake-repo:beta`", REPOS, REPO_URLS) == "beta"
+    assert resolve_marker("`devcake-repo:nope`", REPOS, REPO_URLS) is None
+    assert resolve_marker("no marker", REPOS, REPO_URLS) is None

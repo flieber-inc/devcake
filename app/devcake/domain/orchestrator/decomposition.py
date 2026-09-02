@@ -90,8 +90,15 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                            ensure_ascii=True)
     manifest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     is_project = live.pmo_kind == "project"
-    from ..repo_routing import marker_repo
-    parent_repo_marker = marker_repo(live.description)
+    from ..repo_routing import marker_repo, repo_urls_of, resolve_marker
+    # the ONE marker→card rule (slug alias included), so a slug-marked
+    # parent stamps card names on its children; an unresolvable marker
+    # falls back to the raw parse and gates at the children's dispatch
+    # exactly as it would have gated the parent
+    parent_repo_marker = (resolve_marker(
+        live.description, set(mgr.forges.instances),
+        repo_urls_of(mgr.forges.instances))
+        or marker_repo(live.description))
 
     existing: dict[int, str] = {}
     existing_keys: dict[int, str] = {}

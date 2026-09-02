@@ -26,6 +26,37 @@ check("clean ONBOARD body with depth 1 → no soft warnings", () => {
   );
 });
 
+check("gated board + planning-stage template without {plan_approval_rule} → soft warning", () => {
+  for (const mt of ["ONBOARD", "PLAN", "EXECUTE"]) {
+    const warns = templateSoftWarnings({
+      missionType: mt,
+      templateName: "Custom",
+      text: "No placeholder here {decomposition_rule}",
+      maxDecompositionDepth: 1,
+      planApproval: true,
+    });
+    assert.equal(warns.length, 1, mt);
+    assert.match(warns[0], /\{plan_approval_rule\}/);
+    assert.match(warns[0], /Custom/);
+  }
+});
+
+check("no gated board, or REVIEW, or placeholder present → quiet", () => {
+  assert.deepEqual(templateSoftWarnings({
+    missionType: "PLAN", templateName: "Custom", text: "x",
+    maxDecompositionDepth: 1, planApproval: false,
+  }), []);
+  assert.deepEqual(templateSoftWarnings({
+    missionType: "REVIEW", templateName: "Custom", text: "x",
+    maxDecompositionDepth: 1, planApproval: true,
+  }), []);
+  assert.deepEqual(templateSoftWarnings({
+    missionType: "PLAN", templateName: "Custom",
+    text: "x {plan_approval_rule}", maxDecompositionDepth: 1,
+    planApproval: true,
+  }), []);
+});
+
 check("missing {decomposition_rule} when depth ≠ 1 → soft warning", () => {
   const warns = templateSoftWarnings({
     missionType: "ONBOARD",

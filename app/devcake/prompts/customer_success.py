@@ -57,7 +57,7 @@ Write EXACTLY one of:
   independent issue>", "priority": "urgent|high|medium|low",
   "blocked_by": [<1-based indexes of EARLIER parts — omit if independent>]}, ...]}
   {decomposition_rule}
-
+{plan_approval_rule}
 Your final message is a concise triage summary for the customer-success feed.
 """,
     "PLAN": """
@@ -71,7 +71,7 @@ escalation notes), tone and empathy guidance, facts to verify first, and an
 acceptance check ("the customer can now …"). Study /workspace/repo, the brief
 in /workspace/activity/MISSION.md, and the issue history in
 /workspace/activity/.
-
+{plan_approval_rule}
 ### The issue
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
 - Title: **{title}**
@@ -90,7 +90,7 @@ clear, empathetic, accurate, and ready to send or publish.
 SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 /workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
 job is to sync `{branch}` with the default branch and resolve conflicts.
-
+{plan_approval_rule}
 ### Binding rules (violations fail the run)
 1. Make ALL changes inside /workspace/repo/{repo_name}/ and nowhere else —
    never modify another repository. This rule is about the files you change; it

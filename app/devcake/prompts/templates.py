@@ -261,6 +261,23 @@ def template_warnings(config) -> list[str]:
                     f"decomposition depth ({shown}) cannot reach the Dev "
                     "prompt; re-add the placeholder or switch to a built-in "
                     "template")
+    # docs/03 §2a: a planning-stage template without {plan_approval_rule}
+    # cannot tell the Dev that a gated board parks plans by itself — the
+    # Dev then invents its own gate (a field triage returned human_needed
+    # just to ask for approval). Warn whenever any PMO gates plans.
+    if any(getattr(inst, "plan_approval", False)
+           for inst in getattr(config, "pmos", None) or []):
+        for mt in ("ONBOARD", "PLAN", "EXECUTE"):
+            for active in sorted(actives[mt]):
+                text, _ = resolve_playbook(mt, active)
+                if "{plan_approval_rule}" not in text:
+                    _once(
+                        f"{mt}: active prompt template '{active}' has no "
+                        "{plan_approval_rule} placeholder — a board with "
+                        "Plan approval on cannot tell its Devs that plans "
+                        "park for a person automatically, so they may hand "
+                        "off to ask for approval instead; re-add the "
+                        "placeholder or switch to a built-in template")
     return warns
 
 

@@ -27,12 +27,49 @@ log = logging.getLogger("devcake.missions")
 # a gate with a hole for triage-attached plans is no gate — and so does a
 # decomposition (a split is a plan): decomposition.py creates the children
 # parked under the same label.
-PLAN_APPROVAL_NOTE = (
-    "\n\n✋ **This board requires a human to approve plans.** Review the "
-    "plan, then remove the `DEVCAKE-NEEDS-HUMAN` label (or **Resume** in "
-    "the admin panel) to start EXECUTE. To change the plan first: add your "
-    "guidance as a comment, swap `DEVCAKE-EXECUTE` back to `DEVCAKE-PLAN`, "
-    "then remove `DEVCAKE-NEEDS-HUMAN` — DevCake re-plans with it.")
+PLAN_APPROVAL_OUTLINE_MAX = 12          # headings shown in the request
+PLAN_APPROVAL_OUTLINE_LINE_MAX = 120    # chars per shown heading
+
+
+def plan_outline(plan_md: str | None) -> list[str]:
+    """The plan's markdown headings, in order, as short plain lines — what a
+    person skims to know what they are approving. Falls back to the first
+    non-empty line when the plan has no headings. Bounded."""
+    lines: list[str] = []
+    first_text = ""
+    for raw in (plan_md or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            text = line.lstrip("#").strip()
+            if text:
+                lines.append(text[:PLAN_APPROVAL_OUTLINE_LINE_MAX])
+                if len(lines) >= PLAN_APPROVAL_OUTLINE_MAX:
+                    break
+        elif not first_text and not line.startswith(("```", "|", "-", "*")):
+            first_text = line[:PLAN_APPROVAL_OUTLINE_LINE_MAX]
+    return lines or ([first_text] if first_text else [])
+
+
+def plan_approval_note(plan_md: str | None, plan_name: str) -> str:
+    """The approval request appended to the plan comment on a gated board.
+    Leads with WHAT is being approved (the plan file and its outline) and
+    then the two actions, so the person asked to approve never has to
+    reverse-engineer the ask from a transcript."""
+    outline = plan_outline(plan_md)
+    outline_md = ("".join(f"\n- {redact(h)}" for h in outline)
+                  if outline else "\n- (the plan has no headings — open the file)")
+    return (
+        "\n\n✋ **This board requires a human to approve plans. Nothing is "
+        "built until you act.**\n\n"
+        f"What you are approving: the plan above (`{plan_name}`). Outline:"
+        f"{outline_md}\n\n"
+        "To approve: remove the `DEVCAKE-NEEDS-HUMAN` label (or **Resume** "
+        "in the admin panel) and EXECUTE starts. To change the plan first: "
+        "add your guidance as a comment, swap `DEVCAKE-EXECUTE` back to "
+        "`DEVCAKE-PLAN`, then remove `DEVCAKE-NEEDS-HUMAN` — DevCake "
+        "re-plans with your guidance.")
 
 
 def _plan_gate_labels(mgr) -> set[str]:
@@ -138,7 +175,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 body = (f"📋 DevCake plan for this mission (`{plan_name}`):\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
             if mgr.instance.plan_approval:
-                body += PLAN_APPROVAL_NOTE
+                body += plan_approval_note(plan_md, plan_name)
             await mgr._feed(pmo_id, run.pmo_kind, body)
 
         async def _plan_labels():
@@ -206,7 +243,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                         f"(`{plan_name}`) — skipping the PLAN step:\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
             if mgr.instance.plan_approval:
-                body += PLAN_APPROVAL_NOTE
+                body += plan_approval_note(plan_md, plan_name)
             await mgr._feed(pmo_id, run.pmo_kind, body)
 
         async def _plan_attach_labels():

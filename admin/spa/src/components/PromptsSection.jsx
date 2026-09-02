@@ -150,6 +150,7 @@ function TemplateManagerModal({
           templateName: name,
           text: body,
           maxDecompositionDepth: cfg?.max_decomposition_depth,
+          planApproval: (cfg?.pmos || []).some((p) => !!p.plan_approval),
         })
         : [];
       await onChanged();
@@ -180,6 +181,7 @@ function TemplateManagerModal({
         templateName: saveName,
         text,
         maxDecompositionDepth: cfg?.max_decomposition_depth,
+        planApproval: (cfg?.pmos || []).some((p) => !!p.plan_approval),
       })
       : [];
     setSoftWarns(soft);

@@ -570,3 +570,36 @@ def test_template_warning_for_stale_executed_trivially(monkeypatch, tmp_path):
     assert any("executed_trivially" in w for w in t.template_warnings(cfg))
     cfg.active_prompt_templates = {"ONBOARD": "default"}
     assert not any("executed_trivially" in w for w in t.template_warnings(cfg))
+
+
+def test_plan_approval_rule_placeholder_planning_stages_only(monkeypatch, tmp_path):
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    for mt in ("ONBOARD", "PLAN", "EXECUTE"):
+        t.save_template(mt, "gated", "{plan_approval_rule} for {key}")
+    with pytest.raises(ValueError, match="valid variables"):
+        t.save_template("REVIEW", "bad", "{plan_approval_rule}")
+
+
+def test_template_warning_when_gated_board_template_lacks_plan_approval_rule(
+        monkeypatch, tmp_path):
+    """A custom planning-stage template saved before plan approval existed
+    cannot tell the Dev the board parks plans — the Dev then invents its
+    own gate. /health must say so whenever any PMO gates plans; quiet when
+    no board does, and for the placeholder-carrying builtins."""
+    from devcake.config import AppConfig, PMOInstance
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    t.save_template("PLAN", "legacy", "plan {key}")
+    gated = AppConfig(
+        active_prompt_templates={"PLAN": "legacy"},
+        pmos=[PMOInstance(name="b", team_key="T", plan_approval=True)])
+    assert any("plan_approval_rule" in w for w in t.template_warnings(gated))
+    quiet = AppConfig(active_prompt_templates={"PLAN": "legacy"},
+                      pmos=[PMOInstance(name="b", team_key="T")])
+    assert not any("plan_approval_rule" in w
+                   for w in t.template_warnings(quiet))
+    builtin = AppConfig(
+        pmos=[PMOInstance(name="b", team_key="T", plan_approval=True)])
+    assert not any("plan_approval_rule" in w
+                   for w in t.template_warnings(builtin))

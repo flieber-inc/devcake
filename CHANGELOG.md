@@ -16,6 +16,19 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — plan approval was invisible to the Dev and opaque to the
+  human.** On a board with Plan approval on, a careful triage returned
+  `human_needed` to ask for approval and the person received a hand-off
+  wall of text with no plan attached. The ONBOARD, PLAN and EXECUTE
+  playbooks now carry `{plan_approval_rule}`, rendered while the board
+  gates plans: triage learns that attaching a plan parks the ticket by
+  itself and that `human_needed` is never the way to ask, planning leads
+  with a reviewable summary, execution learns its plan was approved by a
+  person. A custom planning-stage template without the placeholder is
+  flagged on `/health` and at save time. The approval request itself now
+  leads with what is being approved — the plan file and its outline — and
+  then the two actions (docs/03 §2a).
+
 ## v0.5.2 (2026-09-02)
 
 Patch release in the v0.5 "Java Lava" line.

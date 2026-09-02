@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from ...security import redact
 from ..model import LABEL_DISCOVERY, MissionRef
-from ..run import Run, utcnow
+from ..run import TERMINAL_STATES, Run, utcnow
 from . import steps
 from .feed import blockquote, post_attachment_comment, unquoted
 from .markers import (DISCOVERY_FIELD_MAX, DISCOVERY_PREVIEW_MAX, defang,
@@ -303,10 +303,22 @@ async def discovery_sweep(mgr, m) -> None:
             mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
         mgr._discoveries_pending.discard(m.pmo_id)
         return
-    run_ix = harvest_run_index(mgr)
+    rows = mgr.runs.store.all()
+    run_ix = harvest_run_index(mgr, rows)
+    # A record that exists but is not terminal is IN FLIGHT (finalize has
+    # posted the marker and is still closing, or a watchdog has yet to
+    # rule): hold it this cycle — the pending id is kept and the label
+    # stays. "Gone" is reserved for an absent record or a terminal one
+    # without a usable result (clear-runs, a failed close). Closing an
+    # in-flight batch with to=- is permanent: receipts are board arithmetic
+    # and nothing reopens them once the result lands.
+    inflight = {(r.mission_pmo_id, r.seq) for r in rows
+                if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)
+                and r.state not in TERMINAL_STATES}
     gone = [(step, n) for step, n in pending
-            if (m.pmo_id, step) not in run_ix
-            or not valid_entries(run_ix[(m.pmo_id, step)].result)]
+            if (m.pmo_id, step) not in inflight
+            and ((m.pmo_id, step) not in run_ix
+                 or not valid_entries(run_ix[(m.pmo_id, step)].result))]
     if gone:
         lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
                  for s, _n in sorted(gone)]

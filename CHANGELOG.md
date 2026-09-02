@@ -16,6 +16,15 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — a discovery batch could be closed as "run record cleared"
+  one minute after it was posted.** The harvest posts the discovery
+  marker before the close wrote the run's result onto its record, and the
+  poll-cycle sweep read a record without a result as cleared, writing a
+  permanent `to=-` receipt; a sweep landing in that few-second window
+  silently lost the batch. The close now writes the result onto the
+  record before the harvest posts, and the sweep treats an existing,
+  non-terminal record as in flight (held, nothing posted), reserving the
+  unroutable disposition for an absent or terminal record (docs/03).
 - **Fixed — `devcake-repo:` markers written as URL slugs gated every
   child of a multi-repo decomposition.** The triage prompt lists each
   repository as card name, workspace folder and URL on one line, and Devs

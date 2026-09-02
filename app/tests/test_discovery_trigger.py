@@ -359,3 +359,29 @@ def test_context_gate_backed_skill_card_downgrades_in_open_mode(tmp_path):
     ok, why, stale, omit = run_coro(svc._context_gate(dt, "home"))
     assert ok and not why
     assert stale == {"work"} and omit == set()
+
+
+def test_sweep_holds_batches_whose_run_is_still_finalizing(tmp_path):
+    """The harvest posts the discovery marker BEFORE the close writes the
+    result onto the run record; a poll-cycle sweep landing in that window
+    used to read "no record with a result" as "cleared" and close the batch
+    forever with a to=- receipt (field finding). An existing, non-terminal
+    record is IN FLIGHT: hold it — keep the label and the pending id, post
+    nothing. A TERMINAL record without a result is gone for real."""
+    from devcake.domain.run import Run
+    pmo, mgr, svc, calls, (src, _o) = _svc_setup(tmp_path, src_feed_bodies=(
+        discovery_marker(7, 2),))
+    r = Run(run_id="L-T-S-7-EXECUTE-AAAAAA", mission_key="T-S",
+            mission_pmo_id="src", mission_type="EXECUTE", dev_type="senior-dev",
+            seq=7, state="finalizing", pmo_ref=mgr.instance_name)
+    mgr.runs.store.save(r)                                # no result yet
+    src.labels = src.labels | {"DEVCAKE-DISCOVERY"}
+    run_coro(discovery.discovery_sweep(mgr, src))
+    assert not any("to=-" in md for pid, md in pmo.comments if pid == "src")
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) not in pmo.swaps
+    assert mgr._discoveries_pending == {"src"}
+    r.state = "failed"
+    mgr.runs.store.save(r)
+    run_coro(discovery.discovery_sweep(mgr, src))
+    assert any("step=7 to=-" in md and "Unroutable" in md
+               for pid, md in pmo.comments if pid == "src")

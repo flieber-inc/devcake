@@ -61,8 +61,9 @@ Patch release in the v0.5 "Java Lava" line.
 - **devcake-cli 0.1.1.** The CLI wheel carries the `devcake up` handoff
   fix above (the launcher now stops a degraded respawn supervisor first);
   PyPI installs upgrade with `uv tool upgrade devcake-cli`, checkout
-  installs with `uv tool install .` after pulling (lockstep with the
-  repo's `scripts/lib`).
+  snapshot installs with `uv tool install .` after pulling (lockstep with
+  the repo's `scripts/lib`), and an editable venv install
+  (`uv pip install -e .`) already tracks the tree.
 
 ## v0.5.1 (2026-08-31)
 

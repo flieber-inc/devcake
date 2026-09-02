@@ -28,7 +28,9 @@ Implemented:
 Not yet implemented (ADR-0038 v1 — sibling issues):
   bake
 
-Install: uv tool install .   OR   pipx install .
+Install: uv tool install devcake-cli   PyPI; upgrade: uv tool upgrade devcake-cli
+         uv tool install .            this checkout (snapshot); re-run after git pull
+         uv pip install -e .          editable venv; tracks the tree, nothing to re-run
 Docs:    docs/adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md
 """
 

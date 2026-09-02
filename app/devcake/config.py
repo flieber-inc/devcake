@@ -156,6 +156,17 @@ class PMOInstance(BaseModel):
     # for a later toggle-on. Default ON: a default-off feature never
     # generates evaluation data; budgets + family scoping bound the radius.
     discovery_routing: bool = True
+    # Per-board plan approval (docs/03 §2a): while true, every fresh plan —
+    # a PLAN run's `planned` or ONBOARD's opportunistic attach — lands on
+    # DEVCAKE-EXECUTE *and* DEVCAKE-NEEDS-HUMAN, and every decomposition
+    # child is created parked under DEVCAKE-NEEDS-HUMAN (a split is a plan),
+    # so nothing is scheduled until a person approves by removing the label
+    # (or Resume in the admin panel). Reuses the hand-off label and its recovery path
+    # rather than adding an eleventh managed label; NOT a hand-off (never
+    # counted by the loop guardrail). A board's process policy, so it lives
+    # on the PMO instance, not the repo card. Default OFF keeps today's
+    # straight-to-EXECUTE behavior.
+    plan_approval: bool = False
     # Per-instance Mission Type → Dev Type overrides (ADR-0019, dual-crew
     # staffing): a present key replaces the global AppConfig.assignments row
     # WHOLESALE — extra_cli_args included, because CLI flags are harness-

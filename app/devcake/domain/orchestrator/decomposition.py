@@ -16,6 +16,19 @@ from .markers import (COMMENT_SENTINEL, at_decomposition_limit, defang,
 
 log = logging.getLogger("devcake.missions")
 
+# Per-board plan approval, decomposition half (docs/03 §2a). Appended to the
+# parent's decomposition note when the board gates plans: the children were
+# created parked, and by ruling a split is edited in place, never redone —
+# the original is canceled in the children's favor and a re-triage of it is
+# refused as a manifest mismatch (§1.3 replay rules).
+DECOMP_APPROVAL_NOTE = (
+    "\n\n✋ **This board requires a human to approve plans, and a split is a "
+    "plan.** Every child was created parked under `DEVCAKE-NEEDS-HUMAN`. "
+    "Review the split: edit a child's title, description, priority or "
+    "relations in place, cancel the ones you do not want, then remove "
+    "`DEVCAKE-NEEDS-HUMAN` on each child to start it. A split is edited, "
+    "not redone.")
+
 
 async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
@@ -135,6 +148,15 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     labels = {LABEL_CREATED}
     if mgr.config.adoption_mode == "opt_in":
         labels.add(LABEL_OPTIN)
+    # Per-board plan approval (docs/03 §2a): a split is a plan, so every
+    # child is created already parked under DEVCAKE-NEEDS-HUMAN — the
+    # fan-out never schedules (derivation row 11) until a person reviews
+    # it; approving a child = removing that one label. Same label set for
+    # fresh and topped-up parts, so a replay parks identically. Not a
+    # hand-off (own audit action below; plain-success verdict).
+    gated = bool(mgr.instance.plan_approval)
+    if gated:
+        labels.add(LABEL_NEEDS_HUMAN)
     created = []
     child_ids: dict[int, str] = {}                            # part index → issue id
     child_key_by_part: dict[int, str] = {}                    # part index → key
@@ -209,6 +231,12 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     # authoritative (create_mission return / marker scan), never a snapshot,
     # so the lineage note below renders identically on every replay
     child_keys = [child_key_by_part[i] for i in sorted(child_key_by_part)]
+    if gated:
+        # Needs Human advisories at once; the sweep rebuilds them from the
+        # label every cycle, as for hand-offs.
+        for i, child_id in child_ids.items():
+            mgr.needs_human[child_id] = (
+                f"{child_key_by_part[i]}: decomposition child awaiting approval")
 
     if not is_project:
         # Edge inheritance (ADR-0012, fail-closed): replicate the original's
@@ -287,16 +315,31 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         await mgr._checkpoint(run, steps.DECOMP_PARENT_NOTE, _parent_note)
 
     links = ", ".join(created) or "(all already existed)"
+    gate_note = DECOMP_APPROVAL_NOTE if gated else ""
     async def _tracking():
         if is_project:
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "project"),
                                        remove=set(), add={LABEL_TRACKING})
             mgr._audit(pmo_id, "decomposed_project", links)
+            if gated:
+                # projects have no issue-style comment feed: the instruction
+                # rides a project update, best-effort like the hand-off baton
+                try:
+                    await mgr.pmo.post_feed(
+                        MissionRef(pmo_id, "project"),
+                        f"🧩 Decomposed into {len(normalized)} issues: {links}."
+                        + gate_note + "\n\n" + COMMENT_SENTINEL)
+                except Exception:  # noqa: BLE001 — project-update note is best-effort; the children carry the label and the audit records the gate
+                    log.warning("project-update plan-approval note failed "
+                                "for %s", run.mission_key, exc_info=True)
         else:
             await mgr._feed(
                 pmo_id, "issue",
                 f"🧩 Decomposed into {len(normalized)} standalone issues: "
-                f"{links}. This issue is canceled in their favor.")
+                f"{links}. This issue is canceled in their favor." + gate_note)
             await mgr.pmo.cancel_mission(MissionRef(pmo_id, "issue"))
             mgr._audit(pmo_id, "decomposed_canceled", links)
+        if gated:
+            mgr._audit(pmo_id, "plan_approval_gate",
+                       f"decomposition: {len(child_ids)} children parked")
     await mgr._checkpoint(run, steps.DECOMP_TRACKING, _tracking)

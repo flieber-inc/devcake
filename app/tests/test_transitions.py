@@ -896,6 +896,70 @@ def test_decomposition_children_clean_without_marker(tmp_path):
     assert "devcake-repo" not in fake.all_missions[1].description
 
 
+def test_decomposition_with_plan_approval_creates_children_parked(
+        tmp_path, monkeypatch):
+    """Per-board plan approval covers the split too (a decomposition
+    manifest is a plan): every child is created already parked under
+    DEVCAKE-NEEDS-HUMAN, so the fan-out never schedules until a person
+    reviews it. Approving a child = removing that one label — it then
+    derives as ONBOARD like any backlog mission. The parent's decomposition
+    comment says so. Not a hand-off: plain-success verdict."""
+    from devcake.domain.model import derive
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run = _run("ONBOARD", None)
+    drafts = [{"title": "docs"}, {"title": "code", "blocked_by": [1]}]
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "decomposed", "decomposition": drafts}, None))
+    children = fake.all_missions[1:]
+    assert len(children) == 2
+    assert all("DEVCAKE-NEEDS-HUMAN" in c.labels for c in children)
+    assert all("DEVCAKE-CREATED" in c.labels for c in children)
+    assert all(derive(c, "opt_in").schedulable is False for c in children)
+    assert any("DEVCAKE-NEEDS-HUMAN" in c for c in fake.comments)
+    assert fake.statuses == ["canceled"]          # the original still closes
+    assert run.verdict is None
+    assert all(c.pmo_id in mgr.needs_human for c in children)
+    children[0].labels.discard("DEVCAKE-NEEDS-HUMAN")        # approve one
+    assert derive(children[0], "opt_in").mission_type == MissionType.ONBOARD
+    assert derive(children[1], "opt_in").schedulable is False
+
+
+def test_decomposition_without_plan_approval_children_schedule(tmp_path):
+    """Default OFF: children are created ready to triage, verbatim."""
+    from devcake.domain.model import derive
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(transitions.transition(
+        mgr, _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "solo"}]}, None))
+    child = fake.all_missions[1]
+    assert "DEVCAKE-NEEDS-HUMAN" not in child.labels
+    assert derive(child, "opt_in").mission_type == MissionType.ONBOARD
+    assert not any("DEVCAKE-NEEDS-HUMAN" in c for c in fake.comments)
+    assert mgr.needs_human == {}
+
+
+def test_project_decomposition_with_plan_approval_parks_children(
+        tmp_path, monkeypatch):
+    """Project originals take the same gate; the project still gets
+    DEVCAKE-TRACKING and the instruction rides a project update (projects
+    have no issue-style comment feed)."""
+    proj = mission("in_progress", {"DEVCAKE"})
+    proj.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(decomposition.finalize_decomposition(
+        mgr, run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert "DEVCAKE-NEEDS-HUMAN" in fake.all_missions[1].labels
+    assert "DEVCAKE-TRACKING" in proj.labels
+    assert any("DEVCAKE-NEEDS-HUMAN" in body
+               for _, body in getattr(fake, "project_updates", []))
+
+
 def test_decomposition_children_inherit_containing_project(tmp_path):
     """ADR-0012: an issue's children stay in its containing project (the
     tracking sweep then waits for them); standalone issues stay standalone;
@@ -1583,6 +1647,102 @@ def test_planned_without_attachments_posts_plan_inline(tmp_path):
                for c in fake.comments)
     assert "DEVCAKE-EXECUTE" in m.labels
     assert "DEVCAKE-PLAN" not in m.labels
+
+
+def test_planned_with_plan_approval_parks_for_human(tmp_path, monkeypatch):
+    """Per-board plan approval (PMOInstance.plan_approval): a fresh plan
+    still moves PLAN → EXECUTE, and the mission parks under
+    DEVCAKE-NEEDS-HUMAN until a person approves it. Derivation row 11
+    refuses to schedule it; removing the label — the hand-off recovery
+    path — resumes at EXECUTE. The plan comment says what to do and the
+    needs-human advisory shows it at once."""
+    from devcake.domain.model import derive
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run_coro(transitions.transition(
+        mgr, _run("PLAN", "DEVCAKE-PLAN"), {"outcome": "planned"},
+        "# the plan\n\ndo the thing"))
+    assert "DEVCAKE-EXECUTE" in m.labels
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels
+    assert "DEVCAKE-PLAN" not in m.labels
+    assert derive(m, "opt_in").schedulable is False
+    assert any("PLAN_1.md" in c and "DEVCAKE-NEEDS-HUMAN" in c
+               for c in fake.comments)
+    assert "p1" in mgr.needs_human
+    m.labels.discard("DEVCAKE-NEEDS-HUMAN")              # the human approves
+    assert derive(m, "opt_in").mission_type == MissionType.EXECUTE
+
+
+def test_planned_without_plan_approval_moves_straight_to_execute(tmp_path):
+    """Default OFF: today's behavior, verbatim — no park, no approval copy."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    assert mgr.instance.plan_approval is False
+    run_coro(transitions.transition(
+        mgr, _run("PLAN", "DEVCAKE-PLAN"), {"outcome": "planned"}, "# plan"))
+    assert "DEVCAKE-EXECUTE" in m.labels
+    assert "DEVCAKE-NEEDS-HUMAN" not in m.labels
+    assert not any("DEVCAKE-NEEDS-HUMAN" in c for c in fake.comments)
+    assert mgr.needs_human == {}
+
+
+def test_opportunistic_plan_with_plan_approval_parks_for_human(tmp_path, monkeypatch):
+    """Same board, same rule for the triage-attached plan (docs/03 §1.2):
+    a gate with a hole for opportunistic plans is no gate."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run_coro(transitions.transition(
+        mgr, _run("ONBOARD", None), {"outcome": "plan_needed", "summary": "s"},
+        "## Plan\nappend the line to README.md"))
+    assert "DEVCAKE-EXECUTE" in m.labels
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels
+    assert "DEVCAKE-PLAN" not in m.labels
+    assert any("opportunistic plan" in c and "DEVCAKE-NEEDS-HUMAN" in c
+               for c in fake.comments)
+    assert "p1" in mgr.needs_human
+
+
+def test_plan_needed_without_plan_never_parks_even_with_plan_approval(tmp_path, monkeypatch):
+    """No plan was issued yet — the mission goes to PLAN as usual; the
+    gate fires when the plan lands, not before."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run_coro(transitions.transition(
+        mgr, _run("ONBOARD", None), {"outcome": "plan_needed"}, None))
+    assert "DEVCAKE-PLAN" in m.labels
+    assert "DEVCAKE-NEEDS-HUMAN" not in m.labels
+    assert mgr.needs_human == {}
+
+
+def test_plan_approval_is_not_a_hand_off(tmp_path, monkeypatch):
+    """Design ruling: a gated plan is routine, never an obstacle. The run
+    stays a plain success (no hand-off verdict), and a later genuine
+    hand-off on the mission is hand-off #1 — the loop guardrail never
+    counts the gate."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    gated = _run("PLAN", "DEVCAKE-PLAN")
+    run_coro(transitions.transition(
+        mgr, gated, {"outcome": "planned"}, "# plan"))
+    assert gated.verdict is None
+    gated.state = "finished"
+    gated.result = {"outcome": "planned"}
+    store.save(gated)
+    m.labels.discard("DEVCAKE-NEEDS-HUMAN")              # approved
+    later = Run(run_id="T-1-2-EXECUTE-BBBBBB", mission_key="T-1",
+                mission_pmo_id="p1", mission_type="EXECUTE",
+                dev_type="senior-dev", seq=2,
+                stage_label_at_dispatch="DEVCAKE-EXECUTE")
+    run_coro(transitions.transition(
+        mgr, later, {"outcome": "human_needed", "summary": "grant access"},
+        None))
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels
+    assert not any("Hand-off #2" in c for c in fake.comments)
+    assert later.verdict.startswith("handed off")
 
 
 GITHUB_COMMENT_MAX = 65536

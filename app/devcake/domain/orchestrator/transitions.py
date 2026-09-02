@@ -13,6 +13,42 @@ from .markers import COMMENT_SENTINEL, LEGAL_OUTCOMES, _SWAP_MARKER_STAGE
 
 log = logging.getLogger("devcake.missions")
 
+# Per-board plan approval (PMOInstance.plan_approval, docs/03 §2a). A fresh
+# plan — PLAN's `planned` or ONBOARD's opportunistic attach — still lands on
+# DEVCAKE-EXECUTE and additionally parks under DEVCAKE-NEEDS-HUMAN until a
+# person approves it: derivation row 11 refuses to schedule the mission, and
+# removing the label (or Resume in the admin panel) starts EXECUTE — the
+# hand-off recovery path, reused rather than an eleventh managed label.
+# NEEDS-HUMAN is not a stage label, so the redelivery swap table
+# (stage_after=EXECUTE) is untouched. NOT a hand-off (founder ruling): the
+# run's outcome stays `planned`/`plan_needed` so the loop guardrail in the
+# human_needed branch never counts it, the verdict stays a plain success,
+# and the audit action is its own. Both plan sources take the same gate —
+# a gate with a hole for triage-attached plans is no gate — and so does a
+# decomposition (a split is a plan): decomposition.py creates the children
+# parked under the same label.
+PLAN_APPROVAL_NOTE = (
+    "\n\n✋ **This board requires a human to approve plans.** Review the "
+    "plan, then remove the `DEVCAKE-NEEDS-HUMAN` label (or **Resume** in "
+    "the admin panel) to start EXECUTE. To change the plan first: add your "
+    "guidance as a comment, swap `DEVCAKE-EXECUTE` back to `DEVCAKE-PLAN`, "
+    "then remove `DEVCAKE-NEEDS-HUMAN` — DevCake re-plans with it.")
+
+
+def _plan_gate_labels(mgr) -> set[str]:
+    """Labels a fresh plan adds beyond DEVCAKE-EXECUTE: the approval park
+    when the board gates plans, nothing otherwise."""
+    return {LABEL_NEEDS_HUMAN} if mgr.instance.plan_approval else set()
+
+
+def _note_plan_gate(mgr, run: Run, live, plan_name: str) -> None:
+    """Advisory for the admin panel's Needs Human panel, set at once (the
+    sweep rebuilds it from the label every cycle, as for hand-offs)."""
+    if mgr.instance.plan_approval:
+        mgr.needs_human[run.mission_pmo_id] = (
+            f"{run.mission_key}: plan {plan_name} awaiting approval"
+            + (f" — {live.url}" if live.url else ""))
+
 
 async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
     outcome = result.get("outcome", "")
@@ -101,16 +137,23 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             else:
                 body = (f"📋 DevCake plan for this mission (`{plan_name}`):\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
+            if mgr.instance.plan_approval:
+                body += PLAN_APPROVAL_NOTE
             await mgr._feed(pmo_id, run.pmo_kind, body)
 
         async def _plan_labels():
+            gate = _plan_gate_labels(mgr)
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove={LABEL_PLAN}, add={LABEL_EXECUTE})
+                                       remove={LABEL_PLAN},
+                                       add={LABEL_EXECUTE} | gate)
             mgr._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
+            if gate:
+                mgr._audit(pmo_id, "plan_approval_gate", plan_name)
 
         await mgr._checkpoint(run, steps.TRANSITION_PLANNED_UPLOAD, _plan_upload)
         await mgr._checkpoint(run, steps.TRANSITION_PLANNED_FEED, _plan_feed)
         await mgr._checkpoint(run, steps.TRANSITION_PLANNED_LABELS, _plan_labels)
+        _note_plan_gate(mgr, run, live, plan_name)
         if steps.TRANSITION_PLANNED not in run.finalized_steps:
             run.finalized_steps.append(steps.TRANSITION_PLANNED)
             mgr.runs.store.save(run)
@@ -162,12 +205,17 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 body = (f"📋 DevCake attached an opportunistic plan from triage "
                         f"(`{plan_name}`) — skipping the PLAN step:\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
+            if mgr.instance.plan_approval:
+                body += PLAN_APPROVAL_NOTE
             await mgr._feed(pmo_id, run.pmo_kind, body)
 
         async def _plan_attach_labels():
+            gate = _plan_gate_labels(mgr)
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove=set(), add={LABEL_EXECUTE})
+                                       remove=set(), add={LABEL_EXECUTE} | gate)
             mgr._audit(pmo_id, "label_add", LABEL_EXECUTE)
+            if gate:
+                mgr._audit(pmo_id, "plan_approval_gate", plan_name)
 
         await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED_ATTACH_UPLOAD,
                                _plan_attach_upload)
@@ -175,6 +223,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                                _plan_attach_feed)
         await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED_ATTACH_LABELS,
                                _plan_attach_labels)
+        _note_plan_gate(mgr, run, live, plan_name)
         if steps.TRANSITION_PLAN_NEEDED_ATTACH not in run.finalized_steps:
             run.finalized_steps.append(steps.TRANSITION_PLAN_NEEDED_ATTACH)
             mgr.runs.store.save(run)

@@ -698,6 +698,20 @@ until that run exists, field evidence below stays operator-self-reported.
   receipt — the Apple Silicon arch). Owed: the macOS Docker Desktop row
   (run the probe on a Mac per docs/13). **built** (probe live-run green on
   one rig).
+- **Per-board plan approval** (2026-09-02, founder ask): a PMO-card toggle
+  (`pmos[].plan_approval`, default off, docs/03 §2a) that makes every fresh
+  plan — a PLAN run's `planned` or ONBOARD's opportunistic attach, same
+  gate for both by ruling — land on `DEVCAKE-EXECUTE` *and*
+  `DEVCAKE-NEEDS-HUMAN`, and every decomposition child be created parked
+  under `DEVCAKE-NEEDS-HUMAN` (a split is a plan, second ruling the same
+  day; a split is edited in place, not redone), so a person reads the plan
+  before any code is written; approving = removing the label (or Resume),
+  changing = guidance comment + relabel back to PLAN. Reuses the hand-off label and recovery
+  path (no eleventh managed label; not a stage label, so the redelivery
+  swap table is untouched) and is, by ruling, **not a hand-off**: outcome
+  and verdict stay a plain success, the loop guardrail never counts it,
+  own audit action `plan_approval_gate`. **built** (transition + config +
+  SPA suites green; not yet field-exercised).
 
 ### Field evidence (receipted)
 

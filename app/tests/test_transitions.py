@@ -896,6 +896,70 @@ def test_decomposition_children_clean_without_marker(tmp_path):
     assert "devcake-repo" not in fake.all_missions[1].description
 
 
+def test_decomposition_with_plan_approval_creates_children_parked(
+        tmp_path, monkeypatch):
+    """Per-board plan approval covers the split too (a decomposition
+    manifest is a plan): every child is created already parked under
+    DEVCAKE-NEEDS-HUMAN, so the fan-out never schedules until a person
+    reviews it. Approving a child = removing that one label — it then
+    derives as ONBOARD like any backlog mission. The parent's decomposition
+    comment says so. Not a hand-off: plain-success verdict."""
+    from devcake.domain.model import derive
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run = _run("ONBOARD", None)
+    drafts = [{"title": "docs"}, {"title": "code", "blocked_by": [1]}]
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "decomposed", "decomposition": drafts}, None))
+    children = fake.all_missions[1:]
+    assert len(children) == 2
+    assert all("DEVCAKE-NEEDS-HUMAN" in c.labels for c in children)
+    assert all("DEVCAKE-CREATED" in c.labels for c in children)
+    assert all(derive(c, "opt_in").schedulable is False for c in children)
+    assert any("DEVCAKE-NEEDS-HUMAN" in c for c in fake.comments)
+    assert fake.statuses == ["canceled"]          # the original still closes
+    assert run.verdict is None
+    assert all(c.pmo_id in mgr.needs_human for c in children)
+    children[0].labels.discard("DEVCAKE-NEEDS-HUMAN")        # approve one
+    assert derive(children[0], "opt_in").mission_type == MissionType.ONBOARD
+    assert derive(children[1], "opt_in").schedulable is False
+
+
+def test_decomposition_without_plan_approval_children_schedule(tmp_path):
+    """Default OFF: children are created ready to triage, verbatim."""
+    from devcake.domain.model import derive
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(transitions.transition(
+        mgr, _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "solo"}]}, None))
+    child = fake.all_missions[1]
+    assert "DEVCAKE-NEEDS-HUMAN" not in child.labels
+    assert derive(child, "opt_in").mission_type == MissionType.ONBOARD
+    assert not any("DEVCAKE-NEEDS-HUMAN" in c for c in fake.comments)
+    assert mgr.needs_human == {}
+
+
+def test_project_decomposition_with_plan_approval_parks_children(
+        tmp_path, monkeypatch):
+    """Project originals take the same gate; the project still gets
+    DEVCAKE-TRACKING and the instruction rides a project update (projects
+    have no issue-style comment feed)."""
+    proj = mission("in_progress", {"DEVCAKE"})
+    proj.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(decomposition.finalize_decomposition(
+        mgr, run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert "DEVCAKE-NEEDS-HUMAN" in fake.all_missions[1].labels
+    assert "DEVCAKE-TRACKING" in proj.labels
+    assert any("DEVCAKE-NEEDS-HUMAN" in body
+               for _, body in getattr(fake, "project_updates", []))
+
+
 def test_decomposition_children_inherit_containing_project(tmp_path):
     """ADR-0012: an issue's children stay in its containing project (the
     tracking sweep then waits for them); standalone issues stay standalone;

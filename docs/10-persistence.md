@@ -177,7 +177,7 @@ review_loop_warning_every: 3
 attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
 # each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
-# … and plan_approval: true  # per-board plan approval gate (03 §2a): fresh plans park under DEVCAKE-NEEDS-HUMAN
+# … and plan_approval: true  # per-board plan approval gate (03 §2a): fresh plans and decomposition children park under DEVCAKE-NEEDS-HUMAN
 max_decomposition_depth: 2           # 0 = unlimited; ADR-0012 / 03 §1.3
 context_sourcing_strict: true        # ADR-0035: skill sources + memory notebooks fail closed —
                                      # a run whose context cannot be fetched does not start.

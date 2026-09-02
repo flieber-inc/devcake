@@ -502,9 +502,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               </SettingRow>
               <SettingRow label="Plan approval"
                 desc={inst.plan_approval
-                  ? "ON — every new plan parks its ticket under DEVCAKE-NEEDS-HUMAN until a person approves it; remove the label (or Resume on the Missions page) to start the work (applies on Save)."
-                  : "OFF — a new plan moves its ticket straight to DEVCAKE-EXECUTE."}
-                help="With approval on, a plan — from a PLAN run or attached at triage — still moves the ticket to DEVCAKE-EXECUTE but also adds DEVCAKE-NEEDS-HUMAN, so nothing is scheduled until someone reads the plan file on the ticket. Approve by removing the label (or Resume on the Missions page). To change the plan first, add guidance as a comment, move the ticket back to DEVCAKE-PLAN, then remove DEVCAKE-NEEDS-HUMAN. A gated plan is never counted as a hand-off.">
+                  ? "ON — every new plan parks its ticket, and every decomposition creates its children parked, under DEVCAKE-NEEDS-HUMAN until a person approves; remove the label (or Resume on the Missions page) to start the work (applies on Save)."
+                  : "OFF — a new plan moves its ticket straight to DEVCAKE-EXECUTE and decomposition children are triaged at once."}
+                help="With approval on, a plan — from a PLAN run or attached at triage — still moves the ticket to DEVCAKE-EXECUTE but also adds DEVCAKE-NEEDS-HUMAN, so nothing is scheduled until someone reads the plan file on the ticket. A decomposition is a plan too: its children are created already carrying DEVCAKE-NEEDS-HUMAN. Approve by removing the label (or Resume on the Missions page), one ticket at a time. To change a plan first, add guidance as a comment, move the ticket back to DEVCAKE-PLAN, then remove DEVCAKE-NEEDS-HUMAN. To change a split, edit or cancel the children in place — a split is edited, not redone. A gated plan is never counted as a hand-off.">
                 <Toggle on={!!inst.plan_approval}
                   label={`Plan approval for ${inst.name}`}
                   onClick={() => setField(`cfg.pmos.${idx}.plan_approval`,

@@ -19,10 +19,13 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 - **Added — per-board plan approval.** A PMO card toggle (**Plan
   approval**, `pmos[].plan_approval`, default off) that makes every fresh
   plan — from a PLAN run or attached at ONBOARD triage — park its mission
-  under `DEVCAKE-NEEDS-HUMAN` next to `DEVCAKE-EXECUTE`, so a person reads
-  the plan before any code is written. Approve by removing the label (or
-  **Resume** on the Missions page); to change the plan first, add guidance
-  as a comment and move the ticket back to `DEVCAKE-PLAN`. Reuses the
+  under `DEVCAKE-NEEDS-HUMAN` next to `DEVCAKE-EXECUTE`, and every
+  decomposition create its children already parked under
+  `DEVCAKE-NEEDS-HUMAN`, so a person reads the plan (or the split) before
+  any code is written. Approve by removing the label (or **Resume** on the
+  Missions page), one ticket at a time; to change a plan first, add
+  guidance as a comment and move the ticket back to `DEVCAKE-PLAN`; to
+  change a split, edit or cancel the children in place. Reuses the
   hand-off label and recovery path; not counted as a hand-off (docs/03
   §2a).
 - **Fixed — `/health` 500 (SPA "Backend unreachable") and aborted poll

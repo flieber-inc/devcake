@@ -24,7 +24,9 @@ log = logging.getLogger("devcake.missions")
 # run's outcome stays `planned`/`plan_needed` so the loop guardrail in the
 # human_needed branch never counts it, the verdict stays a plain success,
 # and the audit action is its own. Both plan sources take the same gate —
-# a gate with a hole for triage-attached plans is no gate.
+# a gate with a hole for triage-attached plans is no gate — and so does a
+# decomposition (a split is a plan): decomposition.py creates the children
+# parked under the same label.
 PLAN_APPROVAL_NOTE = (
     "\n\n✋ **This board requires a human to approve plans.** Review the "
     "plan, then remove the `DEVCAKE-NEEDS-HUMAN` label (or **Resume** in "

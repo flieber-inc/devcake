@@ -158,9 +158,10 @@ class PMOInstance(BaseModel):
     discovery_routing: bool = True
     # Per-board plan approval (docs/03 §2a): while true, every fresh plan —
     # a PLAN run's `planned` or ONBOARD's opportunistic attach — lands on
-    # DEVCAKE-EXECUTE *and* DEVCAKE-NEEDS-HUMAN, so nothing is scheduled
-    # until a person approves the plan by removing the label (or Resume in
-    # the admin panel). Reuses the hand-off label and its recovery path
+    # DEVCAKE-EXECUTE *and* DEVCAKE-NEEDS-HUMAN, and every decomposition
+    # child is created parked under DEVCAKE-NEEDS-HUMAN (a split is a plan),
+    # so nothing is scheduled until a person approves by removing the label
+    # (or Resume in the admin panel). Reuses the hand-off label and its recovery path
     # rather than adding an eleventh managed label; NOT a hand-off (never
     # counted by the loop guardrail). A board's process policy, so it lives
     # on the PMO instance, not the repo card. Default OFF keeps today's

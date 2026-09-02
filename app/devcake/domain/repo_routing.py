@@ -35,25 +35,103 @@ def marker_repo(description: str) -> str | None:
     return m.group(1).lower() if m else None
 
 
+def repo_slug(url: str) -> str:
+    """The repository URL's last path segment, `.git`-stripped, lowercased —
+    the name Devs and humans reach for (it is the workspace folder and the
+    tail of the URL they just read)."""
+    return (url or "").rstrip("/").rsplit("/", 1)[-1].removesuffix(".git").lower()
+
+
+def _slug_candidates(token: str, repo_names: set[str],
+                     repo_urls: "dict[str, str] | None") -> list[str]:
+    """Configured cards whose URL slug equals `token` (case-insensitive)."""
+    if not repo_urls:
+        return []
+    return sorted(n for n, u in repo_urls.items()
+                  if n in repo_names and repo_slug(u) == token.lower())
+
+
+def _cards_with_slugs(repo_names: set[str],
+                      repo_urls: "dict[str, str] | None") -> str:
+    """`alpha (billing-api), beta (inventory-sync)` — the fix-the-
+    marker hint that shows the mapping instead of sending the human to the
+    admin panel."""
+    parts = []
+    for n in sorted(repo_names):
+        slug = repo_slug((repo_urls or {}).get(n, ""))
+        parts.append(f"{n} ({slug})" if slug and slug != n else n)
+    return ", ".join(parts) or "(none)"
+
+
+def repo_urls_of(instances) -> "dict[str, str] | None":
+    """Card name → URL from a forge registry's `instances` map; None when
+    the registry exposes names only (stubs), which disables the alias."""
+    items = getattr(instances, "items", None)
+    if items is None:
+        return None
+    return {n: getattr(i, "url", "") or "" for n, i in items()}
+
+
+def resolve_marker(description: str, repo_names: set[str],
+                   repo_urls: "dict[str, str] | None" = None) -> str | None:
+    """The CARD a description's marker names, or None: the card name itself,
+    or — field finding, hyphenated URL slugs written by triage Devs and
+    humans alike — the one configured card whose URL slug matches. Anything
+    ambiguous or unknown is None; `resolve_repo` owns the gate reasons. This
+    is the ONE marker→card rule, shared with decomposition's inheritance."""
+    strict = marker_repo(description)
+    if strict is not None and strict in repo_names:
+        return strict
+    raw = RAW_REPO_MARKER.search(description or "")
+    token = strict if strict is not None else (raw.group(1).strip() if raw else None)
+    if not token:
+        return None
+    cands = _slug_candidates(token, repo_names, repo_urls)
+    return cands[0] if len(cands) == 1 else None
+
+
 def resolve_repo(mission: "Mission", instance: "PMOInstance",
                  repo_names: set[str],
-                 run_history: "list[Run]") -> tuple[str | None, str | None]:
+                 run_history: "list[Run]",
+                 repo_urls: "dict[str, str] | None" = None
+                 ) -> tuple[str | None, str | None]:
     """→ (repo_name, None) when resolved; (None, reason) when gated.
 
     `run_history`: this mission's prior runs (any state), newest first —
     only their repo_ref is read. Steward/hello records never carry a
     mission's repo and must not be passed in.
+
+    `repo_urls`: card name → URL for the configured repos. Enables the slug
+    alias: a marker that is not a card name but equals exactly one work
+    repo's URL slug resolves to that card (an exact secondary key on
+    operator-owned config — NOT the silent default fall-through A26
+    forbids: zero or several matches still gate, with the mapping in the
+    reason). None = no aliasing (legacy callers, tests).
     """
     marker = marker_repo(mission.description)
+    raw = RAW_REPO_MARKER.search(mission.description or "")
+    token = marker if marker is not None else (
+        raw.group(1).strip() if raw else None)
+    if token is not None and marker not in repo_names:
+        # not a card name (unparseable, or parseable but unknown): try the
+        # slug alias before any gate
+        cands = _slug_candidates(token, repo_names, repo_urls)
+        if len(cands) == 1:
+            marker = cands[0]
+        elif len(cands) > 1:
+            return None, (f"ambiguous `devcake-repo:` marker {token[:40]!r} — "
+                          f"the URL slug matches several cards: "
+                          f"{', '.join(cands)}; use the card name")
     if marker is None:
-        raw = RAW_REPO_MARKER.search(mission.description or "")
         if raw:
             # devcake-repo:-shaped but unparseable = a typo'd routing intent
             # — silently landing on the default (and then latching sticky
             # there) is the exact hazard the marker exists to avoid (A26)
             return None, (f"unparseable `devcake-repo:` marker "
-                          f"{raw.group(1)[:40]!r} — repo names are lowercase "
-                          f"letters/digits/underscores, ≤39; fix the marker")
+                          f"{raw.group(1)[:40]!r} — the marker is the card "
+                          f"name (lowercase letters/digits/underscores, ≤39) "
+                          f"or the repository URL's last path segment; "
+                          f"configured: {_cards_with_slugs(repo_names, repo_urls)}")
 
     sticky = next((r.repo_ref for r in run_history if r.repo_ref), None)
     if sticky is not None:
@@ -74,8 +152,9 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
     if marker is not None:
         if marker not in repo_names:
             return None, (f"unknown repo '{marker}' — fix the "
-                          f"`devcake-repo:` marker (configured: "
-                          f"{sorted(repo_names) or '(none)'})")
+                          f"`devcake-repo:` marker: the card name or the "
+                          f"repository URL's last path segment; configured: "
+                          f"{_cards_with_slugs(repo_names, repo_urls)}")
         if marker in (instance.reference_repos or []):
             # reference repos are read-only consultation material for every
             # stage (founder request 2026-07-15) — never a work target

@@ -44,7 +44,7 @@ def resolve_repo(mgr, mission: Mission, all_runs: list | None = None):
     `all_runs`: pre-fetched store snapshot — the poll loop stamps every
     mission every cycle, so it reads the store ONCE per segment instead of
     once per mission; dispatch's live re-resolve reads fresh."""
-    from ..repo_routing import resolve_repo
+    from ..repo_routing import repo_urls_of, resolve_repo
     if all_runs is None:
         all_runs = mgr.runs.store.all()
     history = sorted(
@@ -53,7 +53,8 @@ def resolve_repo(mgr, mission: Mission, all_runs: list | None = None):
          and r.mission_type != "STEWARD"),
         key=lambda r: aware(r.created_at), reverse=True)
     return resolve_repo(mission, mgr.instance,
-                        set(mgr.forges.instances), history)
+                        set(mgr.forges.instances), history,
+                        repo_urls=repo_urls_of(mgr.forges.instances))
 
 
 def steward_repo(mgr) -> str | None:
@@ -310,9 +311,12 @@ def _onboard_repo_options(mgr, primary: str) -> str:
         "**Cross-repo work must never be one mission.** If completing this "
         "mission requires changes in more than one repository, take the "
         "high-complexity path: decompose into ONE child per repository, put "
-        "a `devcake-repo:<name>` line (backticked, exactly as written here) "
-        "in each child's description naming its repository, and order them "
-        "with blocked_by where one repository's change depends on another's. "
+        "a `devcake-repo:<name>` line (backticked) in each child's "
+        "description naming its repository, and order them with blocked_by "
+        "where one repository's change depends on another's. The marker "
+        "value is the card name in backticks at the START of each line "
+        "above; DevCake also accepts the repository URL's last path segment "
+        "as an alias. Nothing else routes. "
         f"A child without a marker lands on the default repository "
         f"(`{default}`).\n\n")
 

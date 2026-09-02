@@ -887,6 +887,28 @@ def test_decomposition_children_inherit_repo_marker(tmp_path):
     assert len(fake.created) == 2
 
 
+def test_decomposition_children_inherit_resolved_card_from_slug_marker(
+        tmp_path, monkeypatch):
+    """A parent whose marker is the repo's URL slug (the field failure
+    shape) still stamps its children with the CARD name — inheritance goes
+    through the same resolver as dispatch."""
+    from devcake.config import RepoInstance
+    m = mission("in_progress", {"DEVCAKE"})
+    m.description = "Do the big thing\n\n`devcake-repo:billing-api`"
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    cards = {"alpha": RepoInstance(name="alpha",
+                                   url="https://forge.example/team/billing-api.git"),
+             "beta": RepoInstance(name="beta", url="https://forge.example/team/beta")}
+    monkeypatch.setattr(type(mgr.forges), "instances",
+                        property(lambda self: cards))
+    run_coro(decomposition.finalize_decomposition(
+        mgr, _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "docs"}]}))
+    child = fake.all_missions[1]
+    assert "`devcake-repo:alpha`" in child.description
+    assert "`devcake-repo:billing-api`" not in child.description
+
+
 def test_decomposition_children_clean_without_marker(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)

@@ -172,6 +172,8 @@ The `human_needed` outcome (`03-mission-lifecycle.md` §4a) is a **successful ru
 
 Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = clean hand-off.
 
+The label has one other, routine source: per-board **plan approval** (`03-mission-lifecycle.md` §2a) parks every fresh plan under it until a person approves. Same label, same recovery (remove it / **Resume**), but not a hand-off — the run is a plain success and it never enters the loop guardrail count below.
+
 **Loop guardrail (warnings only):** repeats on the same (mission, stage) escalate the baton-pass comment from the 2nd hand-off on ("Hand-off #N … add `DEVCAKE-SKIP` to stop DevCake"); DevCake never auto-parks — the human always decides. The prompts require evidence (quote the exact error) before any hand-off.
 
 **Steward degradation:** 3 consecutive dead STEWARD runs ⇒ the periodic service backs off (`steward_degraded` in `/health` + the admin card); "Run now" remains available and a successful run clears it. Store-derived — restart-safe, no counters to reset.

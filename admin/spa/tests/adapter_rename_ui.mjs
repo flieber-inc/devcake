@@ -24,6 +24,7 @@ const PMO = {
   memory_repos: [],
   intake_paused: false,
   discovery_routing: true,
+  plan_approval: false,
   assignments: {},
   managed: false,
 };

@@ -34,7 +34,7 @@ No code changes. `result.json`: `outcome: "plan_needed"` with a one-paragraph `s
 
 **Opportunistic plan:** if, in the course of assessing, the Dev has already effectively formed the complete plan, it may write it to `/workspace/out/PLAN.md`. This is optional and confidence-gated — never forced; assessment and planning remain separate jobs by default.
 
-**Finalization:** transcript + token report → if a `PLAN.md` was attached: upload it as `PLAN_{seq}.md` to the activity feed and add `DEVCAKE-EXECUTE` (the PLAN step is skipped — its work already exists); otherwise add `DEVCAKE-PLAN`.
+**Finalization:** transcript + token report → if a `PLAN.md` was attached: upload it as `PLAN_{seq}.md` to the activity feed and add `DEVCAKE-EXECUTE` (the PLAN step is skipped — its work already exists), parking it under `DEVCAKE-NEEDS-HUMAN` as well when the board requires plan approval (§2a — an attached plan is a plan); otherwise add `DEVCAKE-PLAN`.
 
 ### 1.3 High-complexity path (decomposition)
 No code changes. The Dev emits a **decomposition manifest** in `result.json` (`outcome: "decomposed"`, `decomposition: [{title, description, priority, …}, …]` — entry schema in `02-domain-model.md` §11), observing:
@@ -54,7 +54,13 @@ No code changes. The Dev emits a **decomposition manifest** in `result.json` (`o
 
 The Dev invokes the harness's plan capability (mapping per harness in `08-harness-templates.md` §3) over the Mission and the codebase, producing `/workspace/out/PLAN.md`. No code changes. `result.json`: `outcome: "planned"`.
 
-**Finalization:** transcript + token report → upload `PLAN_{seq}.md` to the activity feed (as attachment, referenced from a comment) → swap `DEVCAKE-PLAN` → `DEVCAKE-EXECUTE`.
+**Finalization:** transcript + token report → upload `PLAN_{seq}.md` to the activity feed (as attachment, referenced from a comment) → swap `DEVCAKE-PLAN` → `DEVCAKE-EXECUTE` (plus `DEVCAKE-NEEDS-HUMAN` when the board requires plan approval, §2a).
+
+### 2a. Plan approval (per board)
+
+A board may require a person to approve every plan before any code is written: `pmos[].plan_approval` (`02-domain-model.md` §9; the PMO card's **Plan approval** toggle, default off). With it on, a fresh plan — this step's `planned` **or** ONBOARD's opportunistic attach (§1.2) — still advances the Mission to `DEVCAKE-EXECUTE` and additionally adds `DEVCAKE-NEEDS-HUMAN`, so derivation row 11 keeps it off the schedule. The plan comment ends with the instruction: review the plan, then remove `DEVCAKE-NEEDS-HUMAN` (or **Resume** in the admin panel) to start EXECUTE; to change the plan first, add guidance as a comment, swap `DEVCAKE-EXECUTE` back to `DEVCAKE-PLAN`, then remove `DEVCAKE-NEEDS-HUMAN` — the next PLAN run reads the guidance from the feed like any human comment. The Mission shows in the admin panel's Needs Human panel like a hand-off.
+
+It reuses the hand-off label and its recovery path deliberately — no eleventh managed label, and `DEVCAKE-NEEDS-HUMAN` is not a stage label, so the redelivery checks (`04-orchestrator.md`) are untouched. It is **not** a hand-off (§4a): the run's outcome stays `planned` / `plan_needed`, its verdict is a plain success, the hand-off loop guardrail never counts it, and the audit action is its own (`plan_approval_gate`). Both plan sources take the same gate — a gate with a hole for triage-attached plans is no gate.
 
 ## 3. EXECUTE
 

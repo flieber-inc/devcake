@@ -19,6 +19,7 @@ const pmo = (name, system, team) => ({
   name, system, team_key: team, api_base: null,
   repos: [], reference_repos: [], memory_repos: [],
   intake_paused: false, discovery_routing: true,
+  plan_approval: false,
   assignments: {}, managed: false,
 });
 

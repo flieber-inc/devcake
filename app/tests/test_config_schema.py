@@ -203,6 +203,19 @@ def test_discovery_routing_defaults_on_and_round_trips():
     assert redumped.pmos[0].discovery_routing is False
 
 
+def test_plan_approval_defaults_off_and_round_trips():
+    """Per-board plan approval gate (PMOInstance.plan_approval): default
+    OFF — a fresh plan moves straight to EXECUTE — plain bool riding the
+    normal draft/save path."""
+    base = _base()
+    assert AppConfig.model_validate(base).pmos[0].plan_approval is False
+    tuned = {**base, "pmos": [dict(base["pmos"][0], plan_approval=True)]}
+    got = AppConfig.model_validate(tuned)
+    assert got.pmos[0].plan_approval is True
+    redumped = AppConfig.model_validate(got.model_dump())
+    assert redumped.pmos[0].plan_approval is True
+
+
 def test_budgets_defaults_bounds_and_round_trip():
     """ADR-0033 D7 as amended (founder rulings 2026-08-13): counting
     budgets are operator knobs — defaults 5/3, 0 = unlimited, negatives

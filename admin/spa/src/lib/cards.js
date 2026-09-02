@@ -15,6 +15,7 @@ export const newPmoCard = (name, system) => ({
   memory_repos: [],
   intake_paused: false,
   discovery_routing: true,
+  plan_approval: false,
   assignments: {},
   active_prompt_templates: {},
   managed: false,

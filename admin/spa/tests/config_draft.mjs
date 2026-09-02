@@ -81,7 +81,8 @@ check("scaffolds carry every server-model field (pmo, repo, skill-source)", () =
   assert.deepEqual(Object.keys(newPmoCard("x", "linear")).sort(),
     ["active_prompt_templates", "api_base", "assignments",
      "discovery_routing", "intake_paused", "managed", "memory_repos",
-     "name", "reference_repos", "repos", "system", "team_key"]);
+     "name", "plan_approval", "reference_repos", "repos", "system",
+     "team_key"]);
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
      "default_branch", "forge", "merge_retry_window_minutes",
@@ -108,6 +109,7 @@ check("pmo card fields have real labels, not raw paths", () => {
   assert.match(metaFor("cfg.pmos.1.intake_paused").label, /Intake paused/);
   assert.match(metaFor("cfg.pmos.1.discovery_routing").label,
     /Discovery routing/);
+  assert.match(metaFor("cfg.pmos.1.plan_approval").label, /Plan approval/);
   assert.match(metaFor("cfg.pmos.1.managed").label, /Managed/);
   assert.notEqual(metaFor("cfg.pmos.1.assignments").group, "Other");
 });

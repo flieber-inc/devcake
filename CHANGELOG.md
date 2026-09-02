@@ -16,7 +16,12 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
-- **Added — per-board plan approval.** A PMO card toggle (**Plan
+## v0.5.2 (2026-09-02)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.2).
+
+- **New — per-board plan approval** (#380). A PMO card toggle (**Plan
   approval**, `pmos[].plan_approval`, default off) that makes every fresh
   plan — from a PLAN run or attached at ONBOARD triage — park its mission
   under `DEVCAKE-NEEDS-HUMAN` next to `DEVCAKE-EXECUTE`, and every
@@ -29,9 +34,10 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   hand-off label and recovery path; not counted as a hand-off (docs/03
   §2a).
 - **Fixed — `/health` 500 (SPA "Backend unreachable") and aborted poll
-  sweeps once an internal mission repo is registered.** Internal (zero-repo)
-  repos are synthesized with hyphenated names the operator-card pattern
-  forbids; their token read-throughs went to the secrets store, whose name
+  sweeps once an internal mission repo is registered** (#378). Internal
+  (zero-repo) repos are synthesized with hyphenated names the operator-card
+  pattern forbids; their token read-throughs went to the secrets store,
+  whose name
   check raised — outside the branch-protection probe's try on `/health`,
   and outside `refresh_health`, where the cycle guard then dropped whole
   poll cycles whenever a breaker was latched. Such rows now carry a
@@ -43,14 +49,20 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   field (there is none): it re-probes on the registered service-token
   adapter and clears on ok instead of sticking until restart.
 - **Fixed — `devcake up` could leave the host baker dead on the degraded
-  (flock respawn) path.** The respawn loop's lock fd was inherited by its
-  children, so a stopped supervisor's orphans (the backoff `sleep`, the
-  baker) kept the lock; the install slept a fixed 0.3 s and the successor
+  (flock respawn) path** (#379). The respawn loop's lock fd was inherited
+  by its children, so a stopped supervisor's orphans (the backoff `sleep`,
+  the baker) kept the lock; the install slept a fixed 0.3 s and the
+  successor
   gave up on the busy lock at once ("respawn supervisor died at launch").
   The handoff is now ordered and waited — supervisor first, then baker,
   each waited for with SIGKILL escalation (`DEVCAKE_BAKER_EXIT_WAIT`) — the
   loop closes its lock fd for every child, and a successor waits up to
   `DEVCAKE_RESPAWN_LOCK_WAIT` seconds for a predecessor still releasing it.
+- **devcake-cli 0.1.1.** The CLI wheel carries the `devcake up` handoff
+  fix above (the launcher now stops a degraded respawn supervisor first);
+  PyPI installs upgrade with `uv tool upgrade devcake-cli`, checkout
+  installs with `uv tool install .` after pulling (lockstep with the
+  repo's `scripts/lib`).
 
 ## v0.5.1 (2026-08-31)
 

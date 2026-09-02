@@ -99,6 +99,15 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         run.continuations_used = int(payload.get("continuations_used") or 0)
     except (TypeError, ValueError):
         run.continuations_used = 0
+    # Routing-race fix (ADR-0033): the harvest (2b) posts the discovery
+    # marker BEFORE the close used to write `result` onto the record, and
+    # the sweep / steward read the RECORD — a poll-cycle sweep landing in
+    # that window read "no result" as "cleared" and closed the batch for
+    # good with a to=- receipt. Persist the result first; the failure
+    # branches below still overwrite it (None on a failed run).
+    if outcome:
+        run.result = redact_value(result)
+        mgr.runs.store.save(run)
 
     ctx = None
     if run.traceparent:

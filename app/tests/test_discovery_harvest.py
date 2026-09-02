@@ -431,3 +431,24 @@ def test_mission_md_dedupes_delivery_pairs(tmp_path):
     ]
     md = run_coro(mgr.activity_payload("p1", "issue"))["mission_md"]
     assert md.count("[T-7 · step 2") == 1
+
+
+def test_result_is_on_the_run_record_before_the_harvest_posts(tmp_path):
+    """Ordering pin for the routing race: the record the sweep and the
+    steward read must already carry `result` when the discovery marker
+    lands on the feed — otherwise a sweep in the window between harvest
+    and the close reads the batch as cleared."""
+    m, mgr, fake, store = _harvest_mgr(tmp_path)
+    run = _exec_run(store)
+    seen = []
+    orig = fake.post_feed
+
+    async def spy(ref, markdown):
+        if "devcake:discovery:v1" in markdown:
+            rec = store.get(run.run_id)
+            seen.append(rec.result if rec else None)
+        await orig(ref, markdown)
+    fake.post_feed = spy
+    run_coro(mgr.finalize(run, _payload([ENTRY])))
+    assert seen, "the discovery marker was never posted"
+    assert seen[0] and seen[0].get("discoveries"), seen

@@ -225,7 +225,8 @@ def build_discovery_package(mgr, family, pending: dict,
             r = run_ix.get((pmo_id, step))
             entries = valid_entries(r.result)[:n] if r is not None else []
             if not entries:
-                continue        # run record gone — the sweep terminates it
+                continue        # record gone or still closing — the sweep
+                                # terminates or re-drives it
             included.append((pmo_id, step))
             finds.append(f"From **{src.key}** step {step} — mission: "
                          f"{head(src)}")

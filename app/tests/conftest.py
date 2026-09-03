@@ -24,6 +24,18 @@ def _non_sentinel_app_digest(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_pmo_request_budget():
+    """The PMO request budget registry is process-global by design (ADR-0040:
+    buckets outlive adapter rebuilds). Tests build adapters on the same
+    placeholder credentials, so a rejection observed in one test would
+    block the next — start every test from an empty registry."""
+    from devcake.adapters import budget
+    budget.reset()
+    yield
+    budget.reset()
+
+
+@pytest.fixture(autouse=True)
 def _default_live_baker_for_staffing(monkeypatch):
     """Dispatch/OAuth/steward integration paths omit baker_alive; without a
     host baker heartbeat they would all refuse. Default None → True here.

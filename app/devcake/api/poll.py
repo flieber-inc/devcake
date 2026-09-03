@@ -23,7 +23,7 @@ from ..config import intake_blocks_dispatch
 from ..domain import backend_health
 from ..domain.model import ALL_LABELS, derive
 from ..domain.orchestrator import MissionManager
-from ..ports.pmo import PMOTransient
+from ..ports.pmo import PMOTransient, with_pmo_call
 
 log = logging.getLogger("devcake")
 tracer = trace.get_tracer("devcake")
@@ -145,6 +145,7 @@ class PollRuntime:
         if self.mission_owner != owner_before:
             self.owner_store.save(self.mission_owner)
 
+    @with_pmo_call("routine")   # ADR-0040: the poll's reads are paced, never waited for
     async def poll_instance(self, mgr: MissionManager,
                             cache_rows: list[dict]) -> tuple[int, int, int, set]:
         """One instance's poll segment: fetch + cross-instance dedupe + derive +
@@ -310,8 +311,10 @@ class PollRuntime:
                             # segment — the others still poll this cycle. Not
                             # marked degraded: transient is expected weather.
                             ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
-                            log.warning("poll.cycle %d: instance %s skipped: %s",
-                                        cycle, mgr.instance_name, e)
+                            hint = (f" (retry after {e.retry_after:.0f}s)"
+                                    if getattr(e, "retry_after", None) else "")
+                            log.warning("poll.cycle %d: instance %s skipped: %s%s",
+                                        cycle, mgr.instance_name, e, hint)
                         except Exception as e:  # noqa: BLE001 — poll loop guard: a permanent per-instance failure must not starve the remaining instances (audit A1); surfaced via poll_degraded
                             ispan.set_attribute("devcake.outcome", "INSTANCE_ERROR")
                             self.poll_degraded[mgr.instance_name] = (

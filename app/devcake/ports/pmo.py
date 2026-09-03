@@ -3,7 +3,12 @@
 on ref.kind internally, so vendor dualities (Linear's issue/project split)
 never leak into the domain. Normalized DTOs live in domain.model."""
 
-from typing import Optional, Protocol
+import functools
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Iterator, Literal, Optional, Protocol
 
 from pydantic import BaseModel
 
@@ -12,7 +17,76 @@ from ..domain.model import Activity, Mission, MissionRef, NormalizedStatus
 
 class PMOTransient(Exception):
     """Retryable PMO failure (429/5xx/network) — docs/15. Adapters raise this
-    for anything worth retrying next poll cycle; everything else is permanent."""
+    for anything worth retrying next poll cycle; everything else is permanent.
+
+    ``retry_after`` (seconds) and ``reset_at`` (epoch seconds) are advisory:
+    set when the vendor or the request budget knows when the next attempt
+    can succeed, ``None`` otherwise."""
+
+    def __init__(self, msg: str = "", *, retry_after: float | None = None,
+                 reset_at: float | None = None):
+        super().__init__(msg)
+        self.retry_after = retry_after
+        self.reset_at = reset_at
+
+
+class PMOBudgetExceeded(PMOTransient):
+    """The request budget refused the call BEFORE any vendor request was made
+    (docs/15 §2, ADR-0040): the remaining quota is reserved for critical
+    work, or pacing would require a wait the caller's class never takes.
+    A subclass, so every `except PMOTransient` keeps its segment-skip
+    semantics while logs and health can tell self-throttle from a vendor
+    rejection."""
+
+
+# ── request budget call classes (ADR-0040) ───────────────────────────────────
+# The port declares HOW URGENT a call is; the adapters' shared governor
+# decides what that means against the vendor's quota. Two classes only:
+# `critical` = anything that writes back a run's results or launches work
+# (finalize, dispatch, operator actions) — may spend the reserve, waits for
+# the refill; `routine` = everything else (poll reads, sweeps, probes) —
+# paced, never sleeps, refused when the reserve is reached. Unset context
+# means routine, so a caller that never declares gets today's behaviour.
+CallClass = Literal["critical", "routine"]
+
+
+@dataclass(frozen=True)
+class PMOCallContext:
+    call_class: CallClass
+    started: float                      # time.monotonic() at context entry
+    wait_budget_s: float | None = None  # None → the governor's class default
+
+
+pmo_call_ctx: ContextVar[PMOCallContext | None] = ContextVar(
+    "pmo_call_ctx", default=None)
+_mono = time.monotonic     # seam: tests drive the governor and this clock together
+
+
+@contextmanager
+def pmo_call(call_class: CallClass, *,
+             wait_budget_s: float | None = None) -> Iterator[PMOCallContext]:
+    """Declare the class of every PMO call made inside the block. Nested
+    blocks: the inner declaration wins. The wait budget is cumulative for
+    the whole block (a finalize's many calls share one deadline)."""
+    ctx = PMOCallContext(call_class, _mono(), wait_budget_s)
+    token = pmo_call_ctx.set(ctx)
+    try:
+        yield ctx
+    finally:
+        pmo_call_ctx.reset(token)
+
+
+def with_pmo_call(call_class: CallClass, *, wait_budget_s: float | None = None):
+    """Decorator form of `pmo_call` for the async boundary verbs (manager
+    finalize/dispatch, admin actions): the whole call runs under one
+    context, so its many PMO calls share one cumulative wait budget."""
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            with pmo_call(call_class, wait_budget_s=wait_budget_s):
+                return await fn(*args, **kwargs)
+        return wrapper
+    return deco
 
 
 class PMOHealth(BaseModel):

@@ -499,3 +499,40 @@ def test_branch_protection_maps_row_lookup_errors_to_none():
     finally:
         health_mod.reset_health_caches()
     assert out == {"bad": None}
+
+
+# ── ADR-0040: request budgets on /health ─────────────────────────────────────
+
+def test_health_payload_carries_pmo_budget_rows(monkeypatch):
+    from devcake.adapters import budget as pmo_budget
+    b = pmo_budget.budget_for("tracker.example", "k", system="linear",
+                              instance="a")
+    b.observe(pmo_budget.RateSignal(limit=2500, remaining=2000,
+                                    reset_at=1_700_000_000.0, window_s=3600))
+    fr = _forge_runtime(last_full_probe_at=datetime.now(timezone.utc))
+    got = _payload(fr, monkeypatch)
+    row = got["pmo_budget"][b.label]
+    assert row["limit"] == 2500 and row["remaining"] == 2000
+    assert row["instances"] == ["a"] and row["systems"] == ["linear"]
+    assert got["pmo_budget_warnings"] == {}
+
+
+def test_budget_warning_names_the_poll_interval_that_fits():
+    snap = {"tracker.example/user:u1": {
+        "limit": 2500, "instances": ["a", "b"], "foreign_spend": 0,
+        "demand_per_hour": {"a": 1500, "b": 1400}}}
+    out = health_mod._budget_warnings(snap, 15)
+    text = out["tracker.example/user:u1"]
+    assert "~2900 requests/hour against 2500/hour" in text
+    # 15 s × 2900 / (2500 × 0.8) = 21.75 → 22 s
+    assert "at least 22 s" in text
+    assert "a, b" in text
+
+
+def test_budget_warning_notes_a_foreign_consumer_and_stays_quiet_otherwise():
+    quiet = {"t/u": {"limit": 2500, "instances": ["a"], "foreign_spend": 0,
+                     "demand_per_hour": {"a": 900}}}
+    assert health_mod._budget_warnings(quiet, 30) == {}
+    shared = {"t/u": {"limit": 2500, "instances": ["a"], "foreign_spend": 600,
+                      "demand_per_hour": {"a": 900}}}
+    assert "another consumer" in health_mod._budget_warnings(shared, 30)["t/u"]

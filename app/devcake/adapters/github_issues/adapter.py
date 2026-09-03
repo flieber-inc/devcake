@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from urllib.parse import urlsplit
+
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry,
@@ -21,6 +23,36 @@ from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
+from ..budget import RateSignal, budget_for, header_float, header_int
+
+
+# GitHub meters the REST API per user per hour (docs/05 §2a)
+RATE_WINDOW_S = 3600
+
+
+def rate_signal(resp: httpx.Response) -> RateSignal:
+    """GitHub's primary-limit headers (x-ratelimit-*, reset in epoch seconds)
+    → the vendor-neutral signal (ADR-0040). Only the `core` resource meters
+    the Issues API. A 403 whose body names the rate limit is a rejection; a
+    secondary-limit rejection (retry-after present, or the body says so) is
+    honoured for at least 60 s, per GitHub's own guidance."""
+    h = resp.headers
+    body = (resp.text or "").lower()
+    limited = resp.status_code == 429 or (
+        resp.status_code == 403 and "rate limit" in body)
+    retry_after = header_float(h, "retry-after")
+    if limited and (retry_after is not None or "secondary" in body):
+        retry_after = max(retry_after or 0.0, 60.0)
+    limit = remaining = None
+    reset_at = None
+    if (h.get("x-ratelimit-resource") or "core").lower() == "core":
+        limit = header_int(h, "x-ratelimit-limit")
+        remaining = header_int(h, "x-ratelimit-remaining")
+        reset = header_int(h, "x-ratelimit-reset")
+        reset_at = float(reset) if reset else None
+    return RateSignal(limit=limit, remaining=remaining, reset_at=reset_at,
+                      window_s=RATE_WINDOW_S, limited=limited,
+                      retry_after_s=retry_after)
 
 log = logging.getLogger("devcake.github_issues")
 
@@ -62,6 +94,9 @@ class GitHubIssuesAdapter:
             except ValueError:
                 self._owner, self._repo = ("", "")
         self._label_names: set[str] = set()
+        # ADR-0040: one request budget per credential on this API host
+        self._budget = budget_for(urlsplit(self._api).hostname or "-", self._token,
+                                  system="github_issues", instance=instance)
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
@@ -95,8 +130,11 @@ class GitHubIssuesAdapter:
             raise PMOTransient("github_issues: api_base is empty")
         url = f"{self._api}{path}"
         try:
-            resp = await self._http.get().request(
-                method, url, params=params, json=json, headers=self._headers())
+            resp = await self._budget.request(          # THE wire call (ADR-0040)
+                lambda: self._http.get().request(
+                    method, url, params=params, json=json,
+                    headers=self._headers()),
+                rate_signal, instance=self._instance)
         except httpx.HTTPError as e:
             raise PMOTransient(f"github_issues network: {e}") from e
         if (resp.status_code == 422

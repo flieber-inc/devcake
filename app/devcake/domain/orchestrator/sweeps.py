@@ -8,6 +8,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ...ports.forge import legacy_branch, mission_branch
+from ...ports.pmo import PMOTransient
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
@@ -63,6 +64,10 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
             # ADR-0033: label-gated INSIDE the helper — sweeps.py never
             # reads the discovery label (guard allowlist stays tight)
             await discovery.discovery_sweep(mgr, m)
+        except PMOTransient as e:
+            # rate limit / budget reserve / brief outage: retried next cycle
+            # by construction — one line, no traceback per mission (ADR-0040)
+            log.warning("sweep deferred for %s: %s", m.key, e)
         except Exception:
             log.exception("sweep failed for %s", m.key)
     # Keep a repo armed iff a parked DEVCAKE-MERGE mission on it was NOT

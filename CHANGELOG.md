@@ -16,6 +16,17 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Added — PMO request budget** (ADR-0040). Every issue-tracker adapter's
+  wire call now runs through one vendor-neutral governor that reads the
+  tracker's quota headers (Linear requests + complexity per user, GitHub,
+  GitLab; Gitea after a proxy rejection), keeps a reserve for write-back
+  work, paces the poll's reads instead of hammering the vendor, waits and
+  retries once for finalize/dispatch after a definitive rejection, and never
+  dead-letters a finalize for a rate limit. `/health` gains `pmo_budget` and
+  `pmo_budget_warnings` (an advisory naming the poll interval that fits),
+  the admin a dismissable warning. `DEVCAKE_PMO_BUDGET_OFF=1` keeps it
+  observe-only for a first hour on a host.
+
 ## v0.5.3 (2026-09-02)
 
 Patch release in the v0.5 "Java Lava" line.

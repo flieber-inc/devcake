@@ -24,6 +24,15 @@ from .._toolkit import gitea_internal_tracker_enable_deps, label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
+from ..budget import RateSignal, budget_for, header_float
+
+
+
+def rate_signal(resp: httpx.Response) -> RateSignal:
+    """Gitea publishes no quota headers; a reverse proxy in front of it may
+    still 429 with Retry-After. Unlimited until such a rejection (ADR-0040)."""
+    return RateSignal(limited=resp.status_code == 429,
+                      retry_after_s=header_float(resp.headers, "retry-after"))
 
 log = logging.getLogger("devcake.gitea_issues")
 
@@ -94,6 +103,10 @@ class GiteaIssuesAdapter:
             else:
                 self._api = f"{base}/api/v1"
         self._team_ref = (team_ref or "").strip()
+        # ADR-0040: one request budget per credential on this API host (Gitea
+        # publishes no quota headers — paced only after a proxy 429)
+        self._budget = budget_for(urlsplit(self._api).hostname or "-", self._token,
+                                  system="gitea_issues", instance=instance)
         self._owner, self._repo = ("", "")
         if self._team_ref:
             try:
@@ -214,9 +227,11 @@ class GiteaIssuesAdapter:
         url = f"{self._api}{path}"
         hdrs = {**self._headers(), **(headers or {})}
         try:
-            resp = await self._http.get().request(   # pooled (F16)
-                method, url, params=params, json=json, content=content,
-                headers=hdrs)
+            resp = await self._budget.request(          # THE wire call (ADR-0040)
+                lambda: self._http.get().request(   # pooled (F16)
+                    method, url, params=params, json=json, content=content,
+                    headers=hdrs),
+                rate_signal, instance=self._instance)
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitea_issues network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):
@@ -691,9 +706,12 @@ class GiteaIssuesAdapter:
         try:
             async with httpx.AsyncClient(
                     timeout=60, transport=self._transport) as client:
-                resp = await client.post(
-                    url, headers=self._headers(),
-                    files={"attachment": (filename, data)})
+                resp = await self._budget.request(   # same bucket as _req
+                    lambda: client.post(
+                        url, headers=self._headers(),
+                        files={"attachment": (filename, data)}),
+                    rate_signal, instance=self._instance,
+                    op="gitea_issues upload → ")
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitea_issues upload network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):
@@ -740,10 +758,13 @@ class GiteaIssuesAdapter:
                     timeout=60, transport=self._transport,
                     follow_redirects=False) as client:
                 try:
-                    resp = await fetch_following_safe_redirects(
-                        client, current, allowed_hosts=allowed,
-                        headers=headers, allow_http=True,
-                        pin=self._finalize_fetch_url)
+                    resp = await self._budget.request(   # same bucket as _req
+                        lambda: fetch_following_safe_redirects(
+                            client, current, allowed_hosts=allowed,
+                            headers=headers, allow_http=True,
+                            pin=self._finalize_fetch_url),
+                        rate_signal, instance=self._instance,
+                        op="gitea_issues download → ")
                 except AssetUrlError as e:
                     raise RuntimeError(
                         f"gitea_issues download redirect refused: {e}"

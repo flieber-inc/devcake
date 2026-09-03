@@ -29,6 +29,7 @@ observability gap.
 |---|---|---|---|
 | `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `cycle_error` outcome on the cycle itself |
 | `poll.instance` | `poll.cycle` | app | one child per configured PMO instance (`devcake.instance`); per-instance failures (`PMO_TRANSIENT` / `INSTANCE_ERROR`) mark THIS span, not the cycle |
+| `pmo.budget.wait` | current span | app | a critical-class PMO call waited ≥ 1 s for vendor quota (ADR-0040): `devcake.instance`, `devcake.pmo.call_class`, `devcake.pmo.wait_s`, `devcake.pmo.remaining`, `devcake.pmo.reason`; a refused routine call instead marks the current span `devcake.pmo.budget_refused` |
 | `mission.dispatch` | `poll.cycle` (steward runs: `steward.periodic` / `steward.discovery`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
 | `mission.give_up` | `poll.cycle` | app | ERROR status; covers the `DEVCAKE-FAILED` label write + feed post |
 | `sweep.merge` | `poll.cycle` | app | emitted only when the sweep acts (`merged`/`closed`); covers the PMO writes |
@@ -44,7 +45,7 @@ observability gap.
 | `baker.dead` / `baker.alive` | root (poll.cycle sibling) | app | Transition only. The host baker heartbeats on `/data`; the **poll cycle** observes it (same chokepoint as `run_failures`). `baker.dead` is ERROR — restart with `devcake up`. Quiet ticks are span-free. |
 | `baker.reconcile` | root | app (replay) | One claimed keep-set order. Children: `baker.compile`, `baker.probe.<row>` (`devcake.baker.cause` = aim/stub/dialect/auth), `baker.prune`. Host baker writes span records to the outbox; poll replays them. Quiet ticks emit nothing. |
 | `ingress.forged_drop` | root | app | security event: a message that failed envelope auth was dropped (ERROR) |
-| `ingress.poison` | root | app | reliability event: a message group dead-lettered after 5 deliveries (ERROR) |
+| `ingress.poison` | root | app | reliability event: a message group dead-lettered after 5 deliveries, or after 24 h of transient handling failures (ERROR; `devcake.poison.reason`) |
 | `audit.event` | current span (or root) | app | mirrors every audit-log write: `devcake.audit.action` (e.g. `devcake_needs_human`), `devcake.pmo.id` — the needs-human alert queries this (`15-errors-and-retries.md` §6) |
 | `breaker.trip` | current span (or root) | app | ERROR status; `devcake.breaker` (dev type or `forge`), `devcake.reason` — breakers are otherwise in-memory only |
 | `dev.backend_degraded` | poll cycle | app | ERROR status; `devcake.dev_type`, `devcake.reason` — emitted ONLY on transition into degradation (ADR-0018). Deliberately not `breaker.trip`: that alert means "a human must fix a credential", and this self-heals |
@@ -100,8 +101,14 @@ devcake.missions.candidates
 devcake.missions.dispatched
 devcake.missions.seen
 devcake.outcome
+devcake.pmo.budget_refused
+devcake.pmo.call_class
 devcake.pmo.id
+devcake.pmo.reason
+devcake.pmo.remaining
+devcake.pmo.wait_s
 devcake.poison.entries
+devcake.poison.reason
 devcake.poll.cycle
 devcake.reason
 devcake.repo

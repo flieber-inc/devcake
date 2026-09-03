@@ -16,7 +16,7 @@ A PMO system qualifies for a DevCake adapter iff it satisfies all four capabilit
 
 ## 1. Port interface (normative signatures)
 
-Reads and writes are keyed by `MissionRef(pmo_id, kind)` — the adapter dispatches on `ref.kind` **internally**, so vendor dualities (Linear's issue/project split) never leak into the domain. `PMOTransient` (retryable 429/5xx/network failure, `15-errors-and-retries.md`) also lives in `ports/pmo.py`.
+Reads and writes are keyed by `MissionRef(pmo_id, kind)` — the adapter dispatches on `ref.kind` **internally**, so vendor dualities (Linear's issue/project split) never leak into the domain. `PMOTransient` (retryable 429/5xx/network failure, `15-errors-and-retries.md`) also lives in `ports/pmo.py`, with its `PMOBudgetExceeded` subclass (the request budget refused the call before any vendor request) and the `pmo_call("critical" | "routine")` context through which the domain declares how urgent a call is (§2a).
 
 ```python
 class PMOPort(Protocol):
@@ -124,7 +124,17 @@ The registry also carries the forge side (`forges()` / `make_forge`, `06-forge-a
 - Endpoint: `POST https://api.linear.app/graphql`.
 - Auth: personal API key in the `Authorization` header **without a `Bearer` prefix** (OAuth apps would use `Bearer`; v0 uses a personal API key from the GUI secret store for the instance — ADR-0011).
 - Scope: **exactly one team per adapter instance** — `inst.team_key` (e.g. `ENG`). A stack may run 0..N PMO instances, each with its own team; **no work is ever done outside that instance's configured team** (mission-doc requirement) — every query filters by team, and `create_mission` targets it explicitly.
-- Rate limits: ~5,000 requests/hour for API-key auth, plus GraphQL complexity limits. At the default 30 s poll of a single team this is comfortable; the adapter still backs off on `RATELIMITED`/429 per `15-errors-and-retries.md` (`_gql` raises `PMOTransient`).
+- Rate limits: a personal API key draws on its **user's** hourly buckets — one for requests, one for GraphQL complexity — shared by every key that user minted, across deployments; the endpoint-specific limits Linear also publishes describe the request just made. A rejection is a bare 429 or a 400 whose GraphQL error carries the `RATELIMITED` code. The adapter never backs off on its own: every `_gql` call runs through the shared request budget (§2a), which reads the `X-RateLimit-Requests-*` / `X-RateLimit-Complexity-*` headers (reset in epoch milliseconds) and the rejection body's refill hint, and merges the buckets of every key that belongs to the same `viewer`.
+
+## 2a. Request budget (ADR-0040)
+
+One governor (`adapters/budget.py`) sits in front of every PMO adapter's wire call — the hot chokepoint and the upload/download paths that hit the API host. The governor knows no vendor: each adapter owns a `rate_signal(response)` mapper from its headers and bodies into the neutral `RateSignal` (limit, remaining, reset, window, rejected?, retry-after, a secondary per-user fraction such as Linear's complexity). Mappers: Linear (§2), GitHub Issues (`x-ratelimit-*` on the `core` resource, epoch seconds; a 403 naming the rate limit or a 429 is a rejection; a secondary-limit rejection is honoured for at least a minute), GitLab Issues (`RateLimit-*` per minute; 429 + `Retry-After`), Gitea Issues (no headers; a proxy 429 + `Retry-After` only).
+
+- **Identity:** one bucket per credential on a host, independent of adapter objects (a config-reload rebuild re-attaches; a forge and an issue tracker on one token share it). Linear buckets are additionally merged by user.
+- **Call classes** (`ports/pmo.py` `pmo_call`): **critical** — finalize, dispatch, operator actions — may spend a reserved share of the limit, waits for the refill under one cumulative deadline per call context, and is retried once after a definitive rejection (never after a network error). **Routine** — the poll's reads, sweeps, probes — is paced along a line from the limit down to the reserve at the reset, with a burst allowance, and is refused with `PMOBudgetExceeded` rather than ever sleeping; the poll interval is its pacing clock. An undeclared caller is routine.
+- **Headers are authoritative.** Every observation overwrites the local estimate; between observations the estimate refills at limit/window. A rejection blocks the bucket for the vendor's hint (retry-after, the body's refill quantum, the reset when the bucket is empty) — a block the next routine call honours without a request.
+- **Visibility:** `/health.pmo_budget` (one row per bucket: limit, remaining, reset, waits, refusals, rejections seen, demand per hour per instance, quota spent by another consumer of the credential) and `/health.pmo_budget_warnings` (measured demand above a share of the limit → the poll interval that would fit; a shared-credential note), rendered as a dismissable admin warning (`11-admin-panel.md`). Waits of a second or more emit `pmo.budget.wait` (`12-observability.md`). `DEVCAKE_PMO_BUDGET_OFF=1` keeps the governor observing without pacing (`13-deployment.md`).
+- **Contract:** `app/tests/test_pmo_budget.py` (the governor, fake clock), `test_pmo_budget_signals.py` (every mapper; every adapter's chokepoint survives one rejection as a critical call and fails fast as a routine one).
 
 ## 3. Normalization tables (normative)
 
@@ -214,7 +224,7 @@ Two batteries. Every future `PMOPort` implementation reuses both shapes: the off
 - **Fake drift tripwire** — every port method a test fake (`FakePMO`/`MapPMO`/`DepPMO`) implements must match the port signature, keeping fakes honest as the contract evolves.
 - **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`; `get_activity` on a project returns `entries=[]` **in shallow mode** without ever querying comments, while full mode routes to the documents/updates enrichment (project-fidelity fix); attachment `name` resolution (named markdown link vs bare URL).
 - **`health_probe` counting** — managed labels counted by `ALL_LABELS` intersection: a `DEVCAKE-CUSTOM-EXTRA` label must NOT count; `managed_labels_expected == len(ALL_LABELS)`.
-- **Transient typing** — a 429 surfaces as `PMOTransient` from the port.
+- **Transient typing** — a 429 surfaces as `PMOTransient` from the port (routine class; a critical-class caller is retried once after the vendor's wait — `test_pmo_budget_signals.py`).
 
 **Live (`scripts/contract_tests_pmo.py` — acceptance gate for every `PMOPort`):** runs inside the app container:
 
@@ -234,7 +244,7 @@ docker compose exec -T app python - < scripts/contract_tests_pmo.py
 | 5 | `ensure_labels` is idempotent and case-insensitive |
 | 5b | `health_probe` reports ok + the full managed set present — the public replacement for `_team` reach-ins |
 | 8 | `get_activity` ordering is chronological and attachments are extracted with fetchable URLs |
-| 9 | Rate-limit (429/RATELIMITED) surfaces as `PMOTransient` |
+| 9 | Rate-limit (429/RATELIMITED) surfaces as `PMOTransient` (routine class, §2a) |
 | 10 | Linear: project normalized + capabilities; forge-issue: issue-only capabilities truthful |
 | 11 | `cancel_mission` terminal + idempotent |
 | 12 | `post_feed` marker/markdown fidelity (`` `devcake:v1` ``) |
@@ -246,7 +256,7 @@ The numbering is historical and stable (test files reference rows by number). Th
 
 ## 8. Webhook readiness
 
-A push-based `watch()` seam was designed but never implemented; it is recorded as future work in `16-roadmap.md`. v0 polls every 30–60 s, well within rate limits.
+A push-based `watch()` seam was designed but never implemented; it is recorded as future work in `16-roadmap.md`. Polling cost is bounded by the request budget (§2a); the seam would turn the poll interval into a latency knob, not a correctness one.
 
 ## 9. Gitea Issues adapter (forge-issue family)
 

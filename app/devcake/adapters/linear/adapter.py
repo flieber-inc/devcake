@@ -18,10 +18,66 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              NormalizedStatus, Priority, canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 from .._toolkit import label_write_lock
+from ..budget import (RateSignal, bind_principal, budget_for, header_float,
+                      header_int)
 
 log = logging.getLogger("devcake.linear")
 
 API = "https://api.linear.app/graphql"
+API_HOST = "api.linear.app"
+# Linear meters requests AND query complexity per user per hour (docs/05 §2a)
+RATE_WINDOW_S = 3600
+
+
+def rate_signal(resp: httpx.Response) -> RateSignal:
+    """Linear's quota headers → the vendor-neutral signal (ADR-0040).
+    Requests + complexity are per-user hourly buckets (reset in epoch
+    MILLISECONDS); the endpoint-specific headers describe the endpoint just
+    called and ride along for the health page only. A rejection is either
+    a bare 429 or a 400 whose GraphQL errors carry code RATELIMITED with a
+    `rateLimitResult` — one request refills in duration/limit ms."""
+    h = resp.headers
+    limit = header_int(h, "x-ratelimit-requests-limit")
+    remaining = header_int(h, "x-ratelimit-requests-remaining")
+    reset_ms = header_int(h, "x-ratelimit-requests-reset")
+    reset_at = reset_ms / 1000.0 if reset_ms else None
+    c_limit = header_int(h, "x-ratelimit-complexity-limit")
+    c_remaining = header_int(h, "x-ratelimit-complexity-remaining")
+    complexity = (c_remaining / c_limit
+                  if c_limit and c_remaining is not None else None)
+    endpoint = None
+    if h.get("x-ratelimit-endpoint-name"):
+        endpoint = {
+            "name": h.get("x-ratelimit-endpoint-name"),
+            "limit": header_int(h, "x-ratelimit-endpoint-requests-limit"),
+            "remaining": header_int(h, "x-ratelimit-endpoint-requests-remaining"),
+        }
+    limited = resp.status_code == 429
+    retry_after = header_float(h, "retry-after")
+    if resp.status_code in (400, 429):
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        errors = body.get("errors") if isinstance(body, dict) else None
+        for err in errors or []:
+            ext = (err.get("extensions") or {}) if isinstance(err, dict) else {}
+            if ("RATELIMITED" in str(ext.get("code", "")).upper()
+                    or str(ext.get("type", "")).lower() == "ratelimited"):
+                limited = True
+                meta = ((ext.get("meta") or {}).get("rateLimitResult") or {})
+                duration, lim = meta.get("duration"), meta.get("limit")
+                if retry_after is None and duration and lim:
+                    retry_after = float(duration) / float(lim) / 1000.0 + 1.0
+                if limit is None and lim:
+                    limit = int(lim)
+                if remaining is None and meta.get("remaining") is not None:
+                    remaining = int(meta["remaining"])
+                break
+    return RateSignal(limit=limit, remaining=remaining, reset_at=reset_at,
+                      window_s=RATE_WINDOW_S, limited=limited,
+                      retry_after_s=retry_after, complexity_fraction=complexity,
+                      endpoint=endpoint)
 
 # state *type* → normalized (docs/05 §3; teams rename display names freely)
 STATE_TYPE_MAP: dict[str, NormalizedStatus] = {
@@ -91,20 +147,41 @@ class LinearAdapter:
         # stamped on every Mission at normalization, so provenance can never
         # be missed by a fetch path
         self._instance = instance
+        # ADR-0040: the request budget for this credential — shared with every
+        # adapter on the same key, re-keyed by user once `_team` learns it
+        self._budget = budget_for(API_HOST, api_key, system="linear",
+                                  instance=instance)
 
     async def aclose(self) -> None:
         await self._http.aclose()
 
     async def _gql(self, query: str, variables: dict | None = None) -> dict:
+        payload = {"query": query, "variables": variables or {}}
         try:
-            resp = await self._http.get().post(   # pooled (F16)
-                API, headers=self._headers,
-                json={"query": query, "variables": variables or {}})
+            # THE wire call — governed by the request budget (ADR-0040):
+            # paced/refused for routine callers, waited + retried once after
+            # a definitive rejection for critical ones; pooled client (F16)
+            resp = await self._budget.request(
+                lambda: self._http.get().post(API, headers=self._headers,
+                                              json=payload),
+                rate_signal, instance=self._instance)
         except httpx.HTTPError as e:
             raise PMOTransient(f"network: {e}") from e
         if resp.status_code == 429 or resp.status_code >= 500:
             raise PMOTransient(f"http {resp.status_code}")
-        body = resp.json()
+        try:
+            body = resp.json()
+        except ValueError as e:
+            # a non-JSON body must never leak a decode error upward (that
+            # would latch poll_degraded as a permanent instance failure)
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"linear http {resp.status_code}: {resp.text[:200]}") from e
+            raise PMOTransient(
+                f"linear: non-JSON {resp.status_code} response") from e
+        if not isinstance(body, dict):
+            raise RuntimeError(f"linear: unexpected response shape "
+                               f"({resp.status_code})")
         if body.get("errors"):
             if any("RATELIMITED" in str(e.get("extensions", {}).get("code", ""))
                    for e in body["errors"]):
@@ -122,11 +199,18 @@ class LinearAdapter:
             # complexity 15560 — live-reproduced on the connection test), so
             # the team shell is one cheap query and the labels cursor-walk
             # rides the single-team query below (audit A12 pagination kept).
+            # `viewer` rides the same query at zero extra cost: the key's
+            # user is the quota principal (every key of one user shares one
+            # bucket), so the budget is re-keyed by it (ADR-0040)
             data = await self._gql(
-                """query($key: String!) { teams(filter: {key: {eq: $key}}) { nodes {
+                """query($key: String!) { viewer { id }
+                   teams(filter: {key: {eq: $key}}) { nodes {
                      id key
                      states { nodes { id name type position } }
                 } } }""", {"key": team_key})
+            viewer = data.get("viewer") if isinstance(data, dict) else None
+            if isinstance(viewer, dict) and viewer.get("id"):
+                self._budget = bind_principal(self._budget, str(viewer["id"]))
             nodes = data["teams"]["nodes"]
             if not nodes:
                 raise RuntimeError(f"linear: team {team_key!r} not found")

@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 
 import httpx
 import redis.asyncio as aioredis
 
 from .. import security
+from ..adapters import budget as pmo_budget
 from ..adapters.dagu import DAGU_URL
 from ..bake_status import annotate_liveness, read_bake_status
 from ..staffing import app_digest, receipt_summary
@@ -178,6 +180,42 @@ def unused_repo_names(config, dev_types=None) -> list[str]:
     return sorted(r.name for r in config.repos if r.name not in selected)
 
 
+# demand above this share of a vendor quota earns an advisory (headroom for
+# dispatch/finalize bursts the poll cannot foresee)
+BUDGET_WARN_SHARE = 0.8
+
+
+def _budget_warnings(budgets: dict, poll_interval_seconds: int) -> dict[str, str]:
+    """Operator advisories derived from the request budgets (ADR-0040):
+    measured demand against the vendor's limit → the poll interval that
+    would fit under BUDGET_WARN_SHARE, and a note when the quota is being
+    spent by something other than this DevCake (another deployment, a
+    person's tooling on the same key)."""
+    out: dict[str, str] = {}
+    for label, b in (budgets or {}).items():
+        limit = b.get("limit")
+        demand = sum(v for v in (b.get("demand_per_hour") or {}).values()
+                     if isinstance(v, int))
+        parts: list[str] = []
+        if limit and demand > limit * BUDGET_WARN_SHARE:
+            floor = max(1, int(math.ceil(
+                poll_interval_seconds * demand / (limit * BUDGET_WARN_SHARE))))
+            parts.append(
+                f"measured ~{demand} requests/hour against {limit}/hour shared "
+                f"by {', '.join(b.get('instances') or []) or 'this instance'}; "
+                f"raise the poll interval to at least {floor} s or spread the "
+                f"instances over more credentials")
+        foreign = b.get("foreign_spend") or 0
+        if limit and foreign > limit * 0.1:
+            parts.append(
+                f"~{foreign} requests this window were spent by another "
+                f"consumer of the same credential (another deployment or a "
+                f"person's tooling) — the budget is shared")
+        if parts:
+            out[label] = "; ".join(parts)
+    return out
+
+
 async def build_health_payload(*, config, dev_types, managers, stewards,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
@@ -248,6 +286,7 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
 
     pmo_instances: dict[str, dict] = dict(
         await asyncio.gather(*(_probe_one(i) for i in config.pmos)))
+    budgets = pmo_budget.snapshot_all()
     configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
     prefixed = len(managers) > 1   # advisory text carries the instance when N>1
 
@@ -289,6 +328,11 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         "last_poll_at": (poll_rt.last_poll_at.isoformat()
                          if poll_rt.last_poll_at else None),
         "poll_interval_seconds": config.poll_interval_seconds,
+        # ADR-0040: per-credential request budgets (vendor quota as observed
+        # on the wire) + the advisory computed from measured demand
+        "pmo_budget": budgets,
+        "pmo_budget_warnings": _budget_warnings(
+            budgets, config.poll_interval_seconds),
         "active_runs": len(store.active()),
         "forge_protection": await _branch_protection(forge_runtime),
         "anomalies": _merged("anomalies"),

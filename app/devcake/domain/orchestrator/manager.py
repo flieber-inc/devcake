@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...config import AppConfig, DevType
-from ...ports.pmo import PMOPort
+from ...ports.pmo import PMOPort, with_pmo_call
 from ..blocker_locator import LEGACY_PMO_REFS
 from ..runs import RunManager
 
@@ -200,18 +200,23 @@ class MissionManager:
         return r.pmo_ref in LEGACY_PMO_REFS or r.pmo_ref == self.instance_name
 
     # ── public verbs ──
+    # ADR-0040: the verbs that write a run's results back or launch work run
+    # as CRITICAL PMO calls (may spend the quota reserve, wait for the refill);
+    # enumeration verbs (gate_map, sweeps, list reads) stay routine.
     async def gate_map(self, missions: list[Mission]):
         return await schedule.gate_map(self, missions)
 
     async def schedule(self, missions: list[Mission], gate: dict[str, str] | None = None):
         return await schedule.schedule(self, missions, gate)
 
+    @with_pmo_call("critical")
     async def dispatch(self, mission: Mission, mtype: MissionType, dev_type: DevType):
         return await dispatch.dispatch(self, mission, mtype, dev_type)
 
     def runspec_secret_payload(self, run: Run):
         return dispatch.runspec_secret_payload(self, run)
 
+    @with_pmo_call("critical")
     async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
         return await activity_payload_mod.activity_payload(self, pmo_id, kind)
 
@@ -221,6 +226,7 @@ class MissionManager:
     def steward_repo(self):
         return dispatch.steward_repo(self)
 
+    @with_pmo_call("critical")
     async def finalize(self, run: Run, payload: dict):
         return await finalize.finalize(self, run, payload)
 
@@ -233,6 +239,7 @@ class MissionManager:
     async def sweeps(self, missions: list[Mission]):
         return await sweeps.sweeps(self, missions)
 
+    @with_pmo_call("critical")
     async def dispatch_steward(self, dev_type: DevType, missions: list[Mission],
                                context_stale=frozenset(),
                                context_omit=frozenset()):
@@ -240,6 +247,7 @@ class MissionManager:
             self, dev_type, missions,
             context_stale=context_stale, context_omit=context_omit)
 
+    @with_pmo_call("critical")
     async def dispatch_steward_discovery(self, dev_type: DevType, family,
                                          pending: dict,
                                          context_stale=frozenset(),
@@ -248,11 +256,14 @@ class MissionManager:
             self, dev_type, family, pending,
             context_stale=context_stale, context_omit=context_omit)
 
+    @with_pmo_call("critical")
     async def finalize_steward(self, run: Run, payload: dict):
         return await steward.finalize_steward(self, run, payload)
 
+    @with_pmo_call("critical")
     async def deliver_internal_zip(self, run, pr):
         return await deliver.deliver_internal_zip(self, run, pr)
 
+    @with_pmo_call("critical")
     async def deliver_internal_zip_for_mission(self, m, pr):
         return await deliver.deliver_internal_zip_for_mission(self, m, pr)

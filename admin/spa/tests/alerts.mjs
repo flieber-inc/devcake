@@ -30,6 +30,29 @@ check("a dead baker is a critical non-dismissable alert", () => {
   assert.match(hit.body, /devcake up --foreground-baker/);
 });
 
+// ADR-0040: a nearly-spent request budget is a dismissable warning that names
+// the bucket and carries the advisory text verbatim (poll-interval guidance).
+check("a nearly-spent PMO request budget is a dismissable warning", () => {
+  const alerts = deriveAlerts({
+    pmo_budget_warnings: {
+      "tracker.example/user:u1":
+        "measured ~2900 requests/hour against 2500/hour shared by a, b; " +
+        "raise the poll interval to at least 110 s",
+    },
+  });
+  const hit = alerts.find((a) => a.id === "pmo-budget");
+  assert.ok(hit, "pmo-budget alert missing");
+  assert.equal(hit.severity, "warning");
+  assert.equal(hit.dismissable, true);
+  assert.match(hit.body, /tracker\.example\/user:u1: measured ~2900/);
+  assert.match(hit.body, /at least 110 s/);
+});
+
+check("no budget warning when the payload carries none", () => {
+  const alerts = deriveAlerts({ pmo_budget_warnings: {}, pmo_budget: {} });
+  assert.equal(alerts.some((a) => a.id === "pmo-budget"), false);
+});
+
 check("an alive baker does not warn", () => {
   const alerts = deriveAlerts({
     bake_status: { baker_alive: true, baker_detail: "" },

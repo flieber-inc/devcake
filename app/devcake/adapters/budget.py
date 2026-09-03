@@ -11,7 +11,9 @@ Design (docs/15 §2, docs/05 §2a):
   and bodies into a `RateSignal`. This module knows no vendor.
 - One `RequestBudget` per credential on a host (`budget_for`), independent
   of adapter objects, so a config-reload rebuild re-attaches to the same
-  bucket. Linear additionally merges buckets by user (`bind_principal`).
+  bucket. The credential is identified by an opaque per-process token, never
+  by a digest of its bytes. Linear additionally merges buckets by user
+  (`bind_principal`).
 - Headers are authoritative: every observation overwrites the local
   estimate. Between observations the estimate refills at limit/window
   (a leaky-bucket model; fixed-window vendors are covered by the block a
@@ -28,10 +30,10 @@ Design (docs/15 §2, docs/05 §2a):
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import math
 import os
+import secrets
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -399,10 +401,22 @@ class RequestBudget:
 
 _registry: dict[tuple[str, str], RequestBudget] = {}
 _alias: dict[tuple[str, str], tuple[str, str]] = {}
+# credential → opaque token (process-local, random): the bucket key must
+# identify a credential without carrying or deriving from its bytes — no
+# digest, so the token reveals nothing and is never usable as a credential
+_tokens: dict[str, str] = {}
 
 
 def fingerprint(credential: str | None) -> str:
-    return hashlib.sha256((credential or "").encode("utf-8")).hexdigest()[:16]
+    """Opaque, process-local identity of a credential: the same string maps
+    to the same token for the life of the process (rebuilds re-attach);
+    nothing about the token is derived from the credential's bytes."""
+    cred = credential or ""
+    tok = _tokens.get(cred)
+    if tok is None:
+        tok = secrets.token_hex(8)
+        _tokens[cred] = tok
+    return tok
 
 
 def budget_for(host: str, credential: str | None, *, system: str,
@@ -464,6 +478,7 @@ def snapshot_all(*, now: float | None = None) -> dict[str, dict[str, Any]]:
 
 
 def reset() -> None:
-    """Tests only: forget every bucket and alias."""
+    """Tests only: forget every bucket, alias and credential token."""
     _registry.clear()
     _alias.clear()
+    _tokens.clear()

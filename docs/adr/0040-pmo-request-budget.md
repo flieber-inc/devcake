@@ -37,7 +37,8 @@ identical for every system.
 
 ### 2 — Budget identity is the credential on a host; Linear merges by user
 
-A bucket is keyed by `(host, fingerprint(credential))`, independent of
+A bucket is keyed by `(host, token(credential))` — an opaque per-process
+token, never a digest of the credential's bytes — independent of
 adapter objects, so a config-reload rebuild re-attaches to the same bucket
 and any adapter on the same token (a forge and an issue tracker on one
 GitHub token, two instances on one key) share it. The system name is a

@@ -63,14 +63,17 @@ routine, so nothing gains the reserve by omission.
 ### 4 — Pace line; routine never sleeps; one retry only after a definitive rejection
 
 Headers are authoritative: every observation overwrites the local
-estimate; between observations the estimate refills at limit/window (a
-leaky-bucket model — fixed-window vendors are covered by the block a
-rejection installs). Routine calls are spread along a pace line from the
-limit down to the reserve at the reset, with a burst allowance so an
-under-budget host never notices; a routine call that would have to wait is
-refused with `PMOBudgetExceeded` (a `PMOTransient`, so the poll's
-segment-skip semantics are unchanged) — the poll interval is its pacing
-clock. Critical calls wait for the refill under one cumulative deadline
+estimate. Each adapter declares its vendor's refill semantics. A
+continuously refilling bucket (Linear's leaky bucket) gains limit/window
+tokens per second between observations and is governed by the reserve
+alone: the bucket size is the burst allowance and the refill is the
+pacing, so a pace line would only refuse calls the vendor would accept. A
+fixed window (GitHub, GitLab) stays frozen until its reset and its routine
+calls are spread along a pace line from the limit down to the reserve at
+the reset, with a burst allowance so an under-budget host never notices.
+A routine call that would have to wait is refused with
+`PMOBudgetExceeded` (a `PMOTransient`, so the poll's segment-skip
+semantics are unchanged) — the poll interval is its pacing clock. Critical calls wait for the refill under one cumulative deadline
 per call context (a finalize's many calls share it) and are retried
 **once** after a definitive rejection: a 429 or RATELIMITED response was
 never executed, so the retry is idempotent. Network errors and timeouts
@@ -82,8 +85,10 @@ The ingress consumer counts handling failures toward its dead-letter
 threshold only for permanent errors. A transient failure leaves the entry
 pending for reclaim, where the critical class makes the retry wait for
 quota instead of failing again. A ceiling remains: an entry that has been
-failing transiently for a day is dead-lettered with that reason, so an
-unreachable tracker cannot pin an entry forever.
+failing transiently for three hours — longer than any vendor quota window,
+no longer than the run-timeout plus stall-grace envelope a finalizing run
+could already occupy a concurrency slot for — is dead-lettered with that
+reason, so an unreachable tracker cannot pin an entry and its slot.
 
 ### 6 — Visibility
 

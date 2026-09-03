@@ -52,7 +52,7 @@ def rate_signal(resp: httpx.Response) -> RateSignal:
         reset_at = float(reset) if reset else None
     return RateSignal(limit=limit, remaining=remaining, reset_at=reset_at,
                       window_s=RATE_WINDOW_S, limited=limited,
-                      retry_after_s=retry_after)
+                      retry_after_s=retry_after, refill="window")
 
 log = logging.getLogger("devcake.github_issues")
 
@@ -100,7 +100,9 @@ class GitHubIssuesAdapter:
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
-            raise PMOTransient("github_issues: API token missing")
+            # a configuration problem (PMO_PERMANENT, docs/15 §1): typed
+            # transient it would be retried as weather until a ceiling
+            raise RuntimeError("github_issues: API token missing")
         return {
             "Authorization": f"Bearer {self._token}",
             "Accept": "application/vnd.github+json",

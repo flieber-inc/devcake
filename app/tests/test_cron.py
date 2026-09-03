@@ -457,3 +457,19 @@ def test_maybe_fire_transient_pmo_failure_leaves_the_window_open():
     run_coro(svc.maybe_fire())                             # next cycle succeeds
     assert [t[0] for t in pmo.created][0].startswith("[cron:nightly]")
     assert svc.store.last_fire_at("nightly") is not None
+
+
+def test_run_now_transient_maps_to_502_not_500():
+    """Operator Run now while the tracker is rate-limited or the request
+    budget thin: the route answers 502 like the mission actions do."""
+    from fastapi import HTTPException
+    from devcake.api.cron_service import run_cron
+    from devcake.ports.pmo import PMOBudgetExceeded
+
+    class Cron:
+        async def fire(self, job_id, *, automatic):
+            raise PMOBudgetExceeded("request budget (t/u): reserved", retry_after=9)
+
+    with pytest.raises(HTTPException) as ei:
+        run_coro(run_cron("nightly", cron=Cron()))
+    assert ei.value.status_code == 502

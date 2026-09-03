@@ -45,6 +45,7 @@ def test_linear_headers_map_to_the_signal():
     assert (sig.limit, sig.remaining) == (2500, 1234)
     assert sig.reset_at == pytest.approx(1700000000.0)   # ms → s
     assert sig.window_s == 3600 and sig.limited is False
+    assert sig.refill == "continuous"
     assert sig.complexity_fraction == pytest.approx(0.5)
     assert sig.endpoint == {"name": "issueCreate", "limit": 100, "remaining": 90}
 
@@ -256,3 +257,15 @@ def test_discovery_kick_runs_routine_even_inside_a_critical_context():
             await asyncio.sleep(0)
     run(main())
     assert seen == ["routine"]
+
+
+@pytest.mark.parametrize("system", ["github_issues", "gitlab_issues", "gitea_issues"])
+def test_missing_token_is_a_permanent_error_not_weather(system):
+    """A blank token is a configuration problem: typed transient it would be
+    retried as weather for hours (ADR-0040 poison exemption)."""
+    adapter, call = _adapters(httpx.MockTransport(
+        lambda r: httpx.Response(200, json={})))[system]
+    adapter._token = ""
+    with pytest.raises(RuntimeError, match="token missing") as ei:
+        run(call(adapter))
+    assert not isinstance(ei.value, PMOTransient)

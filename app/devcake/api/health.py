@@ -199,19 +199,23 @@ def _budget_warnings(budgets: dict, poll_interval_seconds: int) -> dict[str, str
                      if isinstance(v, int))
         parts: list[str] = []
         if limit and demand > limit * BUDGET_WARN_SHARE:
+            # coarse numbers: the admin keys dismissals on the text, and a
+            # figure that moves every poll would resurface the alert forever
+            shown = int(round(demand / 100.0)) * 100
             floor = max(1, int(math.ceil(
                 poll_interval_seconds * demand / (limit * BUDGET_WARN_SHARE))))
+            floor = int(math.ceil(floor / 15.0)) * 15
             parts.append(
-                f"measured ~{demand} requests/hour against {limit}/hour shared "
+                f"measured about {shown} requests/hour against {limit}/hour shared "
                 f"by {', '.join(b.get('instances') or []) or 'this instance'}; "
                 f"raise the poll interval to at least {floor} s or spread the "
                 f"instances over more credentials")
         foreign = b.get("foreign_spend") or 0
         if limit and foreign > limit * 0.1:
             parts.append(
-                f"~{foreign} requests this window were spent by another "
-                f"consumer of the same credential (another deployment or a "
-                f"person's tooling) — the budget is shared")
+                "a large share of this hour's quota was spent by another "
+                "consumer of the same credential (another deployment or a "
+                "person's tooling) — the budget is shared")
         if parts:
             out[label] = "; ".join(parts)
     return out

@@ -61,7 +61,7 @@ def test_transient_failure_dead_letters_past_the_age_ceiling():
     redis.xadd.assert_awaited_once()
     stream, fields = redis.xadd.await_args.args[:2]
     assert stream == mm.DEAD_STREAM
-    assert "transient" in fields["reason"] and "24h" in fields["reason"]
+    assert "transient" in fields["reason"] and "3h" in fields["reason"]
     redis.pipeline.return_value.execute.assert_awaited_once()   # acked away
 
 

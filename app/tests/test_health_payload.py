@@ -523,10 +523,13 @@ def test_budget_warning_names_the_poll_interval_that_fits():
         "demand_per_hour": {"a": 1500, "b": 1400}}}
     out = health_mod._budget_warnings(snap, 15)
     text = out["tracker.example/user:u1"]
-    assert "~2900 requests/hour against 2500/hour" in text
-    # 15 s × 2900 / (2500 × 0.8) = 21.75 → 22 s
-    assert "at least 22 s" in text
+    assert "about 2900 requests/hour against 2500/hour" in text
+    # 15 s × 2900 / (2500 × 0.8) = 21.75 → 22 s → rounded up to a 15 s step
+    assert "at least 30 s" in text
     assert "a, b" in text
+    # the text is stable across small demand changes (dismissal keys hash it)
+    snap["tracker.example/user:u1"]["demand_per_hour"] = {"a": 1520, "b": 1410}
+    assert health_mod._budget_warnings(snap, 15) == out
 
 
 def test_budget_warning_notes_a_foreign_consumer_and_stays_quiet_otherwise():

@@ -13,7 +13,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ..config import AppConfig, DevType, intake_blocks_dispatch
-from ..ports.pmo import PMOTransient, pmo_call
+from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from ..harness import missing_referenced_secret_env
 from .model import Mission
 from .run import Run
@@ -319,6 +319,7 @@ class StewardService:
         except RuntimeError:  # no running loop (sync test contexts)
             log.debug("discovery kick without a running loop — skipped")
 
+    @with_pmo_call("critical", wait_budget_s=20)   # an operator's button outranks polls (ADR-0040)
     async def run_now(self) -> Run:
         """Manual trigger: works regardless of the periodic toggle and of the
         degraded state — a human pressing the button IS the reset signal.

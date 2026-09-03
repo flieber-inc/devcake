@@ -54,9 +54,12 @@ RECLAIM_INTERVAL_SECONDS = 60
 # an ingress entry is dead-lettered after this many handling failures
 # (docs/09 §4, docs/15 §5) — TRANSIENT failures (a PMO rate limit, a 5xx, a
 # network blip; `PMOTransient`) never count: the entry stays pending for
-# reclaim until it succeeds or has been transient for TRANSIENT_MAX_AGE
+# reclaim until it succeeds or has been transient for TRANSIENT_MAX_AGE —
+# three hours: longer than any vendor quota window, and no longer than the
+# run-timeout + stall-grace envelope a finalizing run was already allowed
+# to occupy a concurrency slot for
 POISON_DELIVERIES = 5
-TRANSIENT_MAX_AGE_SECONDS = 24 * 3600
+TRANSIENT_MAX_AGE_SECONDS = 3 * 3600
 # buffered chunks stay pending by design (restart recovery), so deliveries
 # accumulate on slow uploads — only a group with no NEW chunk for this long
 # may be poisoned

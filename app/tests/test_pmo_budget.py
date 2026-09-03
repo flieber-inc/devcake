@@ -84,8 +84,15 @@ def bucket(clock, **observed):
 
 
 def full_window(clock, limit, remaining, **extra):
+    """A fixed-window vendor (GitHub-shaped) with a full hour to the reset."""
     return dict(limit=limit, remaining=remaining, reset_at=clock.t + 3600,
                 window_s=3600, **extra)
+
+
+def leaky(clock, limit, remaining, **extra):
+    """A continuously refilling bucket (Linear-shaped)."""
+    return dict(limit=limit, remaining=remaining, reset_at=clock.t + 3600,
+                window_s=3600, refill="continuous", **extra)
 
 
 # ── pass-through and observation ─────────────────────────────────────────────
@@ -167,7 +174,7 @@ def test_critical_spends_the_reserve_without_waiting(clock):
 
 
 def test_critical_waits_for_the_refill_when_exhausted(clock):
-    b = bucket(clock, **full_window(clock, 100, 0))
+    b = bucket(clock, **leaky(clock, 100, 0))
     send, calls = sender(resp())
     with pmo_call("critical"):
         run(b.request(send, reader(), instance="a"))
@@ -177,7 +184,7 @@ def test_critical_waits_for_the_refill_when_exhausted(clock):
 
 
 def test_critical_deadline_refuses_instead_of_overwaiting(clock):
-    b = bucket(clock, **full_window(clock, 100, 0))
+    b = bucket(clock, **leaky(clock, 100, 0))
     send, calls = sender(resp())
     with pmo_call("critical", wait_budget_s=10):
         with pytest.raises(PMOBudgetExceeded) as ei:
@@ -217,9 +224,9 @@ def test_network_errors_are_never_retried_by_the_governor(clock):
 
 
 def test_wait_budget_is_cumulative_per_call_context(clock):
-    b = bucket(clock, **full_window(clock, 100, 0))
+    b = bucket(clock, **leaky(clock, 100, 0))
     exhausted = B.RateSignal(limit=100, remaining=0, reset_at=clock.t + 3600,
-                             window_s=3600)
+                             window_s=3600, refill="continuous")
     send, calls = sender(resp(), resp())
     with pmo_call("critical", wait_budget_s=50):
         run(b.request(send, reader(exhausted), instance="a"))     # waits 36 s
@@ -231,7 +238,7 @@ def test_wait_budget_is_cumulative_per_call_context(clock):
 # ── the local model between observations ─────────────────────────────────────
 
 def test_estimate_refills_between_observations(clock):
-    b = bucket(clock, **full_window(clock, 3600, 0))
+    b = bucket(clock, **leaky(clock, 3600, 0))
     clock.t += 100
     assert b._remaining_est(clock.t) == pytest.approx(100.0)
     send, calls = sender(resp())
@@ -351,13 +358,13 @@ def test_the_governor_names_no_vendor():
 def test_wait_budget_counts_waiting_only_not_other_work(clock):
     """A finalize that spends minutes on git before its first PMO call has
     its whole wait budget left: the budget bounds time spent WAITING."""
-    b = bucket(clock, **full_window(clock, 100, 0))
+    b = bucket(clock, **leaky(clock, 100, 0))
     send, calls = sender(resp())
     with pmo_call("critical", wait_budget_s=50) as ctx:
         clock.mono += 600                       # ten minutes of forge work
         clock.t += 600
         b.observe(B.RateSignal(limit=100, remaining=0, reset_at=clock.t + 3600,
-                               window_s=3600), now=clock.t)
+                               window_s=3600, refill="continuous"), now=clock.t)
         run(b.request(send, reader(), instance="a"))   # waits 36 s, allowed
         assert ctx.waited_s == pytest.approx(36.0)
     assert calls == [1] and clock.sleeps == [pytest.approx(36.0)]
@@ -401,3 +408,58 @@ def test_detach_prunes_buckets_nothing_uses(clock):
     blocked.observe(B.RateSignal(limited=True, retry_after_s=60), now=clock.t)
     B.detach("x")
     assert blocked.label in B.snapshot_all()
+
+
+# ── refill semantics: leaky bucket vs fixed window ───────────────────────────
+
+def test_continuous_bucket_is_governed_by_the_reserve_alone(clock):
+    """Linear refills continuously: a bucket at 30 % must still serve routine
+    calls — the bucket size is the burst allowance, no pace line applies."""
+    b = bucket(clock, **leaky(clock, 2500, 750))
+    send, calls = sender(resp())
+    run(b.request(send, reader(), instance="a"))
+    assert calls == [1] and clock.sleeps == []
+    # but the reserve still holds
+    b.observe(B.RateSignal(limit=2500, remaining=300, refill="continuous"),
+              now=clock.t)
+    with pytest.raises(PMOBudgetExceeded):
+        run(b.request(send, reader(), instance="a"))
+
+
+def test_fixed_window_does_not_refill_before_its_reset(clock):
+    """GitHub at zero with the reset 40 min away: no phantom refill, so a
+    critical call is refused up front (its wait would exceed the budget)
+    instead of being sent to a certain rejection."""
+    b = bucket(clock, limit=5000, remaining=0, reset_at=clock.t + 2400,
+               window_s=3600, refill="window")
+    send, calls = sender(resp())
+    clock.t += 600
+    assert b._remaining_est(clock.t) == 0.0
+    with pmo_call("critical"):
+        with pytest.raises(PMOBudgetExceeded) as ei:
+            run(b.request(send, reader(), instance="a"))
+    assert calls == [] and ei.value.retry_after == pytest.approx(1800.0)
+
+
+def test_fixed_window_starts_full_after_its_reset(clock):
+    b = bucket(clock, limit=5000, remaining=0, reset_at=clock.t + 60,
+               window_s=3600, refill="window")
+    clock.t += 120
+    assert b._remaining_est(clock.t) == 5000.0
+    send, calls = sender(resp())
+    run(b.request(send, reader(), instance="a"))
+    assert calls == [1]
+
+
+def test_foreign_spend_is_reported_per_hour_of_our_own_clock(clock):
+    b = bucket(clock, **leaky(clock, 1000, 900))
+    send, _ = sender(resp(), resp())
+    run(b.request(send, reader(B.RateSignal(limit=1000, remaining=849,
+                                             refill="continuous")),
+                  instance="a"))
+    assert b.foreign_spend == 50
+    clock.t += 3601                                   # a new hour of ours
+    run(b.request(send, reader(B.RateSignal(limit=1000, remaining=848,
+                                             refill="continuous")),
+                  instance="a"))
+    assert b.foreign_spend == 0

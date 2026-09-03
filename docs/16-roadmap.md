@@ -718,7 +718,7 @@ until that run exists, field evidence below stays operator-self-reported.
   per adapter, one bucket per credential on a host (Linear merged by user),
   two call classes with a reserve (critical waits and retries once after a
   definitive rejection; routine is paced and refused, never sleeps), transient
-  finalize failures exempt from the poison threshold (24 h ceiling), `/health`
+  finalize failures exempt from the poison threshold (3 h ceiling), `/health`
   budget rows + advisory + admin warning, `DEVCAKE_PMO_BUDGET_OFF` rollout
   switch. Docs 04/05/09/11/12/13/15.
 

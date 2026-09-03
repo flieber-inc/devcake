@@ -82,7 +82,7 @@ def rate_signal(resp: httpx.Response) -> RateSignal:
     return RateSignal(limit=limit, remaining=remaining, reset_at=reset_at,
                       window_s=RATE_WINDOW_S, limited=limited,
                       retry_after_s=retry_after, complexity_fraction=complexity,
-                      endpoint=endpoint)
+                      endpoint=endpoint, refill="continuous")   # leaky bucket
 
 # state *type* → normalized (docs/05 §3; teams rename display names freely)
 STATE_TYPE_MAP: dict[str, NormalizedStatus] = {

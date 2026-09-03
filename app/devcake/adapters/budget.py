@@ -15,9 +15,12 @@ Design (docs/15 §2, docs/05 §2a):
   by a digest of its bytes. Linear additionally merges buckets by user
   (`bind_principal`).
 - Headers are authoritative: every observation overwrites the local
-  estimate. Between observations the estimate refills at limit/window
-  (a leaky-bucket model; fixed-window vendors are covered by the block a
-  rejection installs).
+  estimate. The vendor's refill semantics decide what happens between
+  observations: a continuously refilling bucket (Linear's leaky bucket)
+  gains limit/window tokens per second and is governed by the reserve
+  alone — the bucket size IS the burst allowance; a fixed window (GitHub,
+  GitLab) stays frozen until its reset and is paced along a line from the
+  limit down to the reserve at the reset.
 - Two call classes (ports/pmo.py `pmo_call`): `critical` may spend the
   reserve and WAITS for the refill (bounded by a cumulative deadline),
   retrying ONCE after a definitive rejection — a 429/RATELIMITED response
@@ -108,6 +111,7 @@ class RateSignal:
     retry_after_s: float | None = None     # vendor's hint, seconds
     complexity_fraction: float | None = None   # secondary per-user bucket, 0..1
     endpoint: dict | None = None           # advisory only, never paced on
+    refill: str | None = None              # "continuous" (leaky bucket) | "window" (fixed)
 
 
 class _Meter:
@@ -156,13 +160,15 @@ class RequestBudget:
         self.remaining: int | None = None
         self.reset_at: float | None = None
         self.window_s: int = DEFAULT_WINDOW_S
+        self.refill = "window"
         self.blocked_until = 0.0
         self.complexity_fraction: float | None = None
         self.endpoint: dict | None = None
         self.last_observed_at: float | None = None
         self._local_spent = 0
         self._served_since_observed = 0
-        self.foreign_spend = 0      # quota others spent since the window began
+        self.foreign_spend = 0      # quota others spent in the current hour
+        self._foreign_window_end = 0.0
         self.served = {c: 0 for c in CLASSES}
         self.rejections = {c: 0 for c in CLASSES}
         self.waits = 0
@@ -183,10 +189,15 @@ class RequestBudget:
             self.window_s = int(sig.window_s)
         if sig.limit is not None:
             self.limit = int(sig.limit)
+        if sig.refill in ("continuous", "window"):
+            self.refill = sig.refill
         if sig.reset_at is not None:
-            if self.reset_at is not None and sig.reset_at > self.reset_at + 1:
-                self.foreign_spend = 0          # a new window began
             self.reset_at = float(sig.reset_at)
+        if now >= self._foreign_window_end:
+            # foreign spend is reported per rolling window of our own clock —
+            # vendor reset semantics differ (a fixed boundary vs "when full")
+            self.foreign_spend = 0
+            self._foreign_window_end = now + self.window_s
         if sig.remaining is not None:
             prev, spent = self.remaining, self._served_since_observed
             if prev is not None and self.limit:
@@ -233,11 +244,21 @@ class RequestBudget:
         if self.limit is None or self.remaining is None:
             return None
         elapsed = max(now - (self.last_observed_at or now), 0.0)
-        refill = self.limit * elapsed / self.window_s
-        est = self.remaining - self._local_spent + refill
-        if self.complexity_fraction is not None:
-            frac = min(1.0, self.complexity_fraction + elapsed / self.window_s)
-            est = min(est, self.limit * frac)
+        if self.refill == "continuous":
+            refill = self.limit * elapsed / self.window_s
+            est = self.remaining - self._local_spent + refill
+            if self.complexity_fraction is not None:
+                frac = min(1.0, self.complexity_fraction + elapsed / self.window_s)
+                est = min(est, self.limit * frac)
+        else:
+            # a fixed window stays frozen until its reset, then starts full
+            reset_passed = (self.reset_at is not None and now >= self.reset_at
+                            and self.last_observed_at is not None
+                            and self.last_observed_at < self.reset_at)
+            base = float(self.limit) if reset_passed else float(self.remaining)
+            est = base - self._local_spent
+            if self.complexity_fraction is not None and not reset_passed:
+                est = min(est, self.limit * self.complexity_fraction)
         return max(min(est, float(self.limit)), 0.0)
 
     # ── decision ──
@@ -251,14 +272,25 @@ class RequestBudget:
         if rem is None:
             return 0.0, ""
         rate = self.limit / self.window_s          # tokens per second
+        continuous = self.refill == "continuous"
+        ttr = self._ttr(now)
         if critical:
             if rem >= 1.0:
                 return 0.0, ""
-            return (1.0 - rem) / rate, "quota exhausted; waiting for the refill"
+            if continuous or ttr is None:
+                return (1.0 - rem) / rate, "quota exhausted; waiting for the refill"
+            return max(ttr, 1.0), "quota exhausted; waiting for the window to reset"
         floor = math.ceil(self.limit * RESERVE)
         if rem <= floor:
-            return (floor - rem + 1.0) / rate, "remaining quota is reserved for critical calls"
-        ttr = self._ttr(now)
+            if continuous or ttr is None:
+                wait = (floor - rem + 1.0) / rate
+            else:
+                wait = max(ttr, 1.0)
+            return wait, "remaining quota is reserved for critical calls"
+        if continuous:
+            # the bucket size is the burst allowance and the refill IS the
+            # pacing: nothing to spread, the reserve alone governs
+            return 0.0, ""
         if ttr is not None and self.limit > floor:
             line = floor + (self.limit - floor) * ttr / self.window_s
             allowance = self.limit * AHEAD
@@ -367,7 +399,7 @@ class RequestBudget:
         for name, meter in other._meters.items():
             self._meters.setdefault(name, meter)
         if (other.last_observed_at or 0) > (self.last_observed_at or 0):
-            for attr in ("limit", "remaining", "reset_at", "window_s",
+            for attr in ("limit", "remaining", "reset_at", "window_s", "refill",
                          "complexity_fraction", "endpoint", "last_observed_at",
                          "_local_spent", "_served_since_observed"):
                 setattr(self, attr, getattr(other, attr))
@@ -387,6 +419,7 @@ class RequestBudget:
             "remaining_estimate": None if est is None else int(est),
             "reset_at": self.reset_at,
             "window_s": self.window_s,
+            "refill": self.refill,
             "blocked_until": self.blocked_until if self.blocked_until > now else None,
             "complexity_fraction": self.complexity_fraction,
             "endpoint": self.endpoint,

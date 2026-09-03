@@ -236,6 +236,7 @@ class MissionManager:
     def dev_failure_error(self, run: Run, payload: dict):
         return finalize.dev_failure_error(self, run, payload)
 
+    @with_pmo_call("critical", wait_budget_s=20)   # a status revert is write-back, not enumeration
     async def restore_after_failure(self, run: Run):
         return await finalize.restore_after_failure(self, run)
 

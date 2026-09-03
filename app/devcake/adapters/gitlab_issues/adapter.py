@@ -40,7 +40,8 @@ def rate_signal(resp: httpx.Response) -> RateSignal:
                       reset_at=float(reset) if reset else None,
                       window_s=RATE_WINDOW_S,
                       limited=resp.status_code == 429,
-                      retry_after_s=header_float(h, "retry-after"))
+                      retry_after_s=header_float(h, "retry-after"),
+                      refill="window")
 
 log = logging.getLogger("devcake.gitlab_issues")
 
@@ -105,7 +106,9 @@ class GitLabIssuesAdapter:
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
-            raise PMOTransient("gitlab_issues: API token missing")
+            # a configuration problem (PMO_PERMANENT, docs/15 §1): typed
+            # transient it would be retried as weather until a ceiling
+            raise RuntimeError("gitlab_issues: API token missing")
         return {"PRIVATE-TOKEN": self._token}
 
     async def aclose(self) -> None:

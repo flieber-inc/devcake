@@ -204,7 +204,9 @@ class GiteaIssuesAdapter:
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
-            raise PMOTransient("gitea_issues: API token missing")
+            # a configuration problem (PMO_PERMANENT, docs/15 §1): typed
+            # transient it would be retried as weather until a ceiling
+            raise RuntimeError("gitea_issues: API token missing")
         return {"Authorization": f"token {self._token}"}
 
     async def aclose(self) -> None:

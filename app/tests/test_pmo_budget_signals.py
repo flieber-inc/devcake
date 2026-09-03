@@ -211,3 +211,48 @@ def test_routine_call_is_refused_before_the_wire_when_the_reserve_is_reached(sys
     with pytest.raises(PMOBudgetExceeded):
         run(call(adapter))
     assert hits == []
+
+
+def test_linear_complexity_rejection_does_not_pose_as_the_request_quota():
+    body = {"errors": [{"message": "Rate limit exceeded",
+                        "extensions": {"code": "RATELIMITED",
+                                       "meta": {"rateLimitResult": {
+                                           "allowed": False, "remaining": 0,
+                                           "limit": 3000000, "duration": 3600000}}}}]}
+    sig = linear_mod.rate_signal(httpx.Response(400, json=body))
+    assert sig.limited is True
+    assert sig.limit is None and sig.remaining is None
+    assert sig.retry_after_s == 5.0
+
+
+def test_discovery_kick_runs_routine_even_inside_a_critical_context():
+    """The harvest fires the kick from finalize's critical context; the
+    spawned task must not inherit it for an enumeration read."""
+    import asyncio
+    from types import SimpleNamespace
+    from devcake.domain.steward_service import StewardService
+    from devcake.ports.pmo import pmo_call_ctx
+
+    seen = []
+
+    class FakePMO:
+        async def list_all(self, team):
+            seen.append(pmo_call_ctx.get().call_class)
+            return []
+
+    mgr = SimpleNamespace(pmo=FakePMO(), instance=SimpleNamespace(team_key="T"),
+                          instance_name="i")
+    svc = StewardService.__new__(StewardService)
+    svc.mgr = mgr
+
+    async def no_dispatch(missions):
+        return None
+    svc.maybe_dispatch_discovery = no_dispatch
+
+    async def main():
+        with pmo_call("critical"):
+            svc.kick_discovery()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+    run(main())
+    assert seen == ["routine"]

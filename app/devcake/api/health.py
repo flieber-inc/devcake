@@ -22,6 +22,7 @@ from ..bake_status import annotate_liveness, read_bake_status
 from ..staffing import app_digest, receipt_summary
 from ..domain.claims import claims_depth, claims_queue_capped
 from ..domain.forge_runtime import PROBE_CONCURRENCY
+from ..ports.pmo import PMOBudgetExceeded
 from ..prompts import templates as prompt_templates
 from ..telemetry import OO_URL
 
@@ -265,6 +266,11 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
                                 caps, "attachments_supported", True))
                     except Exception:  # noqa: BLE001 — caps are advisory on /health
                         pass
+            except PMOBudgetExceeded as e:
+                # ADR-0040: the request budget deferred the probe — not an
+                # outage. Keep the last known state (or unknown), say why.
+                ok = cached["ok"] if cached is not None else None
+                detail = f"probe deferred: {str(e)[:150]}"
             except Exception as e:  # noqa: BLE001 — probe contract: any failure (incl. the 5s timeout) → ok:False + detail; /health must never 500
                 ok = False
                 detail = f"probe failed: {str(e)[:150]}"

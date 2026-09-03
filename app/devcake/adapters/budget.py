@@ -189,10 +189,12 @@ class RequestBudget:
             self.reset_at = float(sig.reset_at)
         if sig.remaining is not None:
             prev, spent = self.remaining, self._served_since_observed
-            if (prev is not None and self.limit
-                    and self.last_observed_at is not None):
-                refill = self.limit * max(now - self.last_observed_at, 0.0) / self.window_s
-                expected = prev - spent + refill
+            if prev is not None and self.limit:
+                # what the vendor should report if only WE spent since the
+                # last observation. No refill term: a refill can only raise
+                # the count, so leaving it out under-counts foreign spend
+                # but never invents it on a fixed-window vendor
+                expected = prev - spent
                 if sig.remaining < expected - 2:
                     self.foreign_spend += int(expected - sig.remaining)
             self.remaining = int(sig.remaining)
@@ -275,12 +277,12 @@ class RequestBudget:
         critical = cls == "critical"
         if instance:
             self.instances.add(instance)
-        deadline = None
-        if critical:
-            started = ctx.started if ctx is not None else _mono()
-            budget = (ctx.wait_budget_s if ctx is not None and ctx.wait_budget_s is not None
-                      else CRITICAL_WAIT_S)
-            deadline = started + budget
+        # the wait budget bounds time spent WAITING for quota across the
+        # whole call context (a finalize's many calls); other work inside the
+        # context — a merge, a clone — never eats it
+        budget = (ctx.wait_budget_s if ctx is not None and ctx.wait_budget_s is not None
+                  else CRITICAL_WAIT_S)
+        waited = ctx.waited_s if ctx is not None else 0.0
         attempts = 0
         rejected_by_vendor = False
         while True:
@@ -293,7 +295,7 @@ class RequestBudget:
                     raise PMOBudgetExceeded(
                         f"{op}request budget ({self.label}): {why}",
                         retry_after=wait, reset_at=self.reset_at)
-                if _mono() + wait > (deadline or 0.0):
+                if waited + wait > budget:
                     self.rejections[cls] += 1
                     self._note_refusal(cls, why)
                     if rejected_by_vendor:
@@ -305,6 +307,9 @@ class RequestBudget:
                         f"{wait:.0f}s exceeds the call deadline",
                         retry_after=wait, reset_at=self.reset_at)
                 await self._wait(wait, cls, instance, why)
+                waited += wait
+                if ctx is not None:
+                    ctx.waited_s = waited
                 continue
             self._local_spent += 1
             self._served_since_observed += 1
@@ -454,6 +459,12 @@ def bind_principal(budget: RequestBudget, principal_id: str | None, *,
     reg = _registry if registry is None else registry
     pkey = (budget.host, f"user:{principal_id}")
     existing = reg.get(pkey)
+    if (existing is not None and existing is not budget and registry is None
+            and all(_alias.get((budget.host, fp)) == pkey
+                    for fp in budget.fingerprints)):
+        # a second adapter still holding a bucket that was already merged
+        # into this principal — hand it the merged one, never merge twice
+        return existing
     if existing is None or existing is budget:
         reg[pkey] = budget
         budget.principal = principal_id
@@ -470,11 +481,41 @@ def bind_principal(budget: RequestBudget, principal_id: str | None, *,
     return target
 
 
-def snapshot_all(*, now: float | None = None) -> dict[str, dict[str, Any]]:
+def detach(instance: str) -> None:
+    """A manager rebuild (config reload) dropped or repointed an instance:
+    forget the name on every bucket, then prune buckets nothing uses —
+    a rotated or retired credential must not linger on /health, and its
+    token must not stay in memory."""
+    for b in _unique_budgets():
+        b.instances.discard(instance)
+        b._meters.pop(instance, None)
+    prune()
+
+
+def prune(*, now: float | None = None) -> None:
+    now = _clock() if now is None else now
+    dead = [b for b in _unique_budgets()
+            if not b.instances and b.blocked_until <= now]
+    for b in dead:
+        for key in [k for k, v in _registry.items() if v is b]:
+            _registry.pop(key, None)
+        for key in [k for k, v in _alias.items() if v == b.key or k in
+                    {(b.host, fp) for fp in b.fingerprints}]:
+            _alias.pop(key, None)
+    live = {fp for b in _unique_budgets() for fp in b.fingerprints}
+    for cred in [c for c, tok in _tokens.items() if tok not in live]:
+        _tokens.pop(cred, None)
+
+
+def _unique_budgets() -> list[RequestBudget]:
     seen: dict[int, RequestBudget] = {}
     for b in _registry.values():
         seen.setdefault(id(b), b)
-    return {b.label: b.snapshot(now=now) for b in seen.values()}
+    return list(seen.values())
+
+
+def snapshot_all(*, now: float | None = None) -> dict[str, dict[str, Any]]:
+    return {b.label: b.snapshot(now=now) for b in _unique_budgets()}
 
 
 def reset() -> None:

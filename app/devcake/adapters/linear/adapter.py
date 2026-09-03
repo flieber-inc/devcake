@@ -67,11 +67,16 @@ def rate_signal(resp: httpx.Response) -> RateSignal:
                 limited = True
                 meta = ((ext.get("meta") or {}).get("rateLimitResult") or {})
                 duration, lim = meta.get("duration"), meta.get("limit")
+                # the same shape reports the COMPLEXITY bucket (a limit in the
+                # millions): its refill quantum is meaningless for requests
+                # and its numbers must not pose as the request quota
+                is_requests = bool(lim) and float(lim) <= 100_000
                 if retry_after is None and duration and lim:
-                    retry_after = float(duration) / float(lim) / 1000.0 + 1.0
-                if limit is None and lim:
+                    retry_after = (float(duration) / float(lim) / 1000.0 + 1.0
+                                   if is_requests else 5.0)
+                if is_requests and limit is None:
                     limit = int(lim)
-                if remaining is None and meta.get("remaining") is not None:
+                if is_requests and remaining is None and meta.get("remaining") is not None:
                     remaining = int(meta["remaining"])
                 break
     return RateSignal(limit=limit, remaining=remaining, reset_at=reset_at,

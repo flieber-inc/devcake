@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from ..config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
                       intake_blocks_dispatch, memory_bound_names)
 from ..ports.cron import CronStore
+from ..ports.pmo import PMOTransient, pmo_call
 from . import claims as claims_mod
 from .model import LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW
 
@@ -134,12 +135,20 @@ class CronService:
                     continue
                 stamp = now.isoformat()
                 try:
-                    created = await self.fire(row.id, automatic=True)
+                    # ADR-0040: a scheduled ticket launches work — critical
+                    # class, short wait (this runs inside the poll cycle)
+                    with pmo_call("critical", wait_budget_s=20):
+                        created = await self.fire(row.id, automatic=True)
                     self.store.record(
                         row.id, "created" if created else "skipped",
                         fired_at=stamp)
                 except (CronBusy, CronUnconfigured):
                     self.store.record(row.id, "skipped", fired_at=stamp)
+                except PMOTransient as e:
+                    # the tracker was busy or the budget thin: the window is
+                    # NOT consumed and nothing counts toward degradation —
+                    # the next poll cycle tries again
+                    log.warning("cron %s deferred — transient PMO: %s", row.id, e)
                 except Exception:  # noqa: BLE001 — one row must not kill the cycle
                     log.exception("cron %s automatic fire failed", row.id)
                     self.store.record(row.id, "failed", fired_at=stamp)

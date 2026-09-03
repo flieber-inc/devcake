@@ -202,21 +202,24 @@ class MissionManager:
     # ── public verbs ──
     # ADR-0040: the verbs that write a run's results back or launch work run
     # as CRITICAL PMO calls (may spend the quota reserve, wait for the refill);
-    # enumeration verbs (gate_map, sweeps, list reads) stay routine.
+    # enumeration verbs (gate_map, sweeps, list reads) stay routine. Finalize
+    # takes the governor's default wait budget (its work is already done —
+    # losing it costs the most); dispatch and the activity offer run inside
+    # the poll cycle / the ingress consumer, so their waits are kept short.
     async def gate_map(self, missions: list[Mission]):
         return await schedule.gate_map(self, missions)
 
     async def schedule(self, missions: list[Mission], gate: dict[str, str] | None = None):
         return await schedule.schedule(self, missions, gate)
 
-    @with_pmo_call("critical")
+    @with_pmo_call("critical", wait_budget_s=20)
     async def dispatch(self, mission: Mission, mtype: MissionType, dev_type: DevType):
         return await dispatch.dispatch(self, mission, mtype, dev_type)
 
     def runspec_secret_payload(self, run: Run):
         return dispatch.runspec_secret_payload(self, run)
 
-    @with_pmo_call("critical")
+    @with_pmo_call("critical", wait_budget_s=20)
     async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
         return await activity_payload_mod.activity_payload(self, pmo_id, kind)
 
@@ -239,7 +242,7 @@ class MissionManager:
     async def sweeps(self, missions: list[Mission]):
         return await sweeps.sweeps(self, missions)
 
-    @with_pmo_call("critical")
+    @with_pmo_call("critical", wait_budget_s=20)
     async def dispatch_steward(self, dev_type: DevType, missions: list[Mission],
                                context_stale=frozenset(),
                                context_omit=frozenset()):
@@ -247,7 +250,7 @@ class MissionManager:
             self, dev_type, missions,
             context_stale=context_stale, context_omit=context_omit)
 
-    @with_pmo_call("critical")
+    @with_pmo_call("critical", wait_budget_s=20)
     async def dispatch_steward_discovery(self, dev_type: DevType, family,
                                          pending: dict,
                                          context_stale=frozenset(),

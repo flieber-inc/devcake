@@ -50,11 +50,12 @@ class PMOBudgetExceeded(PMOTransient):
 CallClass = Literal["critical", "routine"]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PMOCallContext:
     call_class: CallClass
-    started: float                      # time.monotonic() at context entry
+    started: float                      # monotonic at context entry (diagnostics)
     wait_budget_s: float | None = None  # None → the governor's class default
+    waited_s: float = 0.0               # time this context has spent waiting for quota
 
 
 pmo_call_ctx: ContextVar[PMOCallContext | None] = ContextVar(
@@ -66,8 +67,9 @@ _mono = time.monotonic     # seam: tests drive the governor and this clock toget
 def pmo_call(call_class: CallClass, *,
              wait_budget_s: float | None = None) -> Iterator[PMOCallContext]:
     """Declare the class of every PMO call made inside the block. Nested
-    blocks: the inner declaration wins. The wait budget is cumulative for
-    the whole block (a finalize's many calls share one deadline)."""
+    blocks: the inner declaration wins. The wait budget bounds the time the
+    block spends WAITING for quota, cumulatively (a finalize's many calls
+    share it); time spent on other work — a merge, a clone — never counts."""
     ctx = PMOCallContext(call_class, _mono(), wait_budget_s)
     token = pmo_call_ctx.set(ctx)
     try:

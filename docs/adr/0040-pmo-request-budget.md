@@ -40,8 +40,9 @@ identical for every system.
 A bucket is keyed by `(host, token(credential))` — an opaque per-process
 token, never a digest of the credential's bytes — independent of
 adapter objects, so a config-reload rebuild re-attaches to the same bucket
-and any adapter on the same token (a forge and an issue tracker on one
-GitHub token, two instances on one key) share it. The system name is a
+and any adapter on the same token (two instances on one key today; a
+forge and an issue tracker on one token once forge calls are routed
+through the governor) share it. The system name is a
 label. Linear's per-user rule is honoured for free: the `viewer` id rides
 the team query the adapter already makes, and `bind_principal` merges the
 buckets of every key that belongs to that user. Other vendors are not

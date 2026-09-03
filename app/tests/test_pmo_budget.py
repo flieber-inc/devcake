@@ -344,3 +344,60 @@ def test_the_governor_names_no_vendor():
         if tok.type not in (tokenize.COMMENT, tokenize.STRING)).lower()
     for vid in PMO_SYSTEMS:
         assert vid.split("_")[0] not in code, vid
+
+
+# ── review round: wait budget, foreign spend, merge, reload ──────────────────
+
+def test_wait_budget_counts_waiting_only_not_other_work(clock):
+    """A finalize that spends minutes on git before its first PMO call has
+    its whole wait budget left: the budget bounds time spent WAITING."""
+    b = bucket(clock, **full_window(clock, 100, 0))
+    send, calls = sender(resp())
+    with pmo_call("critical", wait_budget_s=50) as ctx:
+        clock.mono += 600                       # ten minutes of forge work
+        clock.t += 600
+        b.observe(B.RateSignal(limit=100, remaining=0, reset_at=clock.t + 3600,
+                               window_s=3600), now=clock.t)
+        run(b.request(send, reader(), instance="a"))   # waits 36 s, allowed
+        assert ctx.waited_s == pytest.approx(36.0)
+    assert calls == [1] and clock.sleeps == [pytest.approx(36.0)]
+
+
+def test_foreign_spend_ignores_the_refill_on_a_fixed_window(clock):
+    # 30 s later the vendor reports exactly our own spend: no foreign spend
+    b = bucket(clock, limit=2000, remaining=1500, reset_at=clock.t + 60,
+               window_s=60)
+    send, _ = sender(resp())
+    clock.t += 30
+    run(b.request(send, reader(B.RateSignal(limit=2000, remaining=1499,
+                                             reset_at=clock.t + 30)),
+                  instance="a"))
+    assert b.foreign_spend == 0
+
+
+def test_bind_principal_never_merges_a_bucket_twice(clock):
+    b1 = B.budget_for(HOST, "k1", system="tracker", instance="one")
+    b2 = B.budget_for(HOST, "k2", system="tracker", instance="two")
+    b2.served["routine"] = 7
+    B.bind_principal(b1, "user-9")
+    merged = B.bind_principal(b2, "user-9")
+    assert merged is b1 and b1.served["routine"] == 7
+    # a second adapter still holding the stale b2 object binds again
+    assert B.bind_principal(b2, "user-9") is b1
+    assert b1.served["routine"] == 7               # not counted twice
+
+
+def test_detach_prunes_buckets_nothing_uses(clock):
+    old = B.budget_for(HOST, "rotated-key", system="tracker", instance="one")
+    kept = B.budget_for(HOST, "shared-key", system="tracker", instance="one")
+    B.budget_for(HOST, "shared-key", system="tracker", instance="two")
+    B.detach("one")
+    assert old.label not in B.snapshot_all()          # gone from /health
+    assert kept.instances == {"two"}                  # still used by "two"
+    assert "rotated-key" not in B._tokens             # credential forgotten
+    assert "shared-key" in B._tokens
+    # a bucket still blocked by a vendor rejection survives the prune
+    blocked = B.budget_for(HOST, "blocked-key", system="tracker", instance="x")
+    blocked.observe(B.RateSignal(limited=True, retry_after_s=60), now=clock.t)
+    B.detach("x")
+    assert blocked.label in B.snapshot_all()

@@ -536,3 +536,54 @@ def test_budget_warning_notes_a_foreign_consumer_and_stays_quiet_otherwise():
     shared = {"t/u": {"limit": 2500, "instances": ["a"], "foreign_spend": 600,
                       "demand_per_hour": {"a": 900}}}
     assert "another consumer" in health_mod._budget_warnings(shared, 30)["t/u"]
+
+
+def test_paced_probe_keeps_the_last_known_state_instead_of_going_red(monkeypatch):
+    """A probe refused by the request budget is not an outage: the row keeps
+    its last known `ok` (or unknown) with a 'deferred' detail."""
+    from devcake.ports.pmo import PMOBudgetExceeded
+    from devcake.config import PMOInstance
+
+    class Probe:
+        def __init__(self):
+            self.calls = 0
+
+        async def health_probe(self, team):
+            self.calls += 1
+            if self.calls == 1:
+                from devcake.ports.pmo import PMOHealth
+                return PMOHealth(ok=True, workspace=team)
+            raise PMOBudgetExceeded("request budget (t/u): reserved")
+
+        def capabilities(self):
+            return None
+
+    probe = Probe()
+    cfg = AppConfig(pmos=[PMOInstance(name="a", system="linear", team_key="T")])
+    managers = {"a": SimpleNamespace(pmo=probe, anomalies={}, merge_handoffs={},
+                                     needs_human={}, cycles=[], blocked_reasons={})}
+
+    async def _true(*a, **k):
+        return True
+
+    async def _ingest():
+        return {"ok": True, "detail": ""}
+    monkeypatch.setattr(health_mod, "_check_redis", _true)
+    monkeypatch.setattr(health_mod, "_check_http", _true)
+    monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
+    health_mod.reset_health_caches()
+    fr = _forge_runtime()
+
+    def build():
+        return run_coro(health_mod.build_health_payload(
+            config=cfg, dev_types={}, managers=managers, stewards={},
+            forge_runtime=fr, shared_breakers={},
+            store=SimpleNamespace(active=lambda: []), internal_forge=None,
+            poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+
+    first = build()["pmo_instances"]["a"]
+    assert first["ok"] is True
+    health_mod._pmo_probe_cache[("a", "T")]["ts"] -= 10_000   # expire the row
+    second = build()["pmo_instances"]["a"]
+    assert second["ok"] is True                     # last known state kept
+    assert second["detail"].startswith("probe deferred")

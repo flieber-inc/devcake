@@ -730,6 +730,13 @@ until that run exists, field evidence below stays operator-self-reported.
   project-label registry cached 10 min; `/health.pmo_demand` + three
   `poll.instance` attributes. Docs 02/04/05/11/12.
 
+- **Decomposition `repo` field** (2026-09-04): per-child routing rides the
+  manifest as data (`resolve_draft_repo`: card or unique slug, work repos
+  only, rejects as `DEV_BAD_OUTPUT`); the app stamps the footer, so
+  `defang()` on Dev prose can no longer eat a routing marker; ONBOARD runs
+  excluded from the sticky repo history. Field receipt: a five-child split
+  whose children all landed on the default repository.
+
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

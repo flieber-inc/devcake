@@ -90,6 +90,40 @@ def resolve_marker(description: str, repo_names: set[str],
     return cands[0] if len(cands) == 1 else None
 
 
+def resolve_draft_repo(token: str, instance: "PMOInstance",
+                       repo_names: set[str],
+                       repo_urls: "dict[str, str] | None" = None
+                       ) -> tuple[str | None, str | None]:
+    """→ (card, None) for a decomposition draft's `repo` field, or
+    (None, reason). The same rule a description marker obeys — card name
+    or unique URL slug; a work repo of THIS instance, never a reference
+    repo — applied to structured data the app stamps itself, so a child's
+    routing can never be neutralized with the Dev-written prose around it."""
+    tok = (token or "").strip().lower()
+    if not tok:
+        return None, "empty repo"
+    card = tok if tok in repo_names else None
+    if card is None:
+        cands = _slug_candidates(tok, repo_names, repo_urls)
+        if len(cands) == 1:
+            card = cands[0]
+        elif len(cands) > 1:
+            return None, (f"ambiguous repo {token[:40]!r} — the URL slug "
+                          f"matches several cards: {', '.join(cands)}; "
+                          f"use the card name")
+        else:
+            return None, (f"unknown repo {token[:40]!r} — use the card name "
+                          f"or the repository URL's last path segment; "
+                          f"configured: {_cards_with_slugs(repo_names, repo_urls)}")
+    if card in (instance.reference_repos or []):
+        return None, (f"repo '{card}' is a REFERENCE repo of this instance "
+                      f"(read-only context) — work cannot route to it")
+    if card not in (instance.repos or []):
+        return None, (f"repo '{card}' is not in this PMO instance's repo set "
+                      f"{list(instance.repos or [])}")
+    return card, None
+
+
 def resolve_repo(mission: "Mission", instance: "PMOInstance",
                  repo_names: set[str],
                  run_history: "list[Run]",

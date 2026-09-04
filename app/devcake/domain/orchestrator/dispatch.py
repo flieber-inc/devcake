@@ -47,10 +47,13 @@ def resolve_repo(mgr, mission: Mission, all_runs: list | None = None):
     from ..repo_routing import repo_urls_of, resolve_repo
     if all_runs is None:
         all_runs = mgr.runs.store.all()
+    # ONBOARD is read-only triage with every work repo mounted: it writes
+    # nothing to a repository, so its (default-routed) repo_ref must not
+    # latch the mission — the first WRITING step resolves the marker
     history = sorted(
         (r for r in all_runs
          if r.mission_pmo_id == mission.pmo_id and mgr._run_is_ours(r)
-         and r.mission_type != "STEWARD"),
+         and r.mission_type not in ("STEWARD", "ONBOARD")),
         key=lambda r: aware(r.created_at), reverse=True)
     return resolve_repo(mission, mgr.instance,
                         set(mgr.forges.instances), history,
@@ -310,14 +313,14 @@ def _onboard_repo_options(mgr, primary: str) -> str:
         + "\n".join(lines) + "\n\n"
         "**Cross-repo work must never be one mission.** If completing this "
         "mission requires changes in more than one repository, take the "
-        "high-complexity path: decompose into ONE child per repository, put "
-        "a `devcake-repo:<name>` line (backticked) in each child's "
-        "description naming its repository, and order them with blocked_by "
-        "where one repository's change depends on another's. The marker "
-        "value is the card name in backticks at the START of each line "
-        "above; DevCake also accepts the repository URL's last path segment "
-        "as an alias. Nothing else routes. "
-        f"A child without a marker lands on the default repository "
+        "high-complexity path: decompose into ONE child per repository, set "
+        "each child's `repo` field to its repository's card name (the "
+        "backticked name at the START of each line above; DevCake also "
+        "accepts the repository URL's last path segment), and order them "
+        "with blocked_by where one repository's change depends on another's. "
+        "Only the `repo` field routes — a `devcake-repo:` marker written "
+        "inside a description is neutralized on purpose. "
+        f"A child without a `repo` lands on the default repository "
         f"(`{default}`).\n\n")
 
 

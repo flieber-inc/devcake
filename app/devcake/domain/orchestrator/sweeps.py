@@ -12,7 +12,7 @@ from ...ports.pmo import PMOTransient
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
-from . import completion, discovery, dispatch, feed, freshness
+from . import board, completion, discovery, dispatch, feed, freshness
 from .markers import (MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
                       MERGE_SETTLE_MARKER)
 
@@ -49,6 +49,9 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     # this set) only once it actually reached the deferred-retry driver for it;
     # a repo stays armed while any of its parked missions is still unsatisfied.
     mgr._rearm_satisfied = set()
+    memo = getattr(mgr, "feed_memo", None)
+    if memo is not None:
+        memo.retain(m.pmo_id for m in missions)
     # sequential by design; a per-mission await may include an adapter's
     # short transient-retry sleeps (≤ ~6 s, docs/06 §5) — expected, not a
     # hang, and non-blocking for the event loop
@@ -181,17 +184,30 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             m.repo_reason or f"repo '{m.repo}' no longer configured — "
             f"deferred merge retry skipped")
         return
-    act = await mgr.pmo.get_activity(m.ref)
-    retry_ts = handoff_ts = settle_ts = None
-    for e in act.entries:
-        body = feed.unquoted(e.body)
-        ts = aware(e.ts)  # a naive PMO timestamp must not TypeError
-        if MERGE_RETRY_MARKER in body:
-            retry_ts = max(retry_ts, ts) if retry_ts else ts
-        if MERGE_HANDOFF_MARKER in body:
-            handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
-        if MERGE_SETTLE_MARKER in body:
-            settle_ts = max(settle_ts, ts) if settle_ts else ts
+    # the merge-state stamps are memoized per mission (ADR-0033 addendum):
+    # they change only through our own feed writes (which invalidate the
+    # memo) or a human edit (caught by the memo's safety rescan)
+    memo = getattr(mgr, "feed_memo", None)
+    stamps = memo.get("merge", m) if memo is not None else None
+    if stamps is not None:
+        board.bump(mgr, "feed_scan_memo_hits")
+        retry_ts, handoff_ts, settle_ts = stamps
+    else:
+        gen = memo.generation(m.pmo_id) if memo is not None else 0
+        board.bump(mgr, "feed_scan_reads")
+        act = await mgr.pmo.get_activity(m.ref)
+        retry_ts = handoff_ts = settle_ts = None
+        for e in act.entries:
+            body = feed.unquoted(e.body)
+            ts = aware(e.ts)  # a naive PMO timestamp must not TypeError
+            if MERGE_RETRY_MARKER in body:
+                retry_ts = max(retry_ts, ts) if retry_ts else ts
+            if MERGE_HANDOFF_MARKER in body:
+                handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
+            if MERGE_SETTLE_MARKER in body:
+                settle_ts = max(settle_ts, ts) if settle_ts else ts
+        if memo is not None and not getattr(act, "truncated", False):
+            memo.put("merge", m, (retry_ts, handoff_ts, settle_ts), gen)
 
     # Settle is active when its marker is the newest merge-state marker.
     settle_active = bool(
@@ -313,6 +329,17 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
 
 
 async def tracking_sweep(mgr, m: Mission) -> None:
+    # Snapshot gate (ADR-0003 amendment): the cycle's board already holds
+    # this project's team-local children; while any of them is open the
+    # project cannot complete, so no live read is due. Only when every
+    # known child is terminal — or none is known (vendors without
+    # `parent_ref`, cross-team projects) — is the live, paginated read
+    # paid, and completion is still decided on THAT read.
+    snap = getattr(mgr, "snapshot", None)
+    known = snap.children_of(m.pmo_id) if snap is not None else []
+    if known and any(c.status not in ("done", "canceled") for c in known):
+        return
+    board.bump(mgr, "tracking_children_live")
     try:
         children = await mgr.pmo.children_of(m.ref)
     except Exception as e:

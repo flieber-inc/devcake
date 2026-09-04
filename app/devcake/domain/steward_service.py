@@ -178,7 +178,7 @@ class StewardService:
             pending: dict[str, list[tuple[int, int]]] = {}
             for s in group:
                 try:
-                    state = await discovery.scan_source(mgr, s)
+                    state = await discovery.scan_source(mgr, s, memo=False)   # a dispatch decides on a live read
                 except PMOTransient as e:
                     # rate limit / thin budget: keep the pending ids, the
                     # sweep re-drives next cycle — never abort the segment

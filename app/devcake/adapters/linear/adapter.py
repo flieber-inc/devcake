@@ -8,6 +8,7 @@ attachment upload, and mission/relation creation.
 import logging
 import mimetypes
 import re
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -135,6 +136,10 @@ MAX_COMMENT_PAGES_FULL = 100
 PROJECT_DOCS_PAGE = 25
 MAX_PROJECT_DOC_PAGES = 4      # 100 documents fail-loud ceiling
 PROJECT_UPDATES_PAGE = 25
+# workspace projectLabels registry cache (ADR-0040): the registry walk cost
+# up to MAX_LABEL_PAGES requests on EVERY project label swap; names are
+# stable, so a short cache with create-time invalidation is safe
+PROJECT_LABEL_CACHE_TTL_S = 600
 MAX_PROJECT_UPDATE_PAGES = 20  # 500 updates — feed semantics: trips truncated
 UPDATE_COMMENTS_PAGE = 50
 MAX_UPDATE_COMMENT_PAGES = 10  # per update, on the overflow walk
@@ -145,6 +150,7 @@ class LinearAdapter:
                  instance: str = ""):
         self._headers = {"Authorization": api_key, "Content-Type": "application/json"}
         self._team_cache: dict[str, dict[str, Any]] = {}
+        self._project_labels: tuple[float, dict[str, str]] | None = None
         self._transport = transport  # tests inject a MockTransport (contract test 9)
         from ..http import PooledClient
         self._http = PooledClient(timeout=20, transport=transport)  # F16: keep-alive
@@ -249,6 +255,7 @@ class LinearAdapter:
 
     def _invalidate_team_cache(self) -> None:
         self._team_cache.clear()
+        self._project_labels = None
 
     # ── reads ────────────────────────────────────────────────────────────────
 
@@ -878,7 +885,9 @@ class LinearAdapter:
         # via schema introspection) — ensure the same managed set there too.
         # Paginated (audit A12): an unpaginated first-100 read re-created any
         # managed project label living past page 1 on every boot.
-        existing_p = set((await self._all_project_labels()).keys())
+        # heal, don't trust the cache: a label deleted on the vendor inside
+        # the cache window must be recreated by this call
+        existing_p = set((await self._all_project_labels(force=True)).keys())
         for name in sorted(names):
             if name.upper() in existing_p:
                 continue
@@ -956,12 +965,17 @@ class LinearAdapter:
                 return
             raise
 
-    async def _all_project_labels(self) -> dict[str, str]:
+    async def _all_project_labels(self, *, force: bool = False) -> dict[str, str]:
         """NAME→id over the whole workspace projectLabels registry, cursor-
         paginated: a DEVCAKE-* project label beyond page 1 must still resolve
         (twin of the per-project read). Past the ceiling it raises instead of
         returning a silent truncation (audit A29 — an unresolvable managed
-        label with no signal)."""
+        label with no signal). Cached for PROJECT_LABEL_CACHE_TTL_S;
+        `force` re-walks (a name missing from the cache may be new)."""
+        cached = self._project_labels
+        if (not force and cached is not None
+                and time.monotonic() - cached[0] < PROJECT_LABEL_CACHE_TTL_S):
+            return dict(cached[1])
         by_name: dict[str, str] = {}
         after = None
         for _ in range(MAX_LABEL_PAGES):
@@ -972,6 +986,7 @@ class LinearAdapter:
             conn = page["projectLabels"]
             by_name.update({l["name"].upper(): l["id"] for l in conn["nodes"]})
             if not conn["pageInfo"].get("hasNextPage"):
+                self._project_labels = (time.monotonic(), dict(by_name))
                 return by_name
             after = conn["pageInfo"]["endCursor"]
         raise RuntimeError(
@@ -1004,6 +1019,10 @@ class LinearAdapter:
         for name in remove:
             current.pop(name.upper(), None)
         for name in add:
+            if name.upper() not in by_name:
+                # the cache may predate a label created elsewhere: one
+                # forced re-walk before refusing
+                by_name = await self._all_project_labels(force=True)
             if name.upper() not in by_name:
                 raise RuntimeError(
                     f"project label {name} missing — ensure_labels not run?")

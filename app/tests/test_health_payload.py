@@ -590,3 +590,28 @@ def test_paced_probe_keeps_the_last_known_state_instead_of_going_red(monkeypatch
     second = build()["pmo_instances"]["a"]
     assert second["ok"] is True                     # last known state kept
     assert second["detail"].startswith("probe deferred")
+
+
+def test_health_payload_carries_per_instance_demand(monkeypatch):
+    fr = _forge_runtime()
+    managers = {"a": SimpleNamespace(cycle_stats={"feed_scan_reads": 2,
+                                                  "feed_scan_memo_hits": 5},
+                                     anomalies={}, merge_handoffs={},
+                                     needs_human={}, cycles=[],
+                                     blocked_reasons={})}
+
+    async def _true(*a, **k):
+        return True
+
+    async def _ingest():
+        return {"ok": True, "detail": ""}
+    monkeypatch.setattr(health_mod, "_check_redis", _true)
+    monkeypatch.setattr(health_mod, "_check_http", _true)
+    monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
+    health_mod.reset_health_caches()
+    got = run_coro(health_mod.build_health_payload(
+        config=AppConfig(), dev_types={}, managers=managers, stewards={},
+        forge_runtime=fr, shared_breakers={},
+        store=SimpleNamespace(active=lambda: []), internal_forge=None,
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+    assert got["pmo_demand"] == {"a": {"feed_scan_reads": 2, "feed_scan_memo_hits": 5}}

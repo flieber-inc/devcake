@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from ...security import redact
 from ..model import LABEL_DISCOVERY, MissionRef
 from ..run import TERMINAL_STATES, Run, utcnow
+from . import board
 from . import steps
 from .feed import blockquote, post_attachment_comment, unquoted
 from .markers import (DISCOVERY_FIELD_MAX, DISCOVERY_PREVIEW_MAX, defang,
@@ -213,14 +214,27 @@ class SourceState:
         return [(s, n) for s, n in self.posted if s not in done]
 
 
-async def scan_source(mgr, m) -> SourceState:
+async def scan_source(mgr, m, *, memo: bool = True) -> SourceState:
     """The ONE labeled-mission feed scan (shared by harvest recovery, the
     discovery sweep, and steward apply): posted markers and routing
     receipts, both over unquoted bodies (IRON RULE). full=True so newest
     receipts (gitea pages oldest-first) cannot fall off the window.
     truncated ⇒ fail-closed: callers must not treat the feed as empty or
     write to=-. pending = posted − receipted when counts are known —
-    restart-proof board arithmetic, no local ledger."""
+    restart-proof board arithmetic, no local ledger.
+
+    `memo` (ADR-0033 addendum): the per-cycle sweep reuses a recent scan
+    while nothing changed (`FeedScanMemo`); a caller about to WRITE on the
+    strength of the scan passes memo=False and pays the live read. A
+    truncated scan is never memoized."""
+    fm = getattr(mgr, "feed_memo", None) if memo else None
+    if fm is not None:
+        hit = fm.get("discovery", m)
+        if hit is not None:
+            board.bump(mgr, "feed_scan_memo_hits")
+            return hit
+        gen = fm.generation(m.pmo_id)
+    board.bump(mgr, "feed_scan_reads")
     act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
     posted: list[tuple[int, int]] = []
     receipted: set[tuple[int, str]] = set()
@@ -228,8 +242,11 @@ async def scan_source(mgr, m) -> SourceState:
         text = unquoted(e.body)
         posted += discovery_posts(text)
         receipted |= discovery_receipts(text)
-    return SourceState(posted=posted, receipted=receipted,
-                       truncated=bool(act.truncated))
+    state = SourceState(posted=posted, receipted=receipted,
+                        truncated=bool(act.truncated))
+    if fm is not None and not state.truncated:
+        fm.put("discovery", m, state, gen)
+    return state
 
 
 async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
@@ -246,6 +263,26 @@ async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
         if state.pending:
             out[m.pmo_id] = state.pending
     return out
+
+
+def _gone_batches(mgr, m, pending) -> list[tuple[int, int]]:
+    """Pending batches whose source run record is gone. A record that
+    exists but is not terminal is IN FLIGHT (finalize has posted the marker
+    and is still closing, or a watchdog has yet to rule): hold it this
+    cycle — the pending id is kept and the label stays. "Gone" is reserved
+    for an absent record or a terminal one without a usable result
+    (clear-runs, a failed close). Closing an in-flight batch with to=- is
+    permanent: receipts are board arithmetic and nothing reopens them once
+    the result lands."""
+    rows = mgr.runs.store.all()
+    run_ix = harvest_run_index(mgr, rows)
+    inflight = {(r.mission_pmo_id, r.seq) for r in rows
+                if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)
+                and r.state not in TERMINAL_STATES}
+    return [(step, n) for step, n in pending
+            if (m.pmo_id, step) not in inflight
+            and ((m.pmo_id, step) not in run_ix
+                 or not valid_entries(run_ix[(m.pmo_id, step)].result))]
 
 
 async def discovery_sweep(mgr, m) -> None:
@@ -295,6 +332,14 @@ async def discovery_sweep(mgr, m) -> None:
     if not state.posted:
         return   # label without markers (human relabel) — humans own labels
     pending = state.pending
+    if not pending or _gone_batches(mgr, m, pending):
+        # about to WRITE (drop the label, or close batches with to=-) on
+        # the strength of a possibly memoized scan: confirm live first —
+        # one extra read only in the cycles that act (ADR-0033 addendum)
+        state = await scan_source(mgr, m, memo=False)
+        if state.truncated or not state.posted:
+            return   # the next sweep takes the fresh path
+        pending = state.pending
     if not pending:
         try:     # fully receipted — self-heal the gate off
             await mgr.pmo.swap_labels(MissionRef(m.pmo_id, "issue"),
@@ -303,22 +348,7 @@ async def discovery_sweep(mgr, m) -> None:
             mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
         mgr._discoveries_pending.discard(m.pmo_id)
         return
-    rows = mgr.runs.store.all()
-    run_ix = harvest_run_index(mgr, rows)
-    # A record that exists but is not terminal is IN FLIGHT (finalize has
-    # posted the marker and is still closing, or a watchdog has yet to
-    # rule): hold it this cycle — the pending id is kept and the label
-    # stays. "Gone" is reserved for an absent record or a terminal one
-    # without a usable result (clear-runs, a failed close). Closing an
-    # in-flight batch with to=- is permanent: receipts are board arithmetic
-    # and nothing reopens them once the result lands.
-    inflight = {(r.mission_pmo_id, r.seq) for r in rows
-                if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)
-                and r.state not in TERMINAL_STATES}
-    gone = [(step, n) for step, n in pending
-            if (m.pmo_id, step) not in inflight
-            and ((m.pmo_id, step) not in run_ix
-                 or not valid_entries(run_ix[(m.pmo_id, step)].result))]
+    gone = _gone_batches(mgr, m, pending)
     if gone:
         lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
                  for s, _n in sorted(gone)]

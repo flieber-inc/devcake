@@ -26,6 +26,17 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   `pmo_budget_warnings` (an advisory naming the poll interval that fits),
   the admin a dismissable warning. `DEVCAKE_PMO_BUDGET_OFF=1` keeps it
   observe-only for a first hour on a host.
+- **Changed — the poll spends less per cycle** (ADR-0003 amendment,
+  ADR-0033 addendum). The cycle's board fetch is a snapshot that the
+  tracking sweep, the dispatch-time ancestor offer and scheduled-task
+  in-flight checks reuse instead of re-reading the tracker; a tracking
+  project's children are read live only when the snapshot shows completion
+  is possible. Labeled feeds (discovery routing, merge driving) are
+  re-scanned only when the mission changed, DevCake wrote to the feed,
+  five minutes passed, or a write is about to be made on the strength of
+  the scan. Linear's project-label registry is cached per
+  adapter. `/health` gains `pmo_demand` (what each cycle read and what the
+  memo saved).
 
 ## v0.5.3 (2026-09-02)
 

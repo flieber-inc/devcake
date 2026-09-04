@@ -352,6 +352,10 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
             ([f"{name}:{k}" for k in cyc] if prefixed else cyc)
             for name, mgr in managers.items() for cyc in mgr.cycles],
         "blocked_reasons": _merged("blocked_reasons"),
+        # ADR-0003 amendment / ADR-0040: what each instance's last cycle
+        # spent on feed scans and tracking reads, and what the memo saved
+        "pmo_demand": {name: dict(getattr(mgr, "cycle_stats", {}) or {})
+                       for name, mgr in managers.items()},
         # instances whose poll segment failed with a PERMANENT error (audit
         # A1) — the other instances keep polling; this names the sick one
         "poll_degraded": dict(poll_rt.poll_degraded),

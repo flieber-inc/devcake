@@ -432,7 +432,7 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
             continue
         state = src_state.get(src.pmo_id)
         if state is None:
-            state = src_state[src.pmo_id] = await scan_source(mgr, src)
+            state = src_state[src.pmo_id] = await scan_source(mgr, src, memo=False)
         if getattr(state, "truncated", False):
             # hold, don't receipt: receipts on an unreadable-in-full feed
             # can never be re-read — the sweep raises the ceiling case to
@@ -558,7 +558,7 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         if state is None and pid in by_id:
             # routed-nowhere sources were never scanned during validation —
             # scan now so a redelivered finalize never re-posts receipts
-            state = await scan_source(mgr, by_id[pid])
+            state = await scan_source(mgr, by_id[pid], memo=False)
         pre = getattr(state, "receipted", set())
         new = sorted(p for p in pairs if p not in pre)
         if new:
@@ -580,7 +580,7 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         if src is None:
             continue
         try:
-            state2 = await scan_source(mgr, src)
+            state2 = await scan_source(mgr, src, memo=False)
             if not state2.pending:
                 await mgr.pmo.swap_labels(MissionRef(pid, "issue"),
                                           remove={LABEL_DISCOVERY},

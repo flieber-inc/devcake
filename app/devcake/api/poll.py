@@ -23,6 +23,7 @@ from ..config import intake_blocks_dispatch
 from ..domain import backend_health
 from ..domain.model import ALL_LABELS, derive
 from ..domain.orchestrator import MissionManager
+from ..domain.orchestrator.board import BoardSnapshot
 from ..ports.pmo import PMOTransient, with_pmo_call
 
 log = logging.getLogger("devcake")
@@ -163,7 +164,13 @@ class PollRuntime:
             except Exception:  # noqa: BLE001 — label healing must never take the segment down; the poll's reads work without it
                 log.exception("label ensure failed for %s — retrying next "
                               "cycle", mgr.instance_name)
+        mgr.cycle_stats = {}
         fetched = await mgr.pmo.list_all(mgr.instance.team_key)
+        # the cycle's board snapshot: enumeration reads below (tracking
+        # children, the ancestor offer, cron in-flight) reuse it instead of
+        # paying the vendor again (ADR-0003 amendment, ADR-0040)
+        mgr.snapshot = BoardSnapshot(tuple(fetched), self.cycle_counter,
+                                     datetime.now(timezone.utc))
         fetched_ids = {m.pmo_id for m in fetched}
         missions = _claim_missions(mgr, fetched, self.mission_owner)
         run_snapshot = mgr.runs.store.all()   # one read per segment, not per mission
@@ -304,6 +311,13 @@ class PollRuntime:
                         try:
                             s, c, d, ids = await self.poll_instance(mgr, cache_rows)
                             polled_ok[mgr.instance_name] = ids
+                            stats = mgr.cycle_stats
+                            ispan.set_attribute("devcake.pmo.feed_scan_reads",
+                                                stats.get("feed_scan_reads", 0))
+                            ispan.set_attribute("devcake.pmo.feed_scan_memo_hits",
+                                                stats.get("feed_scan_memo_hits", 0))
+                            ispan.set_attribute("devcake.pmo.tracking_children_live",
+                                                stats.get("tracking_children_live", 0))
                             seen, cand, disp = seen + s, cand + c, disp + d
                             self.poll_degraded.pop(mgr.instance_name, None)
                         except PMOTransient as e:

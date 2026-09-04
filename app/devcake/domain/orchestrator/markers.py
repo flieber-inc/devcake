@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import re
 from pathlib import Path
 
@@ -180,11 +181,11 @@ FINDING_MARKER_RE = re.compile(r"`devcake:finding:v1 sha=([0-9a-f]{12})`")
 
 def finding_fingerprint(entry: dict) -> str:
     """Stable fingerprint of a finding's substance: the `finding` text,
-    case-folded, whitespace-collapsed, punctuation-light."""
-    import hashlib
-    text = str(entry.get("finding") or "").lower()
-    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    case-folded, every run of non-alphanumerics (any script) collapsed to
+    one space; SHA-256, twelve hex."""
+    text = str(entry.get("finding") or "").casefold()
+    text = re.sub(r"[\W_]+", " ", text).strip()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 def finding_fingerprints(unquoted_text: str) -> set[str]:

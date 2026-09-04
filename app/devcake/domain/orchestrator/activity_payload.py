@@ -566,14 +566,19 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
             # Banners precede the feed mirror so a Dev scanning ACTIVITY.md
             # sees gaps/truncation before the chronological entries.
             lines = banners + lines
-    # a hand-off released by a person is the first thing the Dev must read
-    resumed = resume.resumed_after_handoff(mgr, pmo_id)
+    # a hand-off released by a person is the first thing the Dev must read —
+    # on the Dev's OWN mission only: an ancestor mirror (include_upstream is
+    # False exactly for the nested rebuild) must never claim a release
+    resumed = (resume.resumed_after_handoff(mgr, pmo_id)
+               if include_upstream else None)
     if resumed is not None:
         lines = resume.banner_lines(resumed, act.entries) + lines
+    mission_md = _mission_md(m, mission_lines, document_lines, blocker_lines,
+                             _discovery_lines(act.entries))
+    if resumed is not None:
+        mission_md = resume.MISSION_NOTE + "\n\n" + mission_md
 
-    return {"mission_md": _mission_md(m, mission_lines, document_lines,
-                                      blocker_lines,
-                                      _discovery_lines(act.entries)),
+    return {"mission_md": mission_md,
             "activity_md": "\n".join(lines), "attachments": attachments,
             "feed_watermark": watermark,
             "upstream_gaps": upstream_gaps,

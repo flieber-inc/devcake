@@ -176,12 +176,15 @@ evidence; a hand-off without evidence wastes a human's time. Then stop and
 write /workspace/out/result.json EXACTLY as:
 {"schema_version": 1, "outcome": "human_needed", "summary": "<precisely what a
 human must do to unblock this mission, including the exact error you hit>"}
-If ACTIVITY.md opens with a "RESUMED BY A HUMAN" banner, a person released this
-mission after a hand-off — that is the only way a hand-off is released. A human
-comment since then is the answer; without one, the release itself is the answer:
-an approval or decision you asked for is granted, and something you asked to be
-provided should now be there — verify it and continue. Hand off again only if
-the obstacle demonstrably persists; never to ask the same question twice.
+If MISSION.md or ACTIVITY.md opens with a "RESUMED BY A HUMAN" banner, a person
+released this mission after a hand-off — that is the only way a hand-off is
+released. A human comment your previous run never saw is the answer; without
+one, the release itself is the answer: an approval you asked for is granted; a
+choice you asked for goes to the option you recommended (say so in your
+summary); something you asked to be provided should now be there — verify it
+and continue. Re-read the brief first: it may have been revised instead of
+commented. Hand off again only if the obstacle demonstrably persists; never to
+ask the same question twice.
 """
 
 # ADR-0033 — appended to ONBOARD/EXECUTE/REVIEW, the result.json authors
@@ -561,9 +564,11 @@ nothing is often the right answer.
 - If a finding implies the plan itself is wrong (a mission mooted, a
   decomposition mis-cut), say so in that route's "because" — a human acts
   on topology; you route information, never intent.
-- A finding about the harness or the environment (missing credentials, an
-  API the Dev could not call, an absent mount) describes the run, not the
+- A finding about the Dev's own run environment — its container,
+  credentials, mounts or tracker access (a missing credential, an API the
+  Dev could not call, an absent mount) — describes that run, not the
   family's work: decline it with reason `environment`; never route it.
+  Facts about the shared build, CI or deploy environment stay discoveries.
 - There is no numeric route budget — your judgment IS the budget
   (discoveries are the system's memory between runs): route the findings
   with the widest consequences and decline the rest.

@@ -28,9 +28,10 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   observe-only for a first hour on a host.
 - **Changed — a resume is visible to the Dev, and environment findings are
   no longer routed.** When a mission's most recent run was a hand-off, the
-  next run's activity mirror opens with a banner naming the ask, the fact
-  that a person released the hold, and how many human comments followed;
-  the playbooks state that a release without a comment answers the ask.
+  next run's brief opens with a pointer and its activity mirror with a
+  banner naming the ask, the fact that a person released the hold, and how
+  many human comments that run never saw; the playbooks state that a
+  release without a comment answers the ask.
   Devs are told that limitations of their own run are not discoveries, the
   steward declines such findings, and every delivered finding carries a
   fingerprint so the same finding is never delivered twice to a recipient.

@@ -1148,3 +1148,85 @@ def test_delivery_over_the_inline_ceiling_keeps_fingerprints(
     pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
     assert _apply(mgr2, run2, [_route(finding=2)]) == (0, 0)
     assert not any(pid == "tgt" for pid, _ in pmo2.comments)
+
+
+def test_delivery_body_round_trips_as_a_content_duplicate(tmp_path):
+    """The real delivery (blockquoted findings, unquoted head) re-read from
+    the recipient's feed is recognised — by the pair marker first, and the
+    fingerprints survive `unquoted` for the cross-source case."""
+    pmo, mgr, run = _route_setup(tmp_path)
+    assert _apply(mgr, run, [_route()]) == (1, 0)
+    body = next(md for pid, md in pmo.comments if pid == "tgt")
+    pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
+    assert _apply(mgr2, run2, [_route()]) == (0, 0)   # pair dedup precedent
+    assert not any(pid == "tgt" for pid, _ in pmo2.comments)
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo2))
+
+
+def test_recipient_never_receives_back_its_own_discovery(tmp_path):
+    """The harvest post carries the same fingerprints, so a sibling routing
+    the fact a mission discovered itself is a content duplicate."""
+    from devcake.domain.orchestrator import discovery
+    own = Run(run_id="L-T-T-1-EXECUTE-AAAAAA", mission_key="T-T",
+              mission_pmo_id="tgt", mission_type="EXECUTE",
+              dev_type="senior-dev", seq=1, state="finished")
+    harvest_body, externalize = discovery.comment_body(
+        own, [{"finding": "Finding 0 about the config",
+               "evidence": "e", "scope": "s"}],
+        "DISCOVERY_1.md", "https://files.example.test/d1")
+    assert externalize is False
+    assert harvest_body.count("`devcake:finding:v1 sha=") == 1
+    pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=[harvest_body])
+    assert _apply(mgr, run, [_route()]) == (0, 0)
+    assert not any(pid == "tgt" for pid, _ in pmo.comments)
+    # the receipt says to=T-T yet nothing from T-S is there: it explains why
+    assert any("already on the recipient from another source" in md
+               and "`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo))
+
+
+def test_two_sources_proposing_the_same_finding_in_one_run_land_once(
+        tmp_path):
+    from devcake.domain.orchestrator.markers import (
+        FINDING_MARKER_RE, discovery_marker)
+    src2 = m("src2", "T-Z", status="in_progress")
+    pmo, mgr, run = _route_setup(tmp_path, extra_missions=(src2,))
+    tgt = next(mm for mm in pmo.missions if mm.pmo_id == "tgt")
+    tgt.blocked_by.append("src2")                       # same family
+    pmo.feeds["src2"] = Activity(
+        mission=src2, entries=[_ae(discovery_marker(1, 1))], truncated=False)
+    r2 = Run(run_id="L-T-Z-1-EXECUTE-AAAAAA", mission_key="T-Z",
+             mission_pmo_id="src2", mission_type="EXECUTE",
+             dev_type="senior-dev", seq=1, state="finished",
+             pmo_ref=mgr.instance_name)
+    r2.result = {"outcome": "executed", "summary": "s", "discoveries": [
+        {"finding": "FINDING 0 about the config.", "evidence": "other",
+         "scope": "other"}]}
+    mgr.runs.store.save(r2)
+    run.steward_batches.append({"pmo_id": "src2", "key": "T-Z", "step": 1})
+    delivered, rejected = _apply(mgr, run, [
+        _route(), _route(source="T-Z", step=1, finding=1)])
+    assert (delivered, rejected) == (1, 0)
+    posts = [md for pid, md in pmo.comments if pid == "tgt"]
+    assert len(posts) == 1
+    assert "`devcake:discovery-in:v1 src=T-S step=2`" in posts[0]
+    assert "src=T-Z" not in posts[0]
+    assert len(FINDING_MARKER_RE.findall(posts[0])) == 1
+    receipts = [md for pid, md in pmo.comments if pid == "src2"]
+    assert any("`devcake:discovery-routed:v1 step=1 to=T-T`" in md
+               for md in receipts)
+
+
+def test_fingerprint_is_script_agnostic():
+    from devcake.domain.orchestrator.markers import finding_fingerprint
+    fp = finding_fingerprint
+    assert fp({"finding": "Übergabe schlägt fehl!"}) == \
+        fp({"finding": "übergabe   schlägt fehl"})
+    assert fp({"finding": "Übergabe schlägt fehl"}) != \
+        fp({"finding": "bergabe schl gt fehl"})
+    assert fp({"finding": "配置缺失"}) != fp({"finding": "凭据缺失"})
+    assert fp({"finding": "配置缺失"}) != fp({"finding": ""})
+    assert fp({"finding": "The cache is stale."}) == \
+        fp({"finding": "the CACHE is stale"})
+    assert len(fp({"finding": "x"})) == 12

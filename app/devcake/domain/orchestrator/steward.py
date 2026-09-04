@@ -518,6 +518,12 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
             receipts.setdefault(src.pmo_id, set()).add(
                 (step, tgt.key.upper()))
             if not fresh:
+                # the receipt still says to=<recipient>; tell the operator
+                # why nothing from this source is on it
+                reasons.setdefault((src.pmo_id, step), []).append(
+                    f"step {step} → {tgt.key}: every proposed finding was "
+                    f"already on the recipient from another source; "
+                    f"nothing new was posted")
                 continue
             # fingerprints ride the head, next to the pair marker, so the
             # ceiling fallback below (bodies dropped) keeps them inline
@@ -526,9 +532,8 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                     f"leads, not truths: verify against the source before "
                     f"relying. Full record: `DISCOVERY_{step}.md` on "
                     f"{skey}.",
-                    " ".join(f"`devcake:finding:v1 sha="
-                             f"{finding_fingerprint(x['entry'])}`"
-                             for x in fresh)]
+                    *(f"`devcake:finding:v1 sha="
+                      f"{finding_fingerprint(x['entry'])}`" for x in fresh)]
             body_lines: list[str] = []
             for x in fresh:
                 body_lines += render_entry_lines(

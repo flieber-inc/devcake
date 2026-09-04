@@ -146,3 +146,79 @@ def test_up_sh_is_gone():
     the only bring-up entry. A resurrected up.sh would be a second body."""
     path = next((p for p in _UP_SH_CANDIDATES if p.is_file()), None)
     assert path is None, f"up.sh must not exist (found {path})"
+
+
+def test_status_reports_the_pmo_request_budgets(monkeypatch, tmp_path, capsys):
+    """ADR-0040 visibility: `devcake status` reads /health through the
+    loopback admin proxy and prints one line per credential bucket plus the
+    alarm text; --json carries the rows verbatim."""
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+    import devcake_cli.status as status_mod
+
+    _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def _fake_run(argv, **kwargs):
+        if argv[:3] == ["docker", "compose", "ps"]:
+            return subprocess.CompletedProcess(argv, 0, stdout='{"Name":"app"}\n')
+        return subprocess.CompletedProcess(argv, 1, stderr="no")
+
+    health = {
+        "pmo_budget": {
+            "tracker.example/user:u1": {
+                "label": "tracker.example/user:u1", "instances": ["a", "b"],
+                "limit": 2500, "remaining": 2471, "blocked_until": None,
+                "limited_last_hour": 2,
+                "demand_per_hour": {"a": 61, "b": 1541}},
+            "forge.example/key-0702": {
+                "label": "forge.example/key-0702", "instances": ["board"],
+                "limit": None, "remaining": None, "blocked_until": None,
+                "limited_last_hour": 0, "demand_per_hour": {"board": None}}},
+        "pmo_rate_limited": {
+            "tracker.example/user:u1": "the tracker rejected 2 requests in the last hour"},
+    }
+    monkeypatch.setattr(status_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(status_mod, "_fetch_health", lambda root, **kw: health)
+    rc = cli_main.main(["status"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert ("  tracker.example/user:u1: about 1602 requests/hour (a 61, b 1541) "
+            "against 2500/hour, 2471 remaining; rejected by the tracker in the "
+            "last hour: 2") in out
+    assert "    ! the tracker rejected 2 requests in the last hour" in out
+    assert ("  forge.example/key-0702: about 0 requests/hour (board measuring) "
+            "against no published limit; rejected by the tracker in the last "
+            "hour: 0") in out
+    rc = cli_main.main(["status", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["health_reachable"] is True
+    assert payload["pmo_budget"] == health["pmo_budget"]
+    assert payload["pmo_rate_limited"] == health["pmo_rate_limited"]
+
+
+def test_status_says_when_the_budget_is_unavailable(monkeypatch, tmp_path, capsys):
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+    import devcake_cli.status as status_mod
+
+    _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(status_mod.subprocess, "run", lambda argv, **kw:
+                        subprocess.CompletedProcess(argv, 0, stdout="{}\n"))
+    monkeypatch.setattr(status_mod, "_fetch_health", lambda root, **kw: None)
+    assert cli_main.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "pmo_budget: unavailable" in out and "127.0.0.1:8080" in out
+    cli_main.main(["status", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["health_reachable"] is False and payload["pmo_budget"] is None
+
+
+def test_fetch_health_never_raises(monkeypatch, tmp_path):
+    """A stack that is down is a status line, never a traceback."""
+    _ensure_cli_importable()
+    import devcake_cli.status as status_mod
+    _fake_checkout(tmp_path)
+    monkeypatch.setattr(status_mod, "ADMIN_URL", "http://127.0.0.1:9")   # closed port
+    assert status_mod._fetch_health(tmp_path, timeout=0.5) is None

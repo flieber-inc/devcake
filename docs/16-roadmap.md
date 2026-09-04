@@ -739,6 +739,17 @@ until that run exists, field evidence below stays operator-self-reported.
   gating). Field receipt: a five-child split whose children all landed on
   the default repository.
 
+- **Rate-limit alarm + budget readout** (2026-09-04): `limited_last_hour`
+  meter per bucket → `/health.pmo_rate_limited` → critical self-clearing
+  admin alert; PMO card readout (`lib/budget.js`); `devcake status` budget
+  section (ADR-0040 §6 addendum). Governor field receipt, read the same day
+  on a host running the governor and the demand cuts: one tracker
+  credential shared by three connections measured at about 1,700
+  requests/hour against 2,500 (69 %, the largest board alone about 1,500),
+  zero rejections, zero waits, principal merge confirmed (three connections,
+  one bucket), and the feed memo answered 22 of 23 scans on the largest
+  board from memory.
+
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

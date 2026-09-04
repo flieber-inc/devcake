@@ -48,6 +48,32 @@ check("a nearly-spent PMO request budget is a dismissable warning", () => {
   assert.match(hit.body, /at least 110 s/);
 });
 
+// ADR-0040 §6 addendum: a tracker that REJECTED requests is the loud tier —
+// critical, not dismissable, carries the alarm text verbatim, self-clearing.
+check("a reached PMO rate limit is a critical non-dismissable alert", () => {
+  const alerts = deriveAlerts({
+    pmo_rate_limited: {
+      "tracker.example/user:u1":
+        "the tracker rejected 4 requests in the last hour on this credential " +
+        "(instances: a, b); requests are paused until 16:20 UTC",
+    },
+  });
+  const hit = alerts.find((a) => a.id === "pmo-rate-limited");
+  assert.ok(hit, "pmo-rate-limited alert missing");
+  assert.equal(hit.severity, "critical");
+  assert.equal(hit.dismissable, undefined);
+  assert.match(hit.title, /rate limit reached/);
+  assert.match(hit.body, /tracker\.example\/user:u1: the tracker rejected 4/);
+  assert.match(hit.body, /clears itself an hour after the last rejection/);
+  const two = deriveAlerts({ pmo_rate_limited: { x: "a", y: "b" } });
+  assert.match(two.find((a) => a.id === "pmo-rate-limited").title, /^2 PMO rate limits/);
+});
+
+check("no rate-limit alarm when the payload carries none", () => {
+  const alerts = deriveAlerts({ pmo_rate_limited: {}, pmo_budget: {} });
+  assert.equal(alerts.some((a) => a.id === "pmo-rate-limited"), false);
+});
+
 check("no budget warning when the payload carries none", () => {
   const alerts = deriveAlerts({ pmo_budget_warnings: {}, pmo_budget: {} });
   assert.equal(alerts.some((a) => a.id === "pmo-budget"), false);

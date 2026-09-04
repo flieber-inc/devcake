@@ -25,6 +25,7 @@ const SUITES = [
   "req_seq.mjs",
   "mission_identity.mjs",
   "alerts.mjs",
+  "pmo_budget_helpers.mjs",
   "design_tokens.mjs",
   "list_window_helpers.mjs",
   "cake162_polish.mjs",

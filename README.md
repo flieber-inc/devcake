@@ -231,6 +231,7 @@ real EXECUTE: §9.
 git clone <this-repo-url> && cd devcake
 uv tool install devcake-cli   # from PyPI — or from this checkout: uv tool install . (snapshot) / uv pip install -e . (editable)
 devcake doctor             # named preflight + one-time remedies (--json ok)
+devcake status             # compose + baker + PMO request budgets vs each tracker's limit (--json ok)
 devcake up --bake          # auto-inits .env secrets, DOCKER_GID, control plane + hello + baker
 # Later restarts (images already baked):  devcake up
 

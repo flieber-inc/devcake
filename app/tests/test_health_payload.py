@@ -615,3 +615,51 @@ def test_health_payload_carries_per_instance_demand(monkeypatch):
         store=SimpleNamespace(active=lambda: []), internal_forge=None,
         poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
     assert got["pmo_demand"] == {"a": {"feed_scan_reads": 2, "feed_scan_memo_hits": 5}}
+
+
+# ── ADR-0040 §6 addendum: the loud tier ──────────────────────────────────────
+
+def test_budget_alarm_names_rejections_the_pause_and_the_interval_that_fits():
+    now = 1_700_000_000.0
+    snap = {"tracker.example/user:u1": {
+        "limit": 2500, "instances": ["a", "b"], "foreign_spend": 0,
+        "demand_per_hour": {"a": 1500, "b": 1400},
+        "limited_last_hour": 4, "blocked_until": now + 90}}
+    out = health_mod._budget_alarms(snap, 15, now=now)
+    text = out["tracker.example/user:u1"]
+    assert "rejected 4 requests in the last hour" in text
+    assert "instances: a, b" in text
+    assert "paused until 22:14 UTC" in text            # 1_700_000_090 → 22:14:50
+    assert "processed late" in text
+    assert "at least 30 s" in text                     # same fit as the advisory
+    one = dict(snap["tracker.example/user:u1"], limited_last_hour=1,
+               blocked_until=None)
+    assert "rejected 1 request in" in health_mod._budget_alarms(
+        {"t": one}, 15, now=now)["t"]
+
+
+def test_budget_alarm_is_silent_without_rejections_and_speaks_while_paused():
+    now = 1_700_000_000.0
+    quiet = {"t/u": {"limit": 2500, "instances": ["a"], "foreign_spend": 0,
+                     "demand_per_hour": {"a": 2400},
+                     "limited_last_hour": 0, "blocked_until": None}}
+    assert health_mod._budget_alarms(quiet, 15, now=now) == {}
+    stale_block = dict(quiet["t/u"], blocked_until=now - 5)     # already lifted
+    assert health_mod._budget_alarms({"t/u": stale_block}, 15, now=now) == {}
+    paused = dict(quiet["t/u"], blocked_until=now + 30, foreign_spend=900,
+                  demand_per_hour={"a": 500})
+    text = health_mod._budget_alarms({"t/u": paused}, 15, now=now)["t/u"]
+    assert text.startswith("the tracker is refusing requests")
+    assert "another consumer" in text                  # demand fits; someone else spends
+
+
+def test_health_payload_carries_the_rate_limit_alarm(monkeypatch):
+    from devcake.adapters import budget as pmo_budget
+    b = pmo_budget.budget_for("tracker.example", "k", system="linear",
+                              instance="a")
+    fr = _forge_runtime(last_full_probe_at=datetime.now(timezone.utc))
+    assert _payload(fr, monkeypatch)["pmo_rate_limited"] == {}
+    b.observe(pmo_budget.RateSignal(limited=True, retry_after_s=1))
+    got = _payload(fr, monkeypatch)
+    assert "rejected 1 request in the last hour" in got["pmo_rate_limited"][b.label]
+    assert got["pmo_budget"][b.label]["limited_last_hour"] == 1

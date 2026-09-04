@@ -26,6 +26,15 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   `pmo_budget_warnings` (an advisory naming the poll interval that fits),
   the admin a dismissable warning. `DEVCAKE_PMO_BUDGET_OFF=1` keeps it
   observe-only for a first hour on a host.
+- **Added — a loud alarm when a tracker rejects requests, and the request
+  number where an interested person looks.** Every request budget keeps a
+  rolling one-hour count of the tracker's own rejections; the health payload
+  derives `pmo_rate_limited` from it and the admin shows a critical,
+  non-dismissable alert that clears itself an hour after the last rejection
+  (a self-throttle stays the existing dismissable warning). Each PMO card
+  shows a one-line readout of the connection's measured requests per hour
+  against the credential's limit, with remaining, refill time and rejections
+  on hover, and `devcake status` prints the same rows on the host.
 - **Fixed — a cross-repository decomposition routed every child to the
   default repository.** The triage playbook asked for a backticked routing
   marker in each child's description, and the decomposition step's

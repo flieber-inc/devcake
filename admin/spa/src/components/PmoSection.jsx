@@ -20,6 +20,7 @@ import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 import { newPmoCard } from "../lib/cards.js";
 import { fleetSeedIndexes } from "../lib/fleetExpand.js";
 import { connRef } from "../lib/connectionFields.js";
+import { budgetDetails, budgetForInstance, budgetLine, budgetTone } from "../lib/budget.js";
 
 export default function PmoSection({ newNamesState, health = {}, healthError = false,
                                      onHealthChange }) {
@@ -398,6 +399,24 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     {sysMeta.operator_note}
                   </p>
                 ) : null}
+                {(() => {
+                  // ADR-0040 visibility: what this connection spends of its
+                  // credential's hour, one line, details on hover
+                  const b = budgetForInstance(health, inst.name);
+                  if (!b) return null;
+                  const tone = budgetTone(b);
+                  const cls = tone === "critical"
+                    ? "text-red-700 dark:text-red-300"
+                    : tone === "warning"
+                      ? "text-amber-800 dark:text-amber-300"
+                      : "text-neutral-500 dark:text-neutral-400";
+                  return (
+                    <p className={`sm:col-span-3 text-xs ${cls}`}
+                      title={budgetDetails(b)} data-testid="pmo-budget-line">
+                      {budgetLine(b)}
+                    </p>
+                  );
+                })()}
                 {(() => {
                   const live = (health.pmo_instances || {})[inst.name] || {};
                   const bits = [];

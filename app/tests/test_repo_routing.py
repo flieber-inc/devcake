@@ -1194,3 +1194,38 @@ def test_resolve_marker_helper_for_inheritance():
     assert resolve_marker("`devcake-repo:beta`", REPOS, REPO_URLS) == "beta"
     assert resolve_marker("`devcake-repo:nope`", REPOS, REPO_URLS) is None
     assert resolve_marker("no marker", REPOS, REPO_URLS) is None
+
+
+def test_onboard_runs_never_latch_the_repo(tmp_path):
+    """ONBOARD is read-only triage with every work repository mounted; its
+    default-routed repo_ref must not latch the mission — the first WRITING
+    step resolves the marker (field finding: a child routed to the default
+    at triage stayed there for every EXECUTE)."""
+    from fakes import FakeForgeRuntime, make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+    store = RunStore(tmp_path / "runs")
+    onboard = _run("alpha", seq=1); onboard.mission_type = "ONBOARD"
+    onboard.mission_pmo_id = "p1"; onboard.pmo_ref = "linear"
+    store.save(onboard)
+    fr = FakeForgeRuntime(object()); fr._inst.name = "main"
+    mgr = make_mission_manager(instance=INST_SET, forge_runtime=fr,
+                               runs=type("Runs", (), {"store": store})())
+    import devcake.domain.repo_routing as rr
+    orig = rr.resolve_repo
+    seen = []
+
+    def spy(mission, instance, names, history, **kw):
+        seen.append([r.run_id for r in history])
+        return orig(mission, instance, {"alpha", "beta"}, history)
+    rr.resolve_repo = spy
+    try:
+        # the marker wins: triage's default binding is not sticky
+        assert dispatch.resolve_repo(mgr, _m("`devcake-repo:beta`")) == ("beta", None)
+        assert seen[-1] == []
+        # a WRITING run latches as before
+        execute = _run("alpha", seq=2); execute.mission_pmo_id = "p1"; execute.pmo_ref = "linear"
+        store.save(execute)
+        name, reason = dispatch.resolve_repo(mgr, _m("`devcake-repo:beta`"))
+        assert name is None and "sticky" in reason
+    finally:
+        rr.resolve_repo = orig

@@ -67,6 +67,11 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     drafts = result.get("decomposition") or []
     if not drafts:
         raise ValueError("decomposed outcome without decomposition list")
+    from ..repo_routing import (marker_repo, repo_urls_of, resolve_draft_repo,
+                                resolve_marker)
+    repo_names = set(mgr.forges.instances)
+    repo_urls = repo_urls_of(mgr.forges.instances)
+    draft_repos: dict[int, str] = {}
     for i, d in enumerate(drafts, start=1):
         deps = d.get("blocked_by") or []
         if not all(isinstance(j, int) and not isinstance(j, bool) and 1 <= j < i
@@ -74,6 +79,26 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
             raise ValueError(
                 f"decomposition part {i}: blocked_by must be 1-based indexes "
                 f"of EARLIER parts, got {deps!r}")
+        # per-child routing rides the MANIFEST as data (a cross-repo split
+        # names one repository per child); the app stamps the marker itself
+        # below, after defang() has neutralized any marker written in prose
+        raw_repo = d.get("repo")
+        if isinstance(raw_repo, str) and not raw_repo.strip():
+            raw_repo = None
+        if raw_repo is not None:
+            if not isinstance(raw_repo, str):
+                raise ValueError(f"decomposition part {i}: repo must be a card name")
+            card, reason = resolve_draft_repo(
+                raw_repo, mgr.instance, repo_names, repo_urls)
+            if card is None:
+                if steps.DECOMP_CHILD(i) in run.finalized_steps:
+                    # this part was already created on an earlier delivery:
+                    # a config change since must not fail the replay —
+                    # keep the token so the manifest hashes as it did
+                    card = raw_repo.strip().lower()
+                else:
+                    raise ValueError(f"decomposition part {i}: {reason}")
+            draft_repos[i] = card
     # Redact agent-generated fields before hashing and create_mission so
     # redelivery and secrets scrubbing stay consistent. Marker syntax in the
     # untrusted body is neutralized via defang() BEFORE hashing: a Dev quoting
@@ -85,12 +110,14 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         "description": defang(redact(str(d.get("description") or ""))),
         "priority": str(d.get("priority") or "medium"),
         "blocked_by": list(d.get("blocked_by") or []),
+        # the key is present only when a draft names a repo, so manifests of
+        # existing families hash exactly as before (replay/top-up keys on it)
+        **({"repo": draft_repos[i]} if i in draft_repos else {}),
     } for i, d in enumerate(drafts, start=1)]
     canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"),
                            ensure_ascii=True)
     manifest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     is_project = live.pmo_kind == "project"
-    from ..repo_routing import marker_repo, repo_urls_of, resolve_marker
     # the ONE marker→card rule (slug alias included), so a slug-marked
     # parent stamps card names on its children; an unresolvable marker
     # falls back to the raw parse and gates at the children's dispatch
@@ -200,13 +227,15 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                       f"`devcake:decomposition:v1 parent={pmo_id} "
                       f"manifest={manifest} part={i}/{len(normalized)} "
                       f"depth={child_depth}`")
-            if parent_repo_marker:
+            child_repo = d.get("repo") or parent_repo_marker
+            if child_repo:
+                # the draft's own repo (a cross-repo split) wins; otherwise
                 # children inherit the parent's repo marker (audit A24,
                 # founder decision 2026-07-14) — the family stays on one
                 # repo instead of splitting to the default / internal repos.
                 # Appended AFTER the manifest hash is computed, like the
                 # rest of the footer, so replay idempotency is unaffected.
-                footer += f"\n`devcake-repo:{parent_repo_marker}`"
+                footer += f"\n`devcake-repo:{child_repo}`"
             key, child_id = await mgr.pmo.create_mission(
                 mgr.instance.team_key, title,
                 d["description"] + footer,

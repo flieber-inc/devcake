@@ -26,6 +26,17 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   `pmo_budget_warnings` (an advisory naming the poll interval that fits),
   the admin a dismissable warning. `DEVCAKE_PMO_BUDGET_OFF=1` keeps it
   observe-only for a first hour on a host.
+- **Fixed — a cross-repository decomposition routed every child to the
+  default repository.** The triage playbook asked for a backticked routing
+  marker in each child's description, and the decomposition step's
+  marker-neutralizer (which stops Dev prose from smuggling live markers)
+  stripped exactly that, so the children landed on the board's first
+  repository and their first run latched it. A child's repository is now a
+  `repo` field of the decomposition manifest, validated against the
+  instance's work repositories, and the app stamps the routing footer
+  itself; a read-only ONBOARD run no longer latches the repository choice
+  (a marker or default edit after an unmarked triage now takes effect at
+  the first post-triage step).
 - **Changed — the poll spends less per cycle** (ADR-0003 amendment,
   ADR-0033 addendum). The cycle's board fetch is a snapshot that the
   tracking sweep, the dispatch-time ancestor offer and scheduled-task

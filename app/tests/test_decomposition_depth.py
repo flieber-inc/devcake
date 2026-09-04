@@ -5,6 +5,8 @@ unlimited). Depth is read from the mission's own record only: the app-managed
 `DEVCAKE-CREATED` label gates it, so a forged marker in an untrusted
 description is inert."""
 
+import pytest
+
 from devcake.config import AppConfig, PMOInstance
 from devcake.domain.orchestrator import decomposition
 from devcake.domain.orchestrator.markers import (DECOMPOSITION_MARKER_RE,
@@ -239,3 +241,101 @@ def test_decomposition_parent_ref_trusts_created_label_only():
     assert decomposition_parent_ref(m) is None
     m.labels.add("DEVCAKE-CREATED")
     assert decomposition_parent_ref(m) == "parent-id"
+
+
+# ── the draft's `repo` field: routing as manifest data, stamped by the app ──
+
+def _repos_mgr(tmp_path, m):
+    from types import SimpleNamespace
+    from devcake.config import RepoInstance
+    inst = PMOInstance(name="linear", team_key="DEV", repos=["alpha", "beta"],
+                       reference_repos=["refdoc"])
+    fr = SimpleNamespace(instances={
+        "alpha": RepoInstance(name="alpha", url="https://git.example/acme/billing-api"),
+        "beta": RepoInstance(name="beta", url="https://git.example/acme/inventory-sync"),
+        "refdoc": RepoInstance(name="refdoc", url="https://git.example/acme/handbook"),
+    }, internal=set())
+    fake = FakePMO(m)
+    mgr = make_mission_manager(
+        tmp_path, pmo=fake, config=AppConfig(max_decomposition_depth=2),
+        messaging=NullMessaging(), noop_audit=True, instance=inst,
+        forge_runtime=fr)
+    return mgr, fake
+
+
+def test_draft_repo_is_stamped_by_the_app_and_survives_defang(tmp_path):
+    """Field finding: the triage playbook asked for a backticked marker in
+    each child's description and defang() neutralized exactly that, so a
+    cross-repo split landed every child on the default repository. The
+    child's repository is manifest DATA now; the app stamps the footer."""
+    from devcake.domain.repo_routing import marker_repo, repo_urls_of
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake = _repos_mgr(tmp_path, m)
+    prose = "`devcake-repo:beta`\n\nGoal: move the sync job."
+    decompose(mgr, [{"title": "a", "description": prose, "repo": "beta"},
+                    {"title": "b", "repo": "inventory-sync"},   # URL-slug alias
+                    {"title": "c"}])
+    a, b, c = fake.all_missions[1:4]
+    assert marker_repo(a.description) == "beta"
+    assert a.description.count("`devcake-repo:beta`") == 1      # footer only; prose neutralized
+    assert a.description.startswith("devcake-repo:beta`")        # defang left the prose toothless
+    assert marker_repo(b.description) == "beta"
+    assert marker_repo(c.description) is None
+    names, urls = set(mgr.forges.instances), repo_urls_of(mgr.forges.instances)
+    assert resolve_repo(a, mgr.instance, names, [], repo_urls=urls) == ("beta", None)
+    assert resolve_repo(c, mgr.instance, names, [], repo_urls=urls) == ("alpha", None)
+
+
+def test_draft_repo_wins_over_the_parents_marker(tmp_path):
+    from devcake.domain.repo_routing import marker_repo
+    m = mission("in_progress", {"DEVCAKE"})
+    m.description = "parent work\n`devcake-repo:alpha`"
+    mgr, fake = _repos_mgr(tmp_path, m)
+    decompose(mgr, [{"title": "a", "repo": "beta"}, {"title": "b"}])
+    a, b = fake.all_missions[1:3]
+    assert marker_repo(a.description) == "beta"       # the draft's own repository
+    assert marker_repo(b.description) == "alpha"      # inherited from the parent
+
+
+@pytest.mark.parametrize("repo, match", [
+    ("refdoc", "REFERENCE"), ("nope", "unknown repo"), (7, "card name")])
+def test_draft_repo_that_cannot_route_rejects_the_manifest(tmp_path, repo, match):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake = _repos_mgr(tmp_path, m)
+    with pytest.raises(ValueError, match=match):
+        decompose(mgr, [{"title": "a", "repo": repo}, {"title": "b"}])
+    assert fake.created == []                          # nothing half-created
+
+
+def test_manifest_hash_is_unchanged_for_drafts_without_repo(tmp_path):
+    """Existing families replay/top-up on the manifest hash: a draft that
+    names no repo must hash exactly as it did before the field existed."""
+    from devcake.domain.orchestrator.markers import DECOMPOSITION_MARKER_RE
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake = _repos_mgr(tmp_path, m)
+    decompose(mgr, [{"title": "a"}, {"title": "b"}])
+    first = DECOMPOSITION_MARKER_RE.search(fake.all_missions[1].description).group(2)
+    import hashlib, json
+    canonical = json.dumps([
+        {"title": "a", "description": "", "priority": "medium", "blocked_by": []},
+        {"title": "b", "description": "", "priority": "medium", "blocked_by": []},
+    ], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    assert first == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_redelivery_does_not_revalidate_parts_already_created(tmp_path):
+    """A config change between deliveries (the card left the instance's
+    repo set) must not fail the replay of a manifest whose parts already
+    exist — the checkpointed part keeps its token and the manifest hashes
+    as it did."""
+    from devcake.domain.orchestrator import steps
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake = _repos_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    payload = {"outcome": "decomposed",
+               "decomposition": [{"title": "a", "repo": "beta"}, {"title": "b"}]}
+    run_coro(decomposition.finalize_decomposition(mgr, run, payload))
+    assert steps.DECOMP_CHILD(1) in run.finalized_steps
+    mgr.instance.repos = ["alpha"]                       # beta left the set
+    run_coro(decomposition.finalize_decomposition(mgr, run, payload))  # replay
+    assert len([x for x in fake.all_missions if "DEVCAKE-CREATED" in x.labels]) == 2

@@ -178,6 +178,24 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // Request budget (ADR-0040): the app measures its own demand against the
+  // tracker's quota per credential. Warning, dismissable: nothing is broken
+  // yet — routine reads are being paced/skipped so write-backs keep their
+  // reserve — but the operator can fix the cause (poll interval, shared key).
+  const budgetWarnings = Object.entries(health.pmo_budget_warnings || {});
+  if (budgetWarnings.length > 0) {
+    alerts.push({
+      id: "pmo-budget",
+      severity: "warning",
+      dismissable: true,
+      title:
+        budgetWarnings.length === 1
+          ? "PMO request budget is nearly spent"
+          : `${budgetWarnings.length} PMO request budgets are nearly spent`,
+      body: budgetWarnings.map(([label, msg]) => `${label}: ${msg}`).join(" · "),
+    });
+  }
+
   if (Object.keys(health.anomalies || {}).length > 0) {
     alerts.push({
       id: "anomalies",

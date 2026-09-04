@@ -47,7 +47,7 @@ Every `poll_interval_seconds` (default 30). **Multi-PMO:** the poll runtime walk
 7. Refresh the in-memory missions snapshot served by `GET /api/v1/missions` (advisory only, rebuilt every cycle) and emit the `poll.cycle` span with counts (`12-observability.md`).
 8. **Scheduled-task fires (`CronService.maybe_fire`, ADR-0035):** for every enabled `crons` row whose elapsed-interval window (persisted `last_fire_at` in `state/cron_outcomes.json`) is due and that is not degraded (last 3 automatic fires failed — ledger-derived, restart-safe; Run-now always works and a success re-arms), create ONE labeled ticket (`DEVCAKE` + stage label, `devcake:cron:v1 job=<id>` marker, single-flight per board, intake-pause honored). The reserved `memory-curator` row instead fans out one EXECUTE ticket per Curator board, skipping notebooks whose `.claims/` listing is empty. One outcome (`created`/`skipped`/`failed`) is recorded per fire window. Exceptions never kill the cycle.
 
-A `PMOTransient` on one instance skips **only that instance's segment** for this cycle (`15-errors-and-retries.md`, `PMO_TRANSIENT`); other configured PMO instances still poll. The next tick re-attempts the sick instance — nothing is lost because nothing local is authoritative.
+A `PMOTransient` on one instance skips **only that instance's segment** for this cycle (`15-errors-and-retries.md`, `PMO_TRANSIENT`) — including a refusal by the request budget (`PMOBudgetExceeded`, `05-pmo-adapter.md` §2a): the poll's reads are routine-class and never wait for quota, while finalize and dispatch are critical-class and do. Other configured PMO instances still poll. The next tick re-attempts the sick instance — nothing is lost because nothing local is authoritative.
 
 ## 2. Candidate filtering
 

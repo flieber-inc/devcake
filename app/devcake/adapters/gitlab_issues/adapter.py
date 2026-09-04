@@ -22,6 +22,26 @@ from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref, project_path_encoded)
+from ..budget import RateSignal, budget_for, header_float, header_int
+
+
+# GitLab's throttle headers describe a per-minute window (docs/05 §2a)
+RATE_WINDOW_S = 60
+
+
+def rate_signal(resp: httpx.Response) -> RateSignal:
+    """GitLab's RateLimit-* headers (on every response; reset in epoch
+    seconds) → the vendor-neutral signal (ADR-0040). A throttled request
+    is a 429 carrying Retry-After."""
+    h = resp.headers
+    reset = header_int(h, "ratelimit-reset")
+    return RateSignal(limit=header_int(h, "ratelimit-limit"),
+                      remaining=header_int(h, "ratelimit-remaining"),
+                      reset_at=float(reset) if reset else None,
+                      window_s=RATE_WINDOW_S,
+                      limited=resp.status_code == 429,
+                      retry_after_s=header_float(h, "retry-after"),
+                      refill="window")
 
 log = logging.getLogger("devcake.gitlab_issues")
 
@@ -70,6 +90,9 @@ class GitLabIssuesAdapter:
             self._origin = origin
             self._api = f"{origin}/api/v4"
         self._team_ref = (team_ref or "").strip()
+        # ADR-0040: one request budget per credential on this API host
+        self._budget = budget_for(urlsplit(self._api).hostname or "-", self._token,
+                                  system="gitlab_issues", instance=instance)
         self._path = ""
         if self._team_ref:
             try:
@@ -83,7 +106,9 @@ class GitLabIssuesAdapter:
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
-            raise PMOTransient("gitlab_issues: API token missing")
+            # a configuration problem (PMO_PERMANENT, docs/15 §1): typed
+            # transient it would be retried as weather until a ceiling
+            raise RuntimeError("gitlab_issues: API token missing")
         return {"PRIVATE-TOKEN": self._token}
 
     async def aclose(self) -> None:
@@ -112,9 +137,11 @@ class GitLabIssuesAdapter:
         url = f"{self._api}{path}"
         hdrs = {**self._headers(), **(headers or {})}
         try:
-            resp = await self._http.get().request(
-                method, url, params=params, json=json, content=content,
-                headers=hdrs)
+            resp = await self._budget.request(          # THE wire call (ADR-0040)
+                lambda: self._http.get().request(
+                    method, url, params=params, json=json, content=content,
+                    headers=hdrs),
+                rate_signal, instance=self._instance)
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitlab_issues network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):
@@ -472,9 +499,12 @@ class GitLabIssuesAdapter:
         try:
             async with httpx.AsyncClient(
                     timeout=60, transport=self._transport) as client:
-                resp = await client.post(
-                    url, headers=self._headers(),
-                    files={"file": (filename, data)})
+                resp = await self._budget.request(   # same bucket as _req
+                    lambda: client.post(
+                        url, headers=self._headers(),
+                        files={"file": (filename, data)}),
+                    rate_signal, instance=self._instance,
+                    op="gitlab_issues upload → ")
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitlab_issues upload network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):
@@ -540,11 +570,14 @@ class GitLabIssuesAdapter:
             async with httpx.AsyncClient(
                     timeout=60, transport=self._transport,
                     follow_redirects=False) as client:
-                resp = await fetch_following_safe_redirects(
-                    client, url, allowed_hosts=allowed,
-                    headers=self._headers(),
-                    allow_http=self._origin.startswith("http://"),
-                    pin=self._finalize_upload_url)
+                resp = await self._budget.request(   # same bucket as _req
+                    lambda: fetch_following_safe_redirects(
+                        client, url, allowed_hosts=allowed,
+                        headers=self._headers(),
+                        allow_http=self._origin.startswith("http://"),
+                        pin=self._finalize_upload_url),
+                    rate_signal, instance=self._instance,
+                    op="gitlab_issues download → ")
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitlab_issues download network: {e}") from e
         except AssetUrlError as e:

@@ -499,3 +499,94 @@ def test_branch_protection_maps_row_lookup_errors_to_none():
     finally:
         health_mod.reset_health_caches()
     assert out == {"bad": None}
+
+
+# ── ADR-0040: request budgets on /health ─────────────────────────────────────
+
+def test_health_payload_carries_pmo_budget_rows(monkeypatch):
+    from devcake.adapters import budget as pmo_budget
+    b = pmo_budget.budget_for("tracker.example", "k", system="linear",
+                              instance="a")
+    b.observe(pmo_budget.RateSignal(limit=2500, remaining=2000,
+                                    reset_at=1_700_000_000.0, window_s=3600))
+    fr = _forge_runtime(last_full_probe_at=datetime.now(timezone.utc))
+    got = _payload(fr, monkeypatch)
+    row = got["pmo_budget"][b.label]
+    assert row["limit"] == 2500 and row["remaining"] == 2000
+    assert row["instances"] == ["a"] and row["systems"] == ["linear"]
+    assert got["pmo_budget_warnings"] == {}
+
+
+def test_budget_warning_names_the_poll_interval_that_fits():
+    snap = {"tracker.example/user:u1": {
+        "limit": 2500, "instances": ["a", "b"], "foreign_spend": 0,
+        "demand_per_hour": {"a": 1500, "b": 1400}}}
+    out = health_mod._budget_warnings(snap, 15)
+    text = out["tracker.example/user:u1"]
+    assert "about 2900 requests/hour against 2500/hour" in text
+    # 15 s × 2900 / (2500 × 0.8) = 21.75 → 22 s → rounded up to a 15 s step
+    assert "at least 30 s" in text
+    assert "a, b" in text
+    # the text is stable across small demand changes (dismissal keys hash it)
+    snap["tracker.example/user:u1"]["demand_per_hour"] = {"a": 1520, "b": 1410}
+    assert health_mod._budget_warnings(snap, 15) == out
+
+
+def test_budget_warning_notes_a_foreign_consumer_and_stays_quiet_otherwise():
+    quiet = {"t/u": {"limit": 2500, "instances": ["a"], "foreign_spend": 0,
+                     "demand_per_hour": {"a": 900}}}
+    assert health_mod._budget_warnings(quiet, 30) == {}
+    shared = {"t/u": {"limit": 2500, "instances": ["a"], "foreign_spend": 600,
+                      "demand_per_hour": {"a": 900}}}
+    assert "another consumer" in health_mod._budget_warnings(shared, 30)["t/u"]
+
+
+def test_paced_probe_keeps_the_last_known_state_instead_of_going_red(monkeypatch):
+    """A probe refused by the request budget is not an outage: the row keeps
+    its last known `ok` (or unknown) with a 'deferred' detail."""
+    from devcake.ports.pmo import PMOBudgetExceeded
+    from devcake.config import PMOInstance
+
+    class Probe:
+        def __init__(self):
+            self.calls = 0
+
+        async def health_probe(self, team):
+            self.calls += 1
+            if self.calls == 1:
+                from devcake.ports.pmo import PMOHealth
+                return PMOHealth(ok=True, workspace=team)
+            raise PMOBudgetExceeded("request budget (t/u): reserved")
+
+        def capabilities(self):
+            return None
+
+    probe = Probe()
+    cfg = AppConfig(pmos=[PMOInstance(name="a", system="linear", team_key="T")])
+    managers = {"a": SimpleNamespace(pmo=probe, anomalies={}, merge_handoffs={},
+                                     needs_human={}, cycles=[], blocked_reasons={})}
+
+    async def _true(*a, **k):
+        return True
+
+    async def _ingest():
+        return {"ok": True, "detail": ""}
+    monkeypatch.setattr(health_mod, "_check_redis", _true)
+    monkeypatch.setattr(health_mod, "_check_http", _true)
+    monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
+    health_mod.reset_health_caches()
+    fr = _forge_runtime()
+
+    def build():
+        return run_coro(health_mod.build_health_payload(
+            config=cfg, dev_types={}, managers=managers, stewards={},
+            forge_runtime=fr, shared_breakers={},
+            store=SimpleNamespace(active=lambda: []), internal_forge=None,
+            poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+
+    first = build()["pmo_instances"]["a"]
+    assert first["ok"] is True
+    health_mod._pmo_probe_cache[("a", "T")]["ts"] -= 10_000   # expire the row
+    second = build()["pmo_instances"]["a"]
+    assert second["ok"] is True                     # last known state kept
+    assert second["detail"].startswith("probe deferred")

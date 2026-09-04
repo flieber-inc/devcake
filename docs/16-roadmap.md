@@ -713,6 +713,15 @@ until that run exists, field evidence below stays operator-self-reported.
   own audit action `plan_approval_gate`. **built** (transition + config +
   SPA suites green; not yet field-exercised).
 
+- **PMO request budget** (ADR-0040, 2026-09-03): one vendor-neutral
+  governor in front of every PMO adapter's wire call — vendor headers mapped
+  per adapter, one bucket per credential on a host (Linear merged by user),
+  two call classes with a reserve (critical waits and retries once after a
+  definitive rejection; routine is paced and refused, never sleeps), transient
+  finalize failures exempt from the poison threshold (3 h ceiling), `/health`
+  budget rows + advisory + admin warning, `DEVCAKE_PMO_BUDGET_OFF` rollout
+  switch. Docs 04/05/09/11/12/13/15.
+
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54
@@ -1180,7 +1189,14 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
   experimented pairing made repeatable — not a supported-matrix claim.
 - **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
   polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
-  among deferred items, independent of any harness-platform work.
+  among deferred items, independent of any harness-platform work. Polling
+  cost is now bounded by the request budget (ADR-0040), so the seam would
+  make the poll interval a latency knob; it does not remove write-back load.
+- **Forge calls through the request budget** — the forge adapters' wire
+  calls (probes, PR creation, the branch-protection sweep) still carry their
+  own transient handling; a GitHub forge and GitHub Issues on one token
+  already share a bucket by key design (ADR-0040), so routing `forge_request`
+  through the governor needs no identity change.
 - **Additional PMO adapters** beyond the four launch-supported systems
   (Linear, Gitea Issues, GitHub Issues, GitLab Issues). Height / Shortcut /
   Plane remain Linear-class candidates. Jira Cloud waits on feed fidelity.

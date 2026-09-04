@@ -39,7 +39,7 @@ from ..domain import failure_taxonomy
 from ..domain.model import LABEL_MERGE, MissionRef
 from ..domain.orchestrator import freshness
 from ..domain.run import TERMINAL_STATES
-from ..ports.pmo import PMOTransient
+from ..ports.pmo import PMOTransient, with_pmo_call
 from ..security import redact
 
 
@@ -141,6 +141,7 @@ _FORCE_REASONS = {
 }
 
 
+@with_pmo_call("critical", wait_budget_s=20)   # ADR-0040: an operator action outranks polls
 async def force_freshness(
     pmo_id: str,
     *,
@@ -200,6 +201,7 @@ async def force_freshness(
     }
 
 
+@with_pmo_call("critical", wait_budget_s=20)   # ADR-0040: an operator action outranks polls
 async def label_action(
     pmo_id: str,
     action: str,
@@ -259,6 +261,7 @@ async def label_action(
 
 # ── 2) steering / comment endpoint ──────────────────────────────────────────
 
+@with_pmo_call("critical", wait_budget_s=20)   # ADR-0040: an operator action outranks polls
 async def post_steering(
     pmo_id: str,
     body: str,
@@ -304,6 +307,7 @@ MAX_CREATE_ATTACHMENTS = 10
 _SAFE_ATTACHMENT_NAME = re.compile(r"^[\w][\w .()\[\]-]{0,119}$")
 
 
+@with_pmo_call("critical", wait_budget_s=20)   # ADR-0040: an operator action outranks polls
 async def create_mission(
     *,
     instance: str,

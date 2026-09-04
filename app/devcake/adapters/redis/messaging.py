@@ -25,6 +25,7 @@ from redis.exceptions import (ConnectionError as RedisConnectionError,
                               TimeoutError as RedisTimeoutError)
 
 from ...ports.messaging import MessagingError
+from ...ports.pmo import PMOTransient
 from ...security import MASK, register_runtime_secret, unregister_runtime_secret
 
 log = logging.getLogger("devcake.messaging")
@@ -50,6 +51,15 @@ MAX_BUFFERED_CHUNK_BYTES = 100 * 1024 * 1024
 # a generous ceiling that only rejects a malformed or hostile payload.
 MAX_CHUNK_BYTES = 2 * 1024 * 1024
 RECLAIM_INTERVAL_SECONDS = 60
+# an ingress entry is dead-lettered after this many handling failures
+# (docs/09 §4, docs/15 §5) — TRANSIENT failures (a PMO rate limit, a 5xx, a
+# network blip; `PMOTransient`) never count: the entry stays pending for
+# reclaim until it succeeds or has been transient for TRANSIENT_MAX_AGE —
+# three hours: longer than any vendor quota window, and no longer than the
+# run-timeout + stall-grace envelope a finalizing run was already allowed
+# to occupy a concurrency slot for
+POISON_DELIVERIES = 5
+TRANSIENT_MAX_AGE_SECONDS = 3 * 3600
 # buffered chunks stay pending by design (restart recovery), so deliveries
 # accumulate on slow uploads — only a group with no NEW chunk for this long
 # may be poisoned
@@ -58,6 +68,17 @@ DEAD_STREAM = "devcake:dead"
 DEAD_STREAM_MAXLEN = 1000
 
 Handler = Callable[[str, str, dict[str, Any]], Awaitable[None]]  # (run_id, kind, payload)
+
+
+def _entry_age_seconds(entry_id, *, now_ms: float | None = None) -> float | None:
+    """Age of a stream entry from its id's millisecond prefix; None when the
+    id is not the standard `<ms>-<seq>` shape."""
+    try:
+        ms = int(str(entry_id).split("-", 1)[0])
+    except (TypeError, ValueError):
+        return None
+    now_ms = time.time() * 1000.0 if now_ms is None else now_ms
+    return max(now_ms - ms, 0.0) / 1000.0
 
 
 def reply_stream(run_id: str) -> str:
@@ -374,16 +395,32 @@ class Messaging:
                     for k, v in value.items()}
         return value
 
-    async def _maybe_poison(self, entry_id, fields) -> None:
-        """After five deliveries, dead-letter and remove the whole chunk group."""
-        try:
-            pending = await self.redis.xpending_range(INGRESS, GROUP, entry_id,
-                                                      entry_id, count=1)
-            if not pending or pending[0].get("times_delivered", 0) < 5:
+    async def _maybe_poison(self, entry_id, fields, *,
+                            transient: bool = False) -> None:
+        """After POISON_DELIVERIES deliveries, dead-letter and remove the whole
+        chunk group. A TRANSIENT failure (ADR-0040: the PMO rate-limited or
+        was briefly unreachable while finalize wrote back) never counts —
+        the entry stays pending for reclaim — unless it has been failing
+        that way for TRANSIENT_MAX_AGE_SECONDS, when it is dead-lettered
+        with that reason so a permanently unreachable tracker cannot pin an
+        entry forever."""
+        reason = "poison message dead-lettered"
+        if transient:
+            age = _entry_age_seconds(entry_id)
+            if age is None or age < TRANSIENT_MAX_AGE_SECONDS:
                 return
-        except Exception:
-            log.exception("poison threshold check failed for %s", entry_id)
-            return
+            reason = (f"transient failures for {int(age // 3600)}h — "
+                      f"dead-lettered past the {TRANSIENT_MAX_AGE_SECONDS // 3600}h ceiling")
+        else:
+            try:
+                pending = await self.redis.xpending_range(
+                    INGRESS, GROUP, entry_id, entry_id, count=1)
+                if (not pending
+                        or pending[0].get("times_delivered", 0) < POISON_DELIVERIES):
+                    return
+            except Exception:
+                log.exception("poison threshold check failed for %s", entry_id)
+                return
         # best-effort parse: a malformed body must still be dead-letterable,
         # or the entry is reclaimed and redelivered forever
         try:
@@ -405,8 +442,8 @@ class Messaging:
                 span.set_attribute("devcake.run.id", str(envelope.get("run_id", "")))
                 span.set_attribute("devcake.kind", str(envelope.get("kind", "")))
                 span.set_attribute("devcake.poison.entries", len(entry_ids))
-                span.set_status(Status(StatusCode.ERROR,
-                                       "poison message dead-lettered"))
+                span.set_attribute("devcake.poison.reason", reason)
+                span.set_status(Status(StatusCode.ERROR, reason))
                 payload = envelope.get("payload")
                 await self.redis.xadd(
                     DEAD_STREAM,
@@ -421,6 +458,7 @@ class Messaging:
                         }),
                         "src": json.dumps(entry_ids),
                         "chunk_group": json.dumps(key) if key else "",
+                        "reason": reason,
                     },
                     maxlen=DEAD_STREAM_MAXLEN,
                     approximate=True,
@@ -428,7 +466,8 @@ class Messaging:
                 await self._ack_delete(entry_ids)
                 if key:
                     self._chunks.pop(key, None)
-                log.error("ingress: POISON group %s moved to %s", entry_ids, DEAD_STREAM)
+                log.error("ingress: POISON group %s moved to %s (%s)",
+                          entry_ids, DEAD_STREAM, reason)
         except Exception:
             log.exception("poison handling failed for %s", entry_id)
 
@@ -497,10 +536,20 @@ class Messaging:
                     await self._ack_delete(list(entry_ids))
                     if chunk_key:
                         self._chunks.pop(chunk_key, None)
-                except Exception:
-                    log.exception("ingress: finalize failed for %s", run_id)
+                except Exception as e:
+                    # a transient PMO/forge failure is weather, not a poison
+                    # pill: log without a traceback, leave the entry pending
+                    # for reclaim (the request budget makes the retry wait
+                    # for quota instead of failing again — ADR-0040)
+                    transient = isinstance(e, PMOTransient)
+                    if transient:
+                        log.warning("ingress: finalize for %s deferred — "
+                                    "transient: %s", run_id, e)
+                    else:
+                        log.exception("ingress: finalize failed for %s", run_id)
                     with contextlib.suppress(Exception):
-                        await self._maybe_poison(entry_ids[-1], fields)
+                        await self._maybe_poison(entry_ids[-1], fields,
+                                                 transient=transient)
                 finally:
                     self._inflight_entries.difference_update(entry_ids)
                     if self._finalize_tasks.get(run_id) is task:

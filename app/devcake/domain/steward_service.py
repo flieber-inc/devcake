@@ -13,6 +13,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ..config import AppConfig, DevType, intake_blocks_dispatch
+from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from ..harness import missing_referenced_secret_env
 from .model import Mission
 from .run import Run
@@ -176,7 +177,13 @@ class StewardService:
             group = [s for s in sources if s.pmo_id in fam.by_id]
             pending: dict[str, list[tuple[int, int]]] = {}
             for s in group:
-                state = await discovery.scan_source(mgr, s)
+                try:
+                    state = await discovery.scan_source(mgr, s)
+                except PMOTransient as e:
+                    # rate limit / thin budget: keep the pending ids, the
+                    # sweep re-drives next cycle — never abort the segment
+                    log.warning("discovery lane deferred for %s: %s", s.key, e)
+                    return
                 if state.truncated:
                     # ceiling case — the sweep raises it to the humans and
                     # retires the gate; holding the id here would re-fetch
@@ -297,10 +304,13 @@ class StewardService:
         fire-and-forget one discovery pass with a fresh board fetch. Errors
         are swallowed — the poll-cycle sweep is the durable retry path."""
         async def _once():
+            # the task inherits the harvest's CRITICAL finalize context;
+            # this board read is enumeration → routine (ADR-0040)
             try:
-                missions = await self.mgr.pmo.list_all(
-                    self.mgr.instance.team_key)
-                await self.maybe_dispatch_discovery(missions)
+                with pmo_call("routine"):
+                    missions = await self.mgr.pmo.list_all(
+                        self.mgr.instance.team_key)
+                    await self.maybe_dispatch_discovery(missions)
             except Exception:  # noqa: BLE001 — best-effort by design
                 log.debug("discovery kick failed — the sweep re-drives",
                           exc_info=True)
@@ -309,6 +319,7 @@ class StewardService:
         except RuntimeError:  # no running loop (sync test contexts)
             log.debug("discovery kick without a running loop — skipped")
 
+    @with_pmo_call("critical", wait_budget_s=20)   # an operator's button outranks polls (ADR-0040)
     async def run_now(self) -> Run:
         """Manual trigger: works regardless of the periodic toggle and of the
         degraded state — a human pressing the button IS the reset signal.

@@ -416,6 +416,11 @@ def test_download_asset_maps_http_status_to_domain_errors():
     def handler_4xx(req: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="forbidden")
 
+    # the 429 above blocked this credential's request budget (ADR-0040 —
+    # every adapter on one token shares the bucket); start the permanent
+    # case from a clean registry so the 403 reaches the vendor
+    from devcake.adapters import budget as pmo_budget
+    pmo_budget.reset()
     pmo = GitLabIssuesAdapter(
         "https://gitlab.com", "tok", "o/r",
         transport=httpx.MockTransport(handler_4xx))

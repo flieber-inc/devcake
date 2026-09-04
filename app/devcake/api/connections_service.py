@@ -17,7 +17,7 @@ from .. import secrets as secrets_store
 from ..config import HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE
 from ..harness import HARNESSES
 from ..ports.forge import ForgeError, mission_branch
-from ..ports.pmo import PMOTransient
+from ..ports.pmo import PMOTransient, with_pmo_call
 from ..security import redact
 from .health import reset_health_caches
 
@@ -530,6 +530,7 @@ def _probe_client_error(e: Exception) -> str:
     return "connection probe failed — see app logs for details"
 
 
+@with_pmo_call("critical", wait_budget_s=20)   # ADR-0040: an operator's test outranks polls
 async def test_pmo(name: str, *, config, managers):
     inst = next((i for i in config.pmos if i.name == name), None)
     if inst is None:

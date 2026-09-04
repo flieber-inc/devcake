@@ -35,6 +35,7 @@ from ..adapters.claims_writer import make_claims_writer
 from ..adapters.dagu import DaguExecutor
 from ..adapters.files import CronStore, RunLogStore, RunStore
 from ..adapters.redis import Messaging, redis_connect_env
+from ..adapters import budget as pmo_budget
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import security
 from ..config import AppConfig, DevType, load_config, load_dev_types
@@ -129,7 +130,9 @@ class Services:
         for name in [n for n in self.managers if n not in live]:
             self.managers.pop(name)
             self.stewards.pop(name, None)
+            pmo_budget.detach(name)      # ADR-0040: no ghost bucket on /health
         for name, inst in live.items():
+            pmo_budget.detach(name)      # the new adapter re-attaches below
             p = make_pmo(inst)
             if name in self.managers:
                 mgr = self.managers[name]

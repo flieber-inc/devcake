@@ -418,3 +418,58 @@ def test_invalid_last_fire_at_is_treated_as_due():
     run_coro(svc.maybe_fire())
     assert len(pmo.created) == 1
     assert pmo.created[0][0].startswith("[cron:nightly]")
+
+
+def test_maybe_fire_transient_pmo_failure_leaves_the_window_open():
+    """ADR-0040: a scheduled ticket launches work, so the fire runs as a
+    critical PMO call; when the tracker is rate-limited or the budget thin,
+    the window is NOT consumed and nothing counts toward degradation — the
+    next cycle simply tries again."""
+    from devcake.ports.pmo import PMOTransient, pmo_call_ctx
+
+    class RateLimitedPMO(FakePMO):
+        def __init__(self):
+            super().__init__()
+            self.classes: list[str] = []
+            self.limited = True
+
+        async def create_mission(self, *a, **kw):
+            self.classes.append(pmo_call_ctx.get().call_class)
+            if self.limited:
+                raise PMOTransient("rate limited by tracker.example/user:u1",
+                                   retry_after=3)
+            return await super().create_mission(*a, **kw)
+
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = RateLimitedPMO()
+    cfg = _cfg(inst, crons=[
+        memory_curator_seed(),
+        CronJob(id="nightly", name="N", entry_stage="EXECUTE",
+                description_template="x", pmo="eng", enabled=True,
+                interval_minutes=1),
+    ])
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)}, store=_PortLedger())
+    run_coro(svc.maybe_fire())
+    assert pmo.classes == ["critical"]
+    assert svc.store.last_fire_at("nightly") is None      # window still open
+    assert "nightly" not in svc.degraded
+    pmo.limited = False
+    run_coro(svc.maybe_fire())                             # next cycle succeeds
+    assert [t[0] for t in pmo.created][0].startswith("[cron:nightly]")
+    assert svc.store.last_fire_at("nightly") is not None
+
+
+def test_run_now_transient_maps_to_502_not_500():
+    """Operator Run now while the tracker is rate-limited or the request
+    budget thin: the route answers 502 like the mission actions do."""
+    from fastapi import HTTPException
+    from devcake.api.cron_service import run_cron
+    from devcake.ports.pmo import PMOBudgetExceeded
+
+    class Cron:
+        async def fire(self, job_id, *, automatic):
+            raise PMOBudgetExceeded("request budget (t/u): reserved", retry_after=9)
+
+    with pytest.raises(HTTPException) as ei:
+        run_coro(run_cron("nightly", cron=Cron()))
+    assert ei.value.status_code == 502

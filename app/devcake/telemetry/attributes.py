@@ -55,6 +55,13 @@ ATTRIBUTES: frozenset[str] = frozenset({
     "devcake.audit.detail",
     "devcake.breaker",
     "devcake.poison.entries",
+    "devcake.poison.reason",
+    # PMO request budget (ADR-0040)
+    "devcake.pmo.call_class",
+    "devcake.pmo.wait_s",
+    "devcake.pmo.remaining",
+    "devcake.pmo.reason",
+    "devcake.pmo.budget_refused",
     # Steward / discoveries
     "devcake.steward.duty",
     "devcake.steward.edges_created",

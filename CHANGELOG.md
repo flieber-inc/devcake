@@ -16,37 +16,34 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
-- **Added — PMO request budget** (ADR-0040). Every issue-tracker adapter's
-  wire call now runs through one vendor-neutral governor that reads the
-  tracker's quota headers (Linear requests + complexity per user, GitHub,
-  GitLab; Gitea after a proxy rejection), keeps a reserve for write-back
-  work, paces the poll's reads instead of hammering the vendor, waits and
-  retries once for finalize/dispatch after a definitive rejection, and never
-  dead-letters a finalize for a rate limit. `/health` gains `pmo_budget` and
-  `pmo_budget_warnings` (an advisory naming the poll interval that fits),
-  the admin a dismissable warning. `DEVCAKE_PMO_BUDGET_OFF=1` keeps it
-  observe-only for a first hour on a host.
+## v0.5.4 (2026-09-04)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.4).
+`devcake-cli` 0.1.2 ships with it (`devcake status` prints the request
+budgets).
+
 - **Added — a loud alarm when a tracker rejects requests, and the request
-  number where an interested person looks.** Every request budget keeps a
-  rolling one-hour count of the tracker's own rejections; the health payload
-  derives `pmo_rate_limited` from it and the admin shows a critical,
+  number where an interested person looks** (#392). Every request budget
+  keeps a rolling one-hour count of the tracker's own rejections; the health
+  payload derives `pmo_rate_limited` from it and the admin shows a critical,
   non-dismissable alert that clears itself an hour after the last rejection
   (a self-throttle stays the existing dismissable warning). Each PMO card
   shows a one-line readout of the connection's measured requests per hour
   against the credential's limit, with remaining, refill time and rejections
   on hover, and `devcake status` prints the same rows on the host.
 - **Changed — a resume is visible to the Dev, and environment findings are
-  no longer routed.** When a mission's most recent run was a hand-off, the
-  next run's brief opens with a pointer and its activity mirror with a
-  banner naming the ask, the fact that a person released the hold, and how
-  many human comments that run never saw; the playbooks state that a
-  release without a comment answers the ask.
-  Devs are told that limitations of their own run are not discoveries, the
-  steward declines such findings, and every delivered finding carries a
-  fingerprint so the same finding is never delivered twice to a recipient.
+  no longer routed** (#391). When a mission's most recent run was a
+  hand-off, the next run's brief opens with a pointer and its activity
+  mirror with a banner naming the ask, the fact that a person released the
+  hold, and how many human comments that run never saw; the playbooks state
+  that a release without a comment answers the ask. Devs are told that
+  limitations of their own run are not discoveries, the steward declines
+  such findings, and every delivered finding carries a fingerprint so the
+  same finding is never delivered twice to a recipient.
 - **Fixed — a cross-repository decomposition routed every child to the
-  default repository.** The triage playbook asked for a backticked routing
-  marker in each child's description, and the decomposition step's
+  default repository** (#390). The triage playbook asked for a backticked
+  routing marker in each child's description, and the decomposition step's
   marker-neutralizer (which stops Dev prose from smuggling live markers)
   stripped exactly that, so the children landed on the board's first
   repository and their first run latched it. A child's repository is now a
@@ -55,7 +52,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   itself; a read-only ONBOARD run no longer latches the repository choice
   (a marker or default edit after an unmarked triage now takes effect at
   the first post-triage step).
-- **Changed — the poll spends less per cycle** (ADR-0003 amendment,
+- **Changed — the poll spends less per cycle** (#389; ADR-0003 amendment,
   ADR-0033 addendum). The cycle's board fetch is a snapshot that the
   tracking sweep, the dispatch-time ancestor offer and scheduled-task
   in-flight checks reuse instead of re-reading the tracker; a tracking
@@ -66,6 +63,17 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   the scan. Linear's project-label registry is cached per
   adapter. `/health` gains `pmo_demand` (what each cycle read and what the
   memo saved).
+- **Added — PMO request budget** (#388; ADR-0040). Every issue-tracker
+  adapter's wire call now runs through one vendor-neutral governor that
+  reads the tracker's quota headers (Linear requests + complexity per user,
+  GitHub, GitLab; Gitea after a proxy rejection), keeps a reserve for
+  write-back work, paces the poll's reads instead of hammering the vendor,
+  waits and retries once for finalize/dispatch after a definitive
+  rejection, and never dead-letters a finalize for a rate limit. `/health`
+  gains `pmo_budget` and `pmo_budget_warnings` (an advisory naming the poll
+  interval that fits), the admin a dismissable warning.
+  `DEVCAKE_PMO_BUDGET_OFF=1` keeps it observe-only for a first hour on a
+  host.
 
 ## v0.5.3 (2026-09-02)
 

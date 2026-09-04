@@ -20,7 +20,6 @@ from pathlib import Path
 from ..model import MissionRef
 from . import board
 from .feed import coalesced_step_files, is_devcake_comment, unquoted
-from . import board
 from .markers import decomposition_parent_ref, discovery_in_keys
 
 log = logging.getLogger("devcake.missions")

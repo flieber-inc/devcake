@@ -315,12 +315,16 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     cap = _comment_max_chars(mgr)
     parts = (split_vendor_comments(markdown, cap) if cap is not None
              else [markdown.rstrip()])
-    for part in parts:
-        # Cut-newlines stay: join_vendor_comments is concatenation.
-        await mgr.pmo.post_feed(
-            MissionRef(pmo_id, "issue"),
-            part + "\n\n" + COMMENT_SENTINEL)
-    feed_written(mgr, pmo_id)
+    try:
+        for part in parts:
+            # Cut-newlines stay: join_vendor_comments is concatenation.
+            await mgr.pmo.post_feed(
+                MissionRef(pmo_id, "issue"),
+                part + "\n\n" + COMMENT_SENTINEL)
+    finally:
+        # even a post the client saw fail may have landed on the vendor:
+        # invalidating after a failure is always safe, keeping is not
+        feed_written(mgr, pmo_id)
 
 
 def feed_written(mgr, pmo_id: str) -> None:

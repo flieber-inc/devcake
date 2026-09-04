@@ -265,6 +265,26 @@ async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
     return out
 
 
+def _gone_batches(mgr, m, pending) -> list[tuple[int, int]]:
+    """Pending batches whose source run record is gone. A record that
+    exists but is not terminal is IN FLIGHT (finalize has posted the marker
+    and is still closing, or a watchdog has yet to rule): hold it this
+    cycle — the pending id is kept and the label stays. "Gone" is reserved
+    for an absent record or a terminal one without a usable result
+    (clear-runs, a failed close). Closing an in-flight batch with to=- is
+    permanent: receipts are board arithmetic and nothing reopens them once
+    the result lands."""
+    rows = mgr.runs.store.all()
+    run_ix = harvest_run_index(mgr, rows)
+    inflight = {(r.mission_pmo_id, r.seq) for r in rows
+                if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)
+                and r.state not in TERMINAL_STATES}
+    return [(step, n) for step, n in pending
+            if (m.pmo_id, step) not in inflight
+            and ((m.pmo_id, step) not in run_ix
+                 or not valid_entries(run_ix[(m.pmo_id, step)].result))]
+
+
 async def discovery_sweep(mgr, m) -> None:
     """The per-mission sweep arm (called from sweeps() for every issue; the
     label gate lives HERE so sweeps.py never reads the label — the guard
@@ -312,6 +332,14 @@ async def discovery_sweep(mgr, m) -> None:
     if not state.posted:
         return   # label without markers (human relabel) — humans own labels
     pending = state.pending
+    if not pending or _gone_batches(mgr, m, pending):
+        # about to WRITE (drop the label, or close batches with to=-) on
+        # the strength of a possibly memoized scan: confirm live first —
+        # one extra read only in the cycles that act (ADR-0033 addendum)
+        state = await scan_source(mgr, m, memo=False)
+        if state.truncated or not state.posted:
+            return   # the next sweep takes the fresh path
+        pending = state.pending
     if not pending:
         try:     # fully receipted — self-heal the gate off
             await mgr.pmo.swap_labels(MissionRef(m.pmo_id, "issue"),
@@ -320,22 +348,7 @@ async def discovery_sweep(mgr, m) -> None:
             mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
         mgr._discoveries_pending.discard(m.pmo_id)
         return
-    rows = mgr.runs.store.all()
-    run_ix = harvest_run_index(mgr, rows)
-    # A record that exists but is not terminal is IN FLIGHT (finalize has
-    # posted the marker and is still closing, or a watchdog has yet to
-    # rule): hold it this cycle — the pending id is kept and the label
-    # stays. "Gone" is reserved for an absent record or a terminal one
-    # without a usable result (clear-runs, a failed close). Closing an
-    # in-flight batch with to=- is permanent: receipts are board arithmetic
-    # and nothing reopens them once the result lands.
-    inflight = {(r.mission_pmo_id, r.seq) for r in rows
-                if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)
-                and r.state not in TERMINAL_STATES}
-    gone = [(step, n) for step, n in pending
-            if (m.pmo_id, step) not in inflight
-            and ((m.pmo_id, step) not in run_ix
-                 or not valid_entries(run_ix[(m.pmo_id, step)].result))]
+    gone = _gone_batches(mgr, m, pending)
     if gone:
         lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
                  for s, _n in sorted(gone)]

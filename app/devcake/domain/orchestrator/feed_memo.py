@@ -73,6 +73,15 @@ class FeedScanMemo:
         self._entries[(kind, mission.pmo_id)] = _Entry(
             value, getattr(mission, "updated_at", None), self._clock(), gen)
 
+    def retain(self, pmo_ids) -> None:
+        """Evict everything not in the cycle's mission set (terminal or
+        vanished missions never accumulate)."""
+        keep = set(pmo_ids)
+        for key in [k for k in self._entries if k[1] not in keep]:
+            self._entries.pop(key, None)
+        for pmo_id in [p for p in self._gen if p not in keep]:
+            self._gen.pop(pmo_id, None)
+
     def clear(self) -> None:
         self._entries.clear()
         self._gen.clear()

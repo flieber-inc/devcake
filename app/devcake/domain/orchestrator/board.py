@@ -40,6 +40,14 @@ class BoardSnapshot:
         return (now or utcnow()) - self.fetched_at
 
 
+def retire_snapshot(mgr: Any) -> None:
+    """An own write changed the board mid-cycle (a ticket created): the
+    snapshot no longer describes it. The next enumeration pays one live
+    read — never reuse a snapshot across an own create."""
+    if getattr(mgr, "snapshot", None) is not None:
+        mgr.snapshot = None
+
+
 def bump(mgr: Any, key: str) -> None:
     """Per-cycle demand counter (reset by `poll_instance`; surfaced on
     /health `pmo_demand` and the `poll.instance` span)."""

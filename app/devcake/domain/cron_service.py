@@ -17,7 +17,7 @@ from ..ports.cron import CronStore
 from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from . import claims as claims_mod
 from .model import LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW
-from .orchestrator.board import board_missions
+from .orchestrator.board import board_missions, retire_snapshot
 
 if TYPE_CHECKING:
     from .orchestrator import MissionManager
@@ -270,5 +270,6 @@ class CronService:
         await mgr.pmo.ensure_labels(mgr.instance.team_key, labels)
         key, pmo_id = await mgr.pmo.create_mission(
             mgr.instance.team_key, title, body, "medium", labels)
+        retire_snapshot(mgr)   # the board changed: single-flight must see it
         log.info("cron %s created %s on %s", row.id, key, mgr.instance_name)
         return {"pmo": mgr.instance_name, "key": key, "pmo_id": pmo_id}

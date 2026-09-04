@@ -12,12 +12,14 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from devcake.domain.model import Mission
+from devcake.domain.model import LABEL_DISCOVERY, Mission
 from devcake.domain.orchestrator import discovery, sweeps
+from devcake.domain.orchestrator.markers import MERGE_RETRY_MARKER
 from devcake.domain.orchestrator.board import BoardSnapshot, board_missions
 from devcake.domain.orchestrator.feed import feed_written
 from devcake.domain.orchestrator.feed_memo import FeedScanMemo
-from test_transitions import make_mgr, mission, run_coro
+from test_freshness_gate import SENTINEL, _entry
+from test_transitions import FakeForge, make_mgr, mission, run_coro
 
 
 def now():
@@ -237,3 +239,105 @@ def test_project_label_registry_is_cached_and_invalidated():
     pmo._invalidate_team_cache()
     run(pmo._all_project_labels())
     assert len(walks) == 3                                  # invalidated
+
+
+# ── review round: writes confirm live, failed posts invalidate, eviction ──────
+
+def _sweep_mgr(memo_state, live_state, monkeypatch):
+    calls = []
+
+    async def fake_scan(mgr, m, *, memo=True):
+        calls.append(memo)
+        return memo_state if memo else live_state
+    monkeypatch.setattr(discovery, "scan_source", fake_scan)
+    swaps = []
+
+    class PMO:
+        async def swap_labels(self, ref, remove, add):
+            swaps.append(set(remove))
+    mgr = SimpleNamespace(
+        instance=SimpleNamespace(discovery_routing=True), pmo=PMO(),
+        _discoveries_pending=set(), feed_memo=FeedScanMemo(), cycle_stats={},
+        runs=SimpleNamespace(store=SimpleNamespace(all=lambda: [])),
+        _run_is_ours=lambda r: True, _audit=lambda *a, **k: None)
+    return mgr, calls, swaps
+
+
+def test_discovery_sweep_confirms_live_before_dropping_the_label(monkeypatch):
+    """A memoized scan may say 'fully receipted'; the label is dropped only
+    after a live scan agrees — here the live scan is truncated, so nothing
+    is written and the next sweep takes the fresh path."""
+    memo_state = discovery.SourceState(posted=[(1, 2)], receipted={(1, "x")})
+    live_state = discovery.SourceState(posted=[(1, 2)], receipted=set(), truncated=True)
+    mgr, calls, swaps = _sweep_mgr(memo_state, live_state, monkeypatch)
+    m = issue("s1")
+    m.labels = {"DEVCAKE", LABEL_DISCOVERY}
+    run_coro(discovery.discovery_sweep(mgr, m))
+    assert calls == [True, False] and swaps == []
+
+
+def test_discovery_sweep_writes_when_the_live_scan_agrees(monkeypatch):
+    state = discovery.SourceState(posted=[(1, 2)], receipted={(1, "x")})
+    mgr, calls, swaps = _sweep_mgr(state, state, monkeypatch)
+    m = issue("s1")
+    m.labels = {"DEVCAKE", LABEL_DISCOVERY}
+    run_coro(discovery.discovery_sweep(mgr, m))
+    assert calls == [True, False] and swaps == [{LABEL_DISCOVERY}]
+
+
+def test_discovery_sweep_reads_once_while_batches_are_pending_in_flight(monkeypatch):
+    """No write imminent (a pending batch whose run is in flight): the
+    memoized scan is enough — one read, no live confirm."""
+    state = discovery.SourceState(posted=[(1, 2)], receipted=set())
+    mgr, calls, swaps = _sweep_mgr(state, state, monkeypatch)
+    run = SimpleNamespace(mission_pmo_id="s1", seq=1, mission_type="EXECUTE",
+                          state="running", result=None)
+    mgr.runs = SimpleNamespace(store=SimpleNamespace(all=lambda: [run]))
+    monkeypatch.setattr(discovery, "HARVEST_TYPES", {"EXECUTE"})
+    m = issue("s1")
+    m.labels = {"DEVCAKE", LABEL_DISCOVERY}
+    run_coro(discovery.discovery_sweep(mgr, m))
+    assert calls == [True] and swaps == [] and "s1" in mgr._discoveries_pending
+
+
+def test_a_failed_post_still_invalidates_the_memo(tmp_path):
+    m = mission()
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    mgr.feed_memo.put("discovery", m, "scan", mgr.feed_memo.generation(m.pmo_id))
+
+    async def boom(ref, markdown):
+        raise RuntimeError("read timeout after the vendor applied it")
+    fake.post_feed = boom
+    with pytest.raises(RuntimeError):
+        run_coro(mgr._feed(m.pmo_id, "issue", "hello"))
+    assert mgr.feed_memo.get("discovery", m) is None
+
+
+def test_memo_retain_evicts_missions_that_left_the_board():
+    memo = FeedScanMemo()
+    a, b = issue("a"), issue("b")
+    memo.put("discovery", a, "sa", memo.generation("a"))
+    memo.put("discovery", b, "sb", memo.generation("b"))
+    memo.forget("b")
+    memo.retain({"a"})
+    assert memo.get("discovery", a) == "sa" and len(memo) == 1
+    assert memo.generation("b") == 0
+
+
+def test_merge_driver_memoizes_the_stamps_until_our_own_write(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    m.repo = "main"
+    mgr, fake, _ = make_mgr(tmp_path, m, forge=FakeForge(mergeable_result=None))
+    inst = mgr.forges.instance("main")
+    inst.auto_merge = True
+    inst.merge_retry_window_minutes = 30
+    fake.activity_entries = [_entry(
+        "r1", f"retrying {MERGE_RETRY_MARKER}\n\n" + SENTINEL,
+        author="devcake", ts=now() - timedelta(minutes=5))]
+    run_coro(sweeps.merge_sweep(mgr, m))
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert fake.get_activity_calls == 1
+    assert mgr.cycle_stats["feed_scan_memo_hits"] == 1
+    run_coro(mgr._feed(m.pmo_id, "issue", "our own comment"))
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert fake.get_activity_calls == 2

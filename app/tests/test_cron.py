@@ -473,3 +473,30 @@ def test_run_now_transient_maps_to_502_not_500():
     with pytest.raises(HTTPException) as ei:
         run_coro(run_cron("nightly", cron=Cron()))
     assert ei.value.status_code == 502
+
+
+def test_single_flight_sees_a_ticket_created_in_the_same_cycle():
+    """The cycle snapshot serves the in-flight scan; a ticket the fire just
+    created retires it, so a second fire in the same cycle is refused."""
+    from datetime import datetime, timezone
+    from devcake.domain.orchestrator.board import BoardSnapshot
+
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _cfg(inst, crons=[
+        memory_curator_seed(),
+        CronJob(id="nightly", name="N", entry_stage="EXECUTE",
+                description_template="x", pmo="eng", enabled=True,
+                interval_minutes=1),
+    ])
+    mgr = _mgr("eng", pmo, inst)
+    mgr.config = cfg
+    mgr.snapshot = BoardSnapshot(tuple(pmo.missions), 1,
+                                 datetime.now(timezone.utc))
+    mgr.cycle_stats = {}
+    svc = CronService(cfg, {"eng": mgr}, store=_PortLedger())
+    run_coro(svc.fire("nightly", automatic=False))
+    assert mgr.snapshot is None                       # own create retired it
+    with pytest.raises(CronBusy):
+        run_coro(svc.fire("nightly", automatic=False))
+    assert len(pmo.created) == 1

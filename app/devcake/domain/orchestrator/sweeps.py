@@ -49,6 +49,9 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     # this set) only once it actually reached the deferred-retry driver for it;
     # a repo stays armed while any of its parked missions is still unsatisfied.
     mgr._rearm_satisfied = set()
+    memo = getattr(mgr, "feed_memo", None)
+    if memo is not None:
+        memo.retain(m.pmo_id for m in missions)
     # sequential by design; a per-mission await may include an adapter's
     # short transient-retry sleeps (≤ ~6 s, docs/06 §5) — expected, not a
     # hang, and non-blocking for the event loop

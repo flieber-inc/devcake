@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import re
 from pathlib import Path
 
@@ -168,6 +169,27 @@ def discovery_receipts(unquoted_text: str) -> set[tuple[int, str]]:
 DISCOVERY_IN_MARKER_RE = re.compile(
     r"`devcake:discovery-in:v1 src=(\S+) step=(\d+)`")
 DISCOVERY_IN_EXCERPT_MAX = 700
+
+
+# Per-finding content fingerprint on every delivery (ADR-0033 addendum):
+# the pair dedup above bounds re-delivery of the SAME source batch; this
+# bounds the same FINDING arriving from several sources — the field showed
+# one environment limitation rediscovered by sibling after sibling and
+# routed to dozens of recipients each time.
+FINDING_MARKER_RE = re.compile(r"`devcake:finding:v1 sha=([0-9a-f]{12})`")
+
+
+def finding_fingerprint(entry: dict) -> str:
+    """Stable fingerprint of a finding's substance: the `finding` text,
+    case-folded, every run of non-alphanumerics (any script) collapsed to
+    one space; SHA-256, twelve hex."""
+    text = str(entry.get("finding") or "").casefold()
+    text = re.sub(r"[\W_]+", " ", text).strip()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def finding_fingerprints(unquoted_text: str) -> set[str]:
+    return set(FINDING_MARKER_RE.findall(unquoted_text))
 
 
 def discovery_in_keys(unquoted_text: str) -> set[tuple[str, int]]:

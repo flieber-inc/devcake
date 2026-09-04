@@ -62,7 +62,7 @@ def _is_material(body: str | None) -> bool:
     return any(rx.search(text) for rx in ELEVATED_MARKERS)
 
 
-def _entries_after_watermark(entries, run: Run) -> list:
+def entries_after_watermark(entries, run: Run) -> list:
     """Entries the run's context did not include. Watermark id present and
     found ⇒ everything after it (entries arrive ascending from both
     adapters). Id present but MISSING (a human deleted the watermark
@@ -116,7 +116,7 @@ async def _unread_material(mgr, run: Run) -> tuple[list, int]:
     count = max(hits) if hits else 0
     if act.truncated:
         return [_TRUNCATED], count
-    new = _entries_after_watermark(act.entries, run)
+    new = entries_after_watermark(act.entries, run)
     return [e for e in new if _is_material(e.body)], count
 
 

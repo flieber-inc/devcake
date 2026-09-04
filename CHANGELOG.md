@@ -32,8 +32,9 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   in-flight checks reuse instead of re-reading the tracker; a tracking
   project's children are read live only when the snapshot shows completion
   is possible. Labeled feeds (discovery routing, merge driving) are
-  re-scanned only when the mission changed, DevCake wrote to the feed, or
-  five minutes passed. Linear's project-label registry is cached per
+  re-scanned only when the mission changed, DevCake wrote to the feed,
+  five minutes passed, or a write is about to be made on the strength of
+  the scan. Linear's project-label registry is cached per
   adapter. `/health` gains `pmo_demand` (what each cycle read and what the
   memo saved).
 

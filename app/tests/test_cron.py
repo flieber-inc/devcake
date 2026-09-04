@@ -500,3 +500,49 @@ def test_single_flight_sees_a_ticket_created_in_the_same_cycle():
     with pytest.raises(CronBusy):
         run_coro(svc.fire("nightly", automatic=False))
     assert len(pmo.created) == 1
+
+
+def test_in_flight_snapshot_answers_free_but_confirms_busy_live():
+    """A stale 'busy' would consume the whole interval window: the snapshot
+    may say free on its own, but busy is confirmed with a live read."""
+    from datetime import datetime, timezone
+    from devcake.domain.orchestrator.board import BoardSnapshot
+
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _cfg(inst, crons=[
+        memory_curator_seed(),
+        CronJob(id="nightly", name="N", entry_stage="EXECUTE",
+                description_template="x", pmo="eng", enabled=True,
+                interval_minutes=1),
+    ])
+    reads = []
+    real = pmo.list_all
+
+    async def counting(team):
+        reads.append(team)
+        return await real(team)
+    pmo.list_all = counting
+    mgr = _mgr("eng", pmo, inst)
+    mgr.config = cfg
+    mgr.cycle_stats = {}
+    svc = CronService(cfg, {"eng": mgr}, store=_PortLedger())
+
+    # snapshot says nothing is in flight → answered without a vendor read
+    mgr.snapshot = BoardSnapshot((), 1, datetime.now(timezone.utc))
+    assert run_coro(svc._in_flight(mgr, "nightly")) is False
+    assert reads == []
+
+    # a ticket exists; the snapshot still shows it open but the sweep
+    # completed it this cycle → live read says done → not busy
+    run_coro(svc.fire("nightly", automatic=False))
+    stale = [m.model_copy(update={"status": "in_progress"}) for m in pmo.missions]
+    pmo.missions[0].status = "done"
+    mgr.snapshot = BoardSnapshot(tuple(stale), 2, datetime.now(timezone.utc))
+    reads.clear()
+    assert run_coro(svc._in_flight(mgr, "nightly")) is False
+    assert reads == ["T"]
+
+    # still open live → busy
+    pmo.missions[0].status = "in_progress"
+    assert run_coro(svc._in_flight(mgr, "nightly")) is True

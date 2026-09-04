@@ -17,7 +17,7 @@ from ..ports.cron import CronStore
 from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from . import claims as claims_mod
 from .model import LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW
-from .orchestrator.board import board_missions, retire_snapshot
+from .orchestrator.board import retire_snapshot
 
 if TYPE_CHECKING:
     from .orchestrator import MissionManager
@@ -40,6 +40,16 @@ def defang_template(text: str) -> str:
     """Templates must not smuggle backticks that would break the marker."""
     return (text or "").replace("`", "'")
 
+
+
+def _cron_ticket_open(missions, job_id: str) -> bool:
+    marker = cron_marker(job_id)
+    for m in missions:
+        if m.status in ("done", "canceled"):
+            continue
+        if marker in (getattr(m, "description", "") or ""):
+            return True
+    return False
 
 class CronBusy(Exception):
     """An in-flight cron ticket already exists for this job (/ board)."""
@@ -235,23 +245,25 @@ class CronService:
         return await claims_mod.refresh_depth(self.claims, card)
 
     async def _in_flight(self, mgr, job_id: str) -> bool:
-        """A previous cron-created ticket for this job still non-terminal."""
+        """A previous cron-created ticket for this job still non-terminal.
+
+        Enumeration (ADR-0003 amendment): the fire follows the poll segment,
+        so the cycle's snapshot answers "nothing in flight" directly. A BUSY
+        answer from the snapshot is confirmed live: the sweeps' completions
+        earlier in the cycle (and any finalize in between) are not on the
+        snapshot, and a stale "busy" would consume the whole interval
+        window, not one cycle."""
+        max_age = timedelta(seconds=self.config.poll_interval_seconds)
         try:
-            # enumeration (ADR-0003 amendment): the fire follows the poll
-            # segment, so the cycle's snapshot is fresh
-            missions = await board_missions(
-                mgr, max_age=timedelta(seconds=self.config.poll_interval_seconds))
+            snap = getattr(mgr, "snapshot", None)
+            if snap is not None and snap.age() <= max_age:
+                if not _cron_ticket_open(snap.missions, job_id):
+                    return False
+            missions = await mgr.pmo.list_all(mgr.instance.team_key)
         except Exception:  # noqa: BLE001 — treat unread as not in-flight
             log.exception("cron in-flight scan failed on %s", mgr.instance_name)
             return False
-        marker = cron_marker(job_id)
-        for m in missions:
-            if m.status in ("done", "canceled"):
-                continue
-            body = getattr(m, "description", "") or ""
-            if marker in body:
-                return True
-        return False
+        return _cron_ticket_open(missions, job_id)
 
     async def _create_ticket(self, mgr, row: CronJob, *,
                              force_stage: str | None = None) -> dict:

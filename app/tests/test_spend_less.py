@@ -318,10 +318,13 @@ def test_memo_retain_evicts_missions_that_left_the_board():
     a, b = issue("a"), issue("b")
     memo.put("discovery", a, "sa", memo.generation("a"))
     memo.put("discovery", b, "sb", memo.generation("b"))
+    gen_b = memo.generation("b")
     memo.forget("b")
     memo.retain({"a"})
     assert memo.get("discovery", a) == "sa" and len(memo) == 1
-    assert memo.generation("b") == 0
+    assert memo.generation("b") == gen_b + 1       # generations survive eviction
+    memo.put("discovery", b, "stale", gen_b)         # a scan from before the write
+    assert memo.get("discovery", b) is None
 
 
 def test_merge_driver_memoizes_the_stamps_until_our_own_write(tmp_path):
@@ -341,3 +344,36 @@ def test_merge_driver_memoizes_the_stamps_until_our_own_write(tmp_path):
     run_coro(mgr._feed(m.pmo_id, "issue", "our own comment"))
     run_coro(sweeps.merge_sweep(mgr, m))
     assert fake.get_activity_calls == 2
+
+
+def test_ensure_labels_heals_a_project_label_deleted_inside_the_cache_window():
+    from devcake.adapters.linear.adapter import LinearAdapter
+    state = {"present": True}
+    creates = []
+
+    def handler(req):
+        body = req.read().decode()
+        if "projectLabels(" in body:
+            nodes = [{"id": "L1", "name": "DEVCAKE"}] if state["present"] else []
+            return httpx.Response(200, json={"data": {"projectLabels": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": nodes}}})
+        if "projectLabelCreate" in body:
+            creates.append(body)
+            return httpx.Response(200, json={"data": {"projectLabelCreate": {"success": True}}})
+        if "teams(" in body:
+            return httpx.Response(200, json={"data": {"viewer": {"id": "u"}, "teams": {
+                "nodes": [{"id": "t1", "key": "T", "states": {"nodes": []}}]}}})
+        if "labels(first: 100" in body:
+            return httpx.Response(200, json={"data": {"team": {"labels": {
+                "nodes": [{"id": "I1", "name": "DEVCAKE"}],
+                "pageInfo": {"hasNextPage": False, "endCursor": None}}}}})
+        return httpx.Response(200, json={"data": {}})
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(handler))
+
+    def run(c):
+        return asyncio.new_event_loop().run_until_complete(c)
+    run(pmo._all_project_labels())                  # warm the cache
+    state["present"] = False                        # deleted on the vendor
+    run(pmo.ensure_labels("T", {"DEVCAKE"}))
+    assert len(creates) == 1                        # healed, cache not trusted

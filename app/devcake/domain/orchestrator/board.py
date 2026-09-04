@@ -23,8 +23,10 @@ from ..run import utcnow
 @dataclass(frozen=True)
 class BoardSnapshot:
     """The FULL fetched set of one instance's team (terminal included), as
-    `poll_instance` saw it. Immutable for the cycle: nothing reads it after
-    an own write within the same cycle, and the next fetch reconciles."""
+    `poll_instance` saw it. Immutable for the cycle: no reader decides on a
+    field an own write changed within the cycle (a reader that could must
+    confirm live; an own create retires the snapshot), and the next fetch
+    reconciles."""
     missions: tuple[Mission, ...]
     cycle: int
     fetched_at: datetime

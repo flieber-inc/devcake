@@ -885,7 +885,9 @@ class LinearAdapter:
         # via schema introspection) — ensure the same managed set there too.
         # Paginated (audit A12): an unpaginated first-100 read re-created any
         # managed project label living past page 1 on every boot.
-        existing_p = set((await self._all_project_labels()).keys())
+        # heal, don't trust the cache: a label deleted on the vendor inside
+        # the cache window must be recreated by this call
+        existing_p = set((await self._all_project_labels(force=True)).keys())
         for name in sorted(names):
             if name.upper() in existing_p:
                 continue

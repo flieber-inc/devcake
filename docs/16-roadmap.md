@@ -749,6 +749,15 @@ until that run exists, field evidence below stays operator-self-reported.
   zero rejections, zero waits, principal merge confirmed (three connections,
   one bucket), and the feed memo answered 22 of 23 scans on the largest
   board from memory.
+- **Resume visible + environment findings not routed** (2026-09-04): the
+  activity mirror opens with `▶ RESUMED BY A HUMAN` after a hand-off
+  (`orchestrator/resume.py`; convention stated in `HUMAN_HANDOFF`);
+  discovery instruction + steward rule exclude environment limitations;
+  per-finding `devcake:finding:v1 sha=` fingerprint + content dedup at the
+  steward's apply (ADR-0033 addendum). Field receipt: seventy-odd tickets
+  of one board re-parking on an approval loop the brief had invented,
+  and one harness limitation routed to dozens of siblings three times
+  in one half hour.
 
 ### Field evidence (receipted)
 

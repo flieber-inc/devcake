@@ -25,7 +25,8 @@ from . import board
 from . import steps
 from .feed import blockquote, post_attachment_comment, unquoted
 from .markers import (DISCOVERY_FIELD_MAX, DISCOVERY_PREVIEW_MAX, defang,
-                      discovery_marker, discovery_posts, discovery_receipts)
+                      discovery_marker, discovery_posts, discovery_receipts,
+                      finding_fingerprint)
 
 log = logging.getLogger("devcake.missions")
 
@@ -121,6 +122,10 @@ def comment_body(run: Run, entries: list[dict], name: str,
              f"🔎 {len(entries)} discover{'y' if len(entries) == 1 else 'ies'}"
              f" from step {run.seq} ({run.mission_type}) — leads for related "
              f"missions, routed separately."]
+    # per-finding fingerprints (ADR-0033 addendum): a mission never receives
+    # back, from a sibling, a finding it discovered itself
+    lines += [f"`devcake:finding:v1 sha={finding_fingerprint(e)}`"
+              for e in entries]
     if url is not None:
         lines.append(f"Full record attached: [{name}]({url})")
         lines += render_entry_lines(entries)

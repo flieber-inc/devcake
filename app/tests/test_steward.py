@@ -1087,3 +1087,151 @@ def test_finalize_steward_failed_leaves_outcome_summary_empty(tmp_path):
     saved = mgr.runs.store.get(run.run_id)
     assert saved.state == "failed"
     assert saved.outcome_summary == ""
+
+
+def test_apply_routes_skips_a_finding_already_on_the_recipient(tmp_path):
+    """ADR-0033 addendum (content dedup): the same finding reaching a
+    recipient from a second source is not delivered again — the fingerprint
+    line of an earlier delivery (any source) is authoritative. The receipt
+    still records the route so the batch dispositions."""
+    from devcake.domain.orchestrator.markers import (
+        FINDING_MARKER_RE, finding_fingerprint)
+    sha = finding_fingerprint({"finding": "Finding 0 about the CONFIG!"})
+    earlier = ("`devcake:discovery-in:v1 src=T-Q step=1`\n"
+               "leads, not truths\n"
+               "- finding 0 about the config\n"
+               f"  `devcake:finding:v1 sha={sha}`\n")
+    pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=[earlier])
+    mgr._discoveries_pending.add("src")
+    audits = []
+    mgr._audit = lambda pid, ev, *a, **kw: audits.append((pid, ev, a))
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 0)     # like the pair dedup: skipped
+    assert not any(pid == "tgt" for pid, _ in pmo.comments)   # nothing new
+    assert any(ev == "discovery_route_duplicate_content" and pid == "src"
+               for pid, ev, _a in audits)
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo))
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+    assert "src" not in mgr._discoveries_pending
+    # a fresh finding from the same batch still lands, stamped with its sha
+    pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[earlier])
+    delivered, rejected = _apply(mgr2, run2, [_route(finding=2)])
+    assert (delivered, rejected) == (1, 0)
+    body = next(md for pid, md in pmo2.comments if pid == "tgt")
+    assert "finding 1 about the config" in body
+    assert "finding 0 about the config" not in body
+    stamped = FINDING_MARKER_RE.findall(body)
+    assert stamped == [finding_fingerprint({"finding": "finding 1 about the config"})]
+    assert sha not in stamped
+
+
+def test_delivery_over_the_inline_ceiling_keeps_fingerprints(
+        tmp_path, monkeypatch):
+    """The ceiling fallback drops finding bodies but never a counted marker;
+    the per-finding fingerprints ride the head so content dedup survives a
+    truncated delivery."""
+    from devcake.domain.orchestrator.markers import (
+        FINDING_MARKER_RE, finding_fingerprint)
+    monkeypatch.setattr(steward, "FEED_INLINE_MAX", 240)
+    pmo, mgr, run = _route_setup(tmp_path)
+    delivered, rejected = _apply(mgr, run, [_route(finding=1),
+                                            _route(finding=2)])
+    assert (delivered, rejected) == (2, 0)
+    body = next(md for pid, md in pmo.comments if pid == "tgt")
+    assert "`devcake:discovery-in:v1 src=T-S step=2`" in body
+    assert "about the config" not in body                 # bodies dropped
+    assert sorted(FINDING_MARKER_RE.findall(body)) == sorted(
+        finding_fingerprint({"finding": f"finding {i} about the config"})
+        for i in (0, 1))
+    # ...and a re-route of either finding is now a content duplicate
+    pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
+    assert _apply(mgr2, run2, [_route(finding=2)]) == (0, 0)
+    assert not any(pid == "tgt" for pid, _ in pmo2.comments)
+
+
+def test_delivery_body_round_trips_as_a_content_duplicate(tmp_path):
+    """The real delivery (blockquoted findings, unquoted head) re-read from
+    the recipient's feed is recognised — by the pair marker first — and its
+    fingerprints survive `unquoted` (the cross-source scan surface)."""
+    from devcake.domain.orchestrator.feed import unquoted
+    from devcake.domain.orchestrator.markers import (
+        finding_fingerprint, finding_fingerprints)
+    pmo, mgr, run = _route_setup(tmp_path)
+    assert _apply(mgr, run, [_route()]) == (1, 0)
+    body = next(md for pid, md in pmo.comments if pid == "tgt")
+    assert finding_fingerprint({"finding": "finding 0 about the config"}) \
+        in finding_fingerprints(unquoted(body))
+    pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
+    assert _apply(mgr2, run2, [_route()]) == (0, 0)   # pair dedup precedent
+    assert not any(pid == "tgt" for pid, _ in pmo2.comments)
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo2))
+
+
+def test_recipient_never_receives_back_its_own_discovery(tmp_path):
+    """The harvest post carries the same fingerprints, so a sibling routing
+    the fact a mission discovered itself is a content duplicate."""
+    from devcake.domain.orchestrator import discovery
+    own = Run(run_id="L-T-T-1-EXECUTE-AAAAAA", mission_key="T-T",
+              mission_pmo_id="tgt", mission_type="EXECUTE",
+              dev_type="senior-dev", seq=1, state="finished")
+    harvest_body, externalize = discovery.comment_body(
+        own, [{"finding": "Finding 0 about the config",
+               "evidence": "e", "scope": "s"}],
+        "DISCOVERY_1.md", "https://files.example.test/d1")
+    assert externalize is False
+    assert harvest_body.count("`devcake:finding:v1 sha=") == 1
+    pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=[harvest_body])
+    assert _apply(mgr, run, [_route()]) == (0, 0)
+    assert not any(pid == "tgt" for pid, _ in pmo.comments)
+    # the receipt says to=T-T yet nothing from T-S is there: it explains why
+    assert any("already on the recipient from another source" in md
+               and "`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo))
+
+
+def test_two_sources_proposing_the_same_finding_in_one_run_land_once(
+        tmp_path):
+    from devcake.domain.orchestrator.markers import (
+        FINDING_MARKER_RE, discovery_marker)
+    src2 = m("src2", "T-Z", status="in_progress")
+    pmo, mgr, run = _route_setup(tmp_path, extra_missions=(src2,))
+    tgt = next(mm for mm in pmo.missions if mm.pmo_id == "tgt")
+    tgt.blocked_by.append("src2")                       # same family
+    pmo.feeds["src2"] = Activity(
+        mission=src2, entries=[_ae(discovery_marker(1, 1))], truncated=False)
+    r2 = Run(run_id="L-T-Z-1-EXECUTE-AAAAAA", mission_key="T-Z",
+             mission_pmo_id="src2", mission_type="EXECUTE",
+             dev_type="senior-dev", seq=1, state="finished",
+             pmo_ref=mgr.instance_name)
+    r2.result = {"outcome": "executed", "summary": "s", "discoveries": [
+        {"finding": "FINDING 0 about the config.", "evidence": "other",
+         "scope": "other"}]}
+    mgr.runs.store.save(r2)
+    run.steward_batches.append({"pmo_id": "src2", "key": "T-Z", "step": 1})
+    delivered, rejected = _apply(mgr, run, [
+        _route(), _route(source="T-Z", step=1, finding=1)])
+    assert (delivered, rejected) == (1, 0)
+    posts = [md for pid, md in pmo.comments if pid == "tgt"]
+    assert len(posts) == 1
+    assert "`devcake:discovery-in:v1 src=T-S step=2`" in posts[0]
+    assert "src=T-Z" not in posts[0]
+    assert len(FINDING_MARKER_RE.findall(posts[0])) == 1
+    receipts = [md for pid, md in pmo.comments if pid == "src2"]
+    assert any("`devcake:discovery-routed:v1 step=1 to=T-T`" in md
+               for md in receipts)
+
+
+def test_fingerprint_is_script_agnostic():
+    from devcake.domain.orchestrator.markers import finding_fingerprint
+    fp = finding_fingerprint
+    assert fp({"finding": "Übergabe schlägt fehl!"}) == \
+        fp({"finding": "übergabe   schlägt fehl"})
+    assert fp({"finding": "Übergabe schlägt fehl"}) != \
+        fp({"finding": "bergabe schl gt fehl"})
+    assert fp({"finding": "配置缺失"}) != fp({"finding": "凭据缺失"})
+    assert fp({"finding": "配置缺失"}) != fp({"finding": ""})
+    assert fp({"finding": "The cache is stale."}) == \
+        fp({"finding": "the CACHE is stale"})
+    assert len(fp({"finding": "x"})) == 12

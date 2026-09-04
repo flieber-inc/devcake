@@ -35,6 +35,15 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   shows a one-line readout of the connection's measured requests per hour
   against the credential's limit, with remaining, refill time and rejections
   on hover, and `devcake status` prints the same rows on the host.
+- **Changed — a resume is visible to the Dev, and environment findings are
+  no longer routed.** When a mission's most recent run was a hand-off, the
+  next run's brief opens with a pointer and its activity mirror with a
+  banner naming the ask, the fact that a person released the hold, and how
+  many human comments that run never saw; the playbooks state that a
+  release without a comment answers the ask.
+  Devs are told that limitations of their own run are not discoveries, the
+  steward declines such findings, and every delivered finding carries a
+  fingerprint so the same finding is never delivered twice to a recipient.
 - **Fixed — a cross-repository decomposition routed every child to the
   default repository.** The triage playbook asked for a backticked routing
   marker in each child's description, and the decomposition step's

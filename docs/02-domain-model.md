@@ -19,7 +19,7 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 | `labels` | `set[str]` | Label names as they appear in the PMO System. Managed `DEVCAKE-*` names are canonicalized case-insensitively onto `ALL_LABELS` (`canonicalize_labels`) — Linear and the forge-issue adapters (GitHub/Gitea/GitLab) all emit that contract, and `derive()`/`swap_labels` are exact-string. |
 | `updated_at` | `datetime` | PMO-side last update. Scheduling tiebreaker. |
 | `url` | `str` | Deep link into the PMO System. |
-| `parent_ref` | `str \| None` | For Issues that belong to a Project: the project's `pmo_id`. |
+| `parent_ref` | `str \| None` | For Issues that belong to a Project: the project's `pmo_id` — also the tracking sweep's container link on the cycle snapshot (`BoardSnapshot.children_of`). `None` on forge-issue PMOs, which have no projects. |
 | `blocked_by` | `list[str]` | `pmo_id`s of Missions that block this one, read from the PMO System's native issue relations (`05-pmo-adapter.md` §3, `adr/0007`). Always `[]` for Projects (Linear relations are issue-scoped). Gates scheduling (`04-orchestrator.md` §2), not derivation. |
 | `instance` | `str` | Which configured PMO instance produced this Mission (schema v3) — stamped by the adapter at normalization so no fetch path can return an unstamped mission. |
 | `repo` | `str \| None` | Resolved work-repo instance name for this mission (poll-cycle stamp; never persisted). |

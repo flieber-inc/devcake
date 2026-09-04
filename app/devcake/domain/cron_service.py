@@ -17,6 +17,7 @@ from ..ports.cron import CronStore
 from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from . import claims as claims_mod
 from .model import LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW
+from .orchestrator.board import board_missions
 
 if TYPE_CHECKING:
     from .orchestrator import MissionManager
@@ -236,7 +237,10 @@ class CronService:
     async def _in_flight(self, mgr, job_id: str) -> bool:
         """A previous cron-created ticket for this job still non-terminal."""
         try:
-            missions = await mgr.pmo.list_all(mgr.instance.team_key)
+            # enumeration (ADR-0003 amendment): the fire follows the poll
+            # segment, so the cycle's snapshot is fresh
+            missions = await board_missions(
+                mgr, max_age=timedelta(seconds=self.config.poll_interval_seconds))
         except Exception:  # noqa: BLE001 — treat unread as not in-flight
             log.exception("cron in-flight scan failed on %s", mgr.instance_name)
             return False

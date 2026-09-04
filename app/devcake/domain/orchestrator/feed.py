@@ -320,6 +320,16 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         await mgr.pmo.post_feed(
             MissionRef(pmo_id, "issue"),
             part + "\n\n" + COMMENT_SENTINEL)
+    feed_written(mgr, pmo_id)
+
+
+def feed_written(mgr, pmo_id: str) -> None:
+    """DevCake wrote to this feed: memoized scans of it are stale (ADR-0033
+    addendum). Every DevCake-authored issue comment passes through `_feed`,
+    so this is the one invalidation site."""
+    memo = getattr(mgr, "feed_memo", None)
+    if memo is not None:
+        memo.forget(pmo_id)
 
 
 async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,

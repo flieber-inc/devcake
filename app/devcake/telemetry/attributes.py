@@ -62,6 +62,9 @@ ATTRIBUTES: frozenset[str] = frozenset({
     "devcake.pmo.remaining",
     "devcake.pmo.reason",
     "devcake.pmo.budget_refused",
+    "devcake.pmo.feed_scan_reads",
+    "devcake.pmo.feed_scan_memo_hits",
+    "devcake.pmo.tracking_children_live",
     # Steward / discoveries
     "devcake.steward.duty",
     "devcake.steward.edges_created",

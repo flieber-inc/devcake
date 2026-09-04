@@ -103,9 +103,12 @@ devcake.missions.seen
 devcake.outcome
 devcake.pmo.budget_refused
 devcake.pmo.call_class
+devcake.pmo.feed_scan_memo_hits
+devcake.pmo.feed_scan_reads
 devcake.pmo.id
 devcake.pmo.reason
 devcake.pmo.remaining
+devcake.pmo.tracking_children_live
 devcake.pmo.wait_s
 devcake.poison.entries
 devcake.poison.reason

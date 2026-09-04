@@ -138,6 +138,9 @@ class Services:
                 mgr = self.managers[name]
                 mgr.pmo, mgr.forges, mgr.config = p, self.forge_runtime, self.config
                 mgr.labels_ready = False   # repoint may change team_key (F3 latch)
+                mgr.snapshot = None        # team_key may change: no stale board
+                mgr.feed_memo.clear()
+                mgr.cycle_stats = {}
                 mgr.instance, mgr.instance_name = inst, name
                 mgr.internal_forge = self.internal_forge
                 mgr.skills = self.skill_service

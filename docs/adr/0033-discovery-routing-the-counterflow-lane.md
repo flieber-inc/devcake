@@ -436,6 +436,10 @@ these rulings amend it where implementation surfaced better information.
     cleared. Feeds only grow: treating the ceiling as transient would
     hold forever.
 
+## Addendum — the feed-scan memo decides when, never what (2026-09-03)
+
+The per-cycle sweep and the merge driver re-read a labeled mission's whole feed to recompute board arithmetic (posted − receipted) and the merge-state markers. On a metered vendor (ADR-0040) that read multiplies with board size, so it is memoized per mission (`FeedScanMemo`, `04-orchestrator.md` §1): a scan is reused while the mission's `updated_at` is unchanged, DevCake itself has not written to that feed since (every DevCake-authored comment passes through the feed chokepoint, which invalidates the memo), and the scan is younger than a five-minute safety window (a human's comment on a vendor whose `updated_at` does not move for comments). The memo decides **when** the arithmetic is recomputed, never **what** pending is: pending is always posted − receipted from the feed; a truncated scan is never memoized (fail-closed stays fail-closed); and a caller about to **write** on the strength of the scan — the steward's routing apply, the discovery dispatch — bypasses the memo and pays the live read. Process-local by construction: a restart or a config reload rescans.
+
 ## Related
 
 - Implement: `domain/orchestrator/markers.py` (two marker classes,

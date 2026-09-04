@@ -14,11 +14,13 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import datetime  # noqa: F401 — type context for Activity entries
+from datetime import datetime, timedelta  # noqa: F401 — datetime is type context for Activity entries
 from pathlib import Path
 
 from ..model import MissionRef
+from . import board
 from .feed import coalesced_step_files, is_devcake_comment, unquoted
+from . import board
 from .markers import decomposition_parent_ref, discovery_in_keys
 
 log = logging.getLogger("devcake.missions")
@@ -167,7 +169,10 @@ async def _missions_snapshot(mgr) -> list:
     if override is not None:
         return list(override)
     try:
-        return await mgr.pmo.list_all(mgr.instance.team_key)
+        # enumeration (ADR-0003 amendment): the cycle's snapshot when fresh
+        max_age = timedelta(seconds=getattr(
+            getattr(mgr, "config", None), "poll_interval_seconds", 30) or 30)
+        return await board.board_missions(mgr, max_age=max_age)
     except Exception as e:  # noqa: BLE001 — ancestry degrades to empty; gaps disclose
         log.warning("upstream ancestry snapshot failed: %s", e)
         return []

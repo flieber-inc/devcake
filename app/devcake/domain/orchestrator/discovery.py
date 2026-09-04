@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from ...security import redact
 from ..model import LABEL_DISCOVERY, MissionRef
 from ..run import TERMINAL_STATES, Run, utcnow
+from . import board
 from . import steps
 from .feed import blockquote, post_attachment_comment, unquoted
 from .markers import (DISCOVERY_FIELD_MAX, DISCOVERY_PREVIEW_MAX, defang,
@@ -213,14 +214,27 @@ class SourceState:
         return [(s, n) for s, n in self.posted if s not in done]
 
 
-async def scan_source(mgr, m) -> SourceState:
+async def scan_source(mgr, m, *, memo: bool = True) -> SourceState:
     """The ONE labeled-mission feed scan (shared by harvest recovery, the
     discovery sweep, and steward apply): posted markers and routing
     receipts, both over unquoted bodies (IRON RULE). full=True so newest
     receipts (gitea pages oldest-first) cannot fall off the window.
     truncated ⇒ fail-closed: callers must not treat the feed as empty or
     write to=-. pending = posted − receipted when counts are known —
-    restart-proof board arithmetic, no local ledger."""
+    restart-proof board arithmetic, no local ledger.
+
+    `memo` (ADR-0033 addendum): the per-cycle sweep reuses a recent scan
+    while nothing changed (`FeedScanMemo`); a caller about to WRITE on the
+    strength of the scan passes memo=False and pays the live read. A
+    truncated scan is never memoized."""
+    fm = getattr(mgr, "feed_memo", None) if memo else None
+    if fm is not None:
+        hit = fm.get("discovery", m)
+        if hit is not None:
+            board.bump(mgr, "feed_scan_memo_hits")
+            return hit
+        gen = fm.generation(m.pmo_id)
+    board.bump(mgr, "feed_scan_reads")
     act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
     posted: list[tuple[int, int]] = []
     receipted: set[tuple[int, str]] = set()
@@ -228,8 +242,11 @@ async def scan_source(mgr, m) -> SourceState:
         text = unquoted(e.body)
         posted += discovery_posts(text)
         receipted |= discovery_receipts(text)
-    return SourceState(posted=posted, receipted=receipted,
-                       truncated=bool(act.truncated))
+    state = SourceState(posted=posted, receipted=receipted,
+                        truncated=bool(act.truncated))
+    if fm is not None and not state.truncated:
+        fm.put("discovery", m, state, gen)
+    return state
 
 
 async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:

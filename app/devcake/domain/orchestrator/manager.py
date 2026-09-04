@@ -29,6 +29,8 @@ from ...ports.pmo import PMOPort, with_pmo_call
 from ..blocker_locator import LEGACY_PMO_REFS
 from ..runs import RunManager
 
+from .board import BoardSnapshot
+from .feed_memo import FeedScanMemo
 from . import (activity_payload as activity_payload_mod, deliver, dispatch,
                feed, finalize, steward, review, schedule, sweeps)
 from .markers import LEGAL_OUTCOMES  # noqa: F401  — public re-export
@@ -123,6 +125,14 @@ class MissionManager:
         # restart-safe, self-pruning. Same "text — url" convention as
         # merge_handoffs so the admin UI parses both identically.
         self.needs_human: dict[str, str] = {}
+        # the cycle's board snapshot (ADR-0003 amendment): enumeration reads
+        # reuse the poll's list_all; set by poll_instance, None until then
+        self.snapshot: BoardSnapshot | None = None
+        # when a labeled mission's feed is re-read (ADR-0033 addendum);
+        # our own feed writes invalidate through feed._feed
+        self.feed_memo = FeedScanMemo()
+        # per-cycle demand counters (board.bump) → /health pmo_demand
+        self.cycle_stats: dict[str, int] = {}
         # pmo_ids whose deferred-merge window is known CLOSED (hand-off posted,
         # or no retry marker in the feed) — skips the per-cycle feed read for
         # terminally-parked missions. In-memory advisory only (PMO markers stay

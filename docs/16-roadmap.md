@@ -721,6 +721,14 @@ until that run exists, field evidence below stays operator-self-reported.
   finalize failures exempt from the poison threshold (3 h ceiling), `/health`
   budget rows + advisory + admin warning, `DEVCAKE_PMO_BUDGET_OFF` rollout
   switch. Docs 04/05/09/11/12/13/15.
+- **Spend less per cycle** (ADR-0003 amendment + ADR-0033 addendum,
+  2026-09-03): the cycle's `list_all` is a `BoardSnapshot` reused by the
+  tracking pre-check (live `children_of` only when completion is possible),
+  the ancestor offer and cron in-flight scans; `FeedScanMemo` gates the
+  discovery and merge feed re-reads on `updated_at` / own writes / a 5 min
+  safety rescan (truncation never memoized; writers bypass it); Linear's
+  project-label registry cached 10 min; `/health.pmo_demand` + three
+  `poll.instance` attributes. Docs 02/04/05/11/12.
 
 ### Field evidence (receipted)
 

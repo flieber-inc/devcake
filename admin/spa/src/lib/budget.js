@@ -26,7 +26,7 @@ export function budgetForInstance(health, name) {
   return {
     label: row.label || "",
     limit: row.limit ?? null,
-    remaining: row.remaining ?? null,
+    remaining: row.remaining_estimate ?? row.remaining ?? null,
     resetAt: row.reset_at ?? null,
     blockedUntil: row.blocked_until ?? null,
     perHour: typeof mine === "number" ? mine : null,
@@ -40,8 +40,8 @@ export function budgetForInstance(health, name) {
 
 /** Share of the credential's hour the measured demand takes (0–100+), or null. */
 export function budgetShare(b) {
-  if (!b || !b.limit || !b.totalPerHour) return null;
-  return Math.round((b.totalPerHour / b.limit) * 100);
+  if (!b || !b.limit) return null;
+  return Math.round(((b.totalPerHour || 0) / b.limit) * 100);
 }
 
 /** One line for the card. */
@@ -62,7 +62,7 @@ export function budgetDetails(b) {
   if (!b) return "";
   const out = [];
   if (b.label) out.push(`credential: ${b.label}`);
-  if (b.remaining != null) out.push(`remaining this hour: ${fmt(b.remaining)}`);
+  if (b.remaining != null) out.push(`remaining: ${fmt(b.remaining)}`);
   if (b.resetAt) out.push(`refills by: ${hhmm(b.resetAt)}`);
   out.push(`rejected by the tracker in the last hour: ${fmt(b.limitedLastHour)}`);
   if (b.waits) out.push(`write-backs that waited for quota: ${fmt(b.waits)}`);

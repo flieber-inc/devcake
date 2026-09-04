@@ -179,7 +179,8 @@ def test_status_reports_the_pmo_request_budgets(monkeypatch, tmp_path, capsys):
             "tracker.example/user:u1": "the tracker rejected 2 requests in the last hour"},
     }
     monkeypatch.setattr(status_mod.subprocess, "run", _fake_run)
-    monkeypatch.setattr(status_mod, "_fetch_health", lambda root, **kw: health)
+    monkeypatch.setattr(status_mod, "_fetch_health",
+                        lambda root, **kw: (health, None))
     rc = cli_main.main(["status"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -206,19 +207,75 @@ def test_status_says_when_the_budget_is_unavailable(monkeypatch, tmp_path, capsy
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(status_mod.subprocess, "run", lambda argv, **kw:
                         subprocess.CompletedProcess(argv, 0, stdout="{}\n"))
-    monkeypatch.setattr(status_mod, "_fetch_health", lambda root, **kw: None)
+    monkeypatch.setattr(
+        status_mod, "_fetch_health",
+        lambda root, **kw: (None, "the admin proxy at http://127.0.0.1:8080 "
+                            "did not answer within 10 s (ConnectionRefusedError) "
+                            "— stack down?"))
     assert cli_main.main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "pmo_budget: unavailable" in out and "127.0.0.1:8080" in out
+    assert "pmo_budget: unavailable (the admin proxy at http://127.0.0.1:8080" in out
     cli_main.main(["status", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["health_reachable"] is False and payload["pmo_budget"] is None
+    assert payload["pmo_rate_limited"] is None
+    assert "stack down" in payload["health_error"]
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _serve_once(raw: bytes) -> int:
+    """A one-shot loopback server that answers any request with `raw`."""
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def _run():
+        conn, _ = srv.accept()
+        with conn:
+            conn.recv(4096)
+            conn.sendall(raw)
+        srv.close()
+    threading.Thread(target=_run, daemon=True).start()
+    return srv.getsockname()[1]
+
+
+def _env_with_admin(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("ADMIN_USER=admin\nADMIN_PASSWORD=p:ä\n")
 
 
 def test_fetch_health_never_raises(monkeypatch, tmp_path):
-    """A stack that is down is a status line, never a traceback."""
+    """A stack that is down, a wrong password, a truncated body: each is a
+    reason string, never a traceback — and the loopback call ignores any
+    http_proxy in the environment (the admin password must not leave the
+    host)."""
     _ensure_cli_importable()
     import devcake_cli.status as status_mod
     _fake_checkout(tmp_path)
-    monkeypatch.setattr(status_mod, "ADMIN_URL", "http://127.0.0.1:9")   # closed port
-    assert status_mod._fetch_health(tmp_path, timeout=0.5) is None
+    # no .env → the missing-credentials reason, no network at all
+    body, why = status_mod._fetch_health(tmp_path, timeout=0.5)
+    assert body is None and "ADMIN_USER" in why
+    _env_with_admin(tmp_path)
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")   # would swallow it
+    monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{_free_port()}")
+    body, why = status_mod._fetch_health(tmp_path, timeout=0.5)
+    assert body is None and "did not answer" in why and "stack down" in why
+    port = _serve_once(b"HTTP/1.0 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+    monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{port}")
+    body, why = status_mod._fetch_health(tmp_path, timeout=2)
+    assert body is None and "HTTP 401" in why and "ADMIN_PASSWORD" in why
+    port = _serve_once(b"HTTP/1.0 200 OK\r\nContent-Length: 100\r\n\r\n{\"ok\":")
+    monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{port}")
+    body, why = status_mod._fetch_health(tmp_path, timeout=2)
+    assert body is None and "IncompleteRead" in why
+    port = _serve_once(b"HTTP/1.0 200 OK\r\nContent-Length: 16\r\n\r\n{\"pmo_budget\":1}")
+    monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{port}")
+    body, why = status_mod._fetch_health(tmp_path, timeout=2)
+    assert body == {"pmo_budget": 1} and why is None

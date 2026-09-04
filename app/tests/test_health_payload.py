@@ -630,7 +630,7 @@ def test_budget_alarm_names_rejections_the_pause_and_the_interval_that_fits():
     assert "rejected 4 requests in the last hour" in text
     assert "instances: a, b" in text
     assert "paused until 22:14 UTC" in text            # 1_700_000_090 → 22:14:50
-    assert "processed late" in text
+    assert "may be processed late" in text
     assert "at least 30 s" in text                     # same fit as the advisory
     one = dict(snap["tracker.example/user:u1"], limited_last_hour=1,
                blocked_until=None)
@@ -651,6 +651,26 @@ def test_budget_alarm_is_silent_without_rejections_and_speaks_while_paused():
     text = health_mod._budget_alarms({"t/u": paused}, 15, now=now)["t/u"]
     assert text.startswith("the tracker is refusing requests")
     assert "another consumer" in text                  # demand fits; someone else spends
+    # both hints when both apply
+    both = dict(paused, demand_per_hour={"a": 2400})
+    text = health_mod._budget_alarms({"t/u": both}, 15, now=now)["t/u"]
+    assert "raise the poll interval" in text and "another consumer" in text
+
+
+def test_budget_alarm_on_a_tracker_without_a_published_limit_and_old_shapes():
+    """A forge-issue tracker publishes no limit (Gitea); a proxy 429 still
+    alarms, without interval advice it cannot compute. A snapshot from an
+    older build lacks the meter fields — silence, not a crash."""
+    now = 1_700_000_000.0
+    gitea = {"forge.example/key-1": {"limit": None, "instances": ["board"],
+                                    "demand_per_hour": {"board": 250},
+                                    "limited_last_hour": 1, "blocked_until": None}}
+    text = health_mod._budget_alarms(gitea, 15, now=now)["forge.example/key-1"]
+    assert "rejected 1 request" in text and "board" in text
+    assert "poll interval" not in text and "another consumer" not in text
+    old = {"t/u": {"limit": 2500, "instances": ["a"],
+                   "demand_per_hour": {"a": 100}}}
+    assert health_mod._budget_alarms(old, 15, now=now) == {}
 
 
 def test_health_payload_carries_the_rate_limit_alarm(monkeypatch):

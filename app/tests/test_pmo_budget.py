@@ -491,9 +491,11 @@ def test_merged_buckets_fold_their_rejection_meters():
     a = B.budget_for("tracker.example", "k1", system="linear", instance="a")
     c = B.budget_for("tracker.example", "k2", system="linear", instance="b")
     a.observe(limited, now=t)
+    a.observe(limited, now=t + 60)                   # same minute as c's
     c.observe(limited, now=t + 60)
     c.observe(limited, now=t + 60)
     a.merge(c)
     snap = a.snapshot(now=t + 120)
-    assert snap["limited_last_hour"] == 3
+    assert snap["limited_last_hour"] == 4            # overlapping minute summed
     assert snap["last_limited_at"] == t + 60
+    assert a._limited._bins[-1] == (int((t + 60) // 60), 3)

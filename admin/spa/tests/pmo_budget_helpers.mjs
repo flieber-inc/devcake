@@ -73,10 +73,24 @@ check("an unmeasured instance says so instead of showing zero", () => {
   assert.match(budgetLine(budgetForInstance(h, "a")), /measuring/);
 });
 
+check("an idle connection on a limited credential reads 0 %, never null", () => {
+  const h = { pmo_budget: { x: { instances: ["a"], limit: 2500, demand_per_hour: { a: 0 } } } };
+  const b = budgetForInstance(h, "a");
+  assert.equal(budgetShare(b), 0);
+  assert.equal(budgetLine(b), "about 0 requests/hour of 2,500 (0% of the credential's hour)");
+  assert.equal(budgetTone(b), "neutral");
+});
+
+check("the estimate wins over the last observed remaining", () => {
+  const h = { pmo_budget: { x: { instances: ["a"], limit: 2500, remaining: 2471,
+    remaining_estimate: 2400, demand_per_hour: { a: 10 } } } };
+  assert.match(budgetDetails(budgetForInstance(h, "a")), /remaining: 2,400/);
+});
+
 check("hover details carry remaining, refill time and rejections", () => {
   const d = budgetDetails(budgetForInstance(health, "a"));
   assert.match(d, /credential: tracker\.example\/user:u1/);
-  assert.match(d, /remaining this hour: 2,471/);
+  assert.match(d, /remaining: 2,471/);
   assert.match(d, /refills by: \d\d:\d\d UTC/);
   assert.match(d, /rejected by the tracker in the last hour: 0/);
   assert.doesNotMatch(d, /paused/);

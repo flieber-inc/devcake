@@ -230,15 +230,15 @@ def _budget_alarms(budgets: dict, poll_interval_seconds: int, *,
         if paused:
             when = datetime.fromtimestamp(blocked, tz=timezone.utc)
             parts.append(f"requests are paused until {when:%H:%M} UTC")
-        parts.append("write-backs keep their reserve; routine reads are "
-                     "skipped until the quota refills, so missions on these "
-                     "instances are processed late")
+        parts.append("while the tracker refuses, write-backs wait and "
+                     "routine reads are skipped, so missions on these "
+                     "instances may be processed late")
         limit = b.get("limit")
         fit = _fit_interval(poll_interval_seconds, _demand(b), limit)
         if fit and fit > poll_interval_seconds:
             parts.append(f"raise the poll interval to at least {fit} s or "
                          f"spread the instances over more credentials")
-        elif limit and (b.get("foreign_spend") or 0) > limit * 0.1:
+        if limit and (b.get("foreign_spend") or 0) > limit * 0.1:
             parts.append("another consumer of the same credential is "
                          "spending the quota")
         out[label] = "; ".join(parts)

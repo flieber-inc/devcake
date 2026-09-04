@@ -178,6 +178,27 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // Rate limit REACHED (ADR-0040 §6 addendum, the loud tier): the tracker
+  // itself rejected requests in the last hour, or is refusing right now.
+  // Critical, not dismissable, same honesty argument as poll-degraded: while
+  // this is set, routine reads on the named instances are being skipped, so
+  // their missions are processed late. Self-clearing — the health field
+  // empties an hour after the last rejection.
+  const limited = Object.entries(health.pmo_rate_limited || {});
+  if (limited.length > 0) {
+    alerts.push({
+      id: "pmo-rate-limited",
+      severity: "critical",
+      title:
+        limited.length === 1
+          ? "PMO rate limit reached"
+          : `${limited.length} PMO rate limits reached`,
+      body:
+        limited.map(([label, msg]) => `${label}: ${msg}`).join(" · ") +
+        " — this alert clears itself an hour after the last rejection.",
+    });
+  }
+
   // Request budget (ADR-0040): the app measures its own demand against the
   // tracker's quota per credential. Warning, dismissable: nothing is broken
   // yet — routine reads are being paced/skipped so write-backs keep their

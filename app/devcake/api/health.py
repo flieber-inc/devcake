@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from datetime import datetime, timezone
 import time
 
 import httpx
@@ -186,6 +187,64 @@ def unused_repo_names(config, dev_types=None) -> list[str]:
 BUDGET_WARN_SHARE = 0.8
 
 
+def _fit_interval(poll_interval_seconds: int, demand: int,
+                  limit: int | None) -> int | None:
+    """The poll interval (15 s steps) at which the measured demand would sit
+    under BUDGET_WARN_SHARE of the limit; None without a limit or demand."""
+    if not limit or not demand:
+        return None
+    floor = max(1, int(math.ceil(
+        poll_interval_seconds * demand / (limit * BUDGET_WARN_SHARE))))
+    return int(math.ceil(floor / 15.0)) * 15
+
+
+def _demand(b: dict) -> int:
+    return sum(v for v in (b.get("demand_per_hour") or {}).values()
+               if isinstance(v, int))
+
+
+def _budget_alarms(budgets: dict, poll_interval_seconds: int, *,
+                   now: float | None = None) -> dict[str, str]:
+    """The loud tier (ADR-0040 §6 addendum): the tracker ITSELF rejected
+    requests in the last hour, or is refusing right now. A self-throttle is
+    the governor working and stays an advisory; a vendor rejection means
+    demand outran the governor's model (a shared credential, a burst,
+    another consumer) and routine reads on the named instances are being
+    skipped — their missions are processed late. Empties on its own an
+    hour after the last rejection."""
+    now = time.time() if now is None else now
+    out: dict[str, str] = {}
+    for label, b in (budgets or {}).items():
+        n = int(b.get("limited_last_hour") or 0)
+        blocked = b.get("blocked_until")
+        paused = isinstance(blocked, (int, float)) and blocked > now
+        if n <= 0 and not paused:
+            continue
+        who = ", ".join(b.get("instances") or []) or "this instance"
+        if n:
+            parts = [f"the tracker rejected {n} request{'s' if n != 1 else ''} "
+                     f"in the last hour on this credential (instances: {who})"]
+        else:
+            parts = [f"the tracker is refusing requests on this credential "
+                     f"(instances: {who})"]
+        if paused:
+            when = datetime.fromtimestamp(blocked, tz=timezone.utc)
+            parts.append(f"requests are paused until {when:%H:%M} UTC")
+        parts.append("while the tracker refuses, write-backs wait and "
+                     "routine reads are skipped, so missions on these "
+                     "instances may be processed late")
+        limit = b.get("limit")
+        fit = _fit_interval(poll_interval_seconds, _demand(b), limit)
+        if fit and fit > poll_interval_seconds:
+            parts.append(f"raise the poll interval to at least {fit} s or "
+                         f"spread the instances over more credentials")
+        if limit and (b.get("foreign_spend") or 0) > limit * 0.1:
+            parts.append("another consumer of the same credential is "
+                         "spending the quota")
+        out[label] = "; ".join(parts)
+    return out
+
+
 def _budget_warnings(budgets: dict, poll_interval_seconds: int) -> dict[str, str]:
     """Operator advisories derived from the request budgets (ADR-0040):
     measured demand against the vendor's limit → the poll interval that
@@ -195,16 +254,13 @@ def _budget_warnings(budgets: dict, poll_interval_seconds: int) -> dict[str, str
     out: dict[str, str] = {}
     for label, b in (budgets or {}).items():
         limit = b.get("limit")
-        demand = sum(v for v in (b.get("demand_per_hour") or {}).values()
-                     if isinstance(v, int))
+        demand = _demand(b)
         parts: list[str] = []
         if limit and demand > limit * BUDGET_WARN_SHARE:
             # coarse numbers: the admin keys dismissals on the text, and a
             # figure that moves every poll would resurface the alert forever
             shown = int(round(demand / 100.0)) * 100
-            floor = max(1, int(math.ceil(
-                poll_interval_seconds * demand / (limit * BUDGET_WARN_SHARE))))
-            floor = int(math.ceil(floor / 15.0)) * 15
+            floor = _fit_interval(poll_interval_seconds, demand, limit)
             parts.append(
                 f"measured about {shown} requests/hour against {limit}/hour shared "
                 f"by {', '.join(b.get('instances') or []) or 'this instance'}; "
@@ -342,6 +398,10 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         # on the wire) + the advisory computed from measured demand
         "pmo_budget": budgets,
         "pmo_budget_warnings": _budget_warnings(
+            budgets, config.poll_interval_seconds),
+        # the loud tier: the tracker itself rejected requests in the last
+        # hour (or is refusing now) — Overview paints it critical
+        "pmo_rate_limited": _budget_alarms(
             budgets, config.poll_interval_seconds),
         "active_runs": len(store.active()),
         "forge_protection": await _branch_protection(forge_runtime),

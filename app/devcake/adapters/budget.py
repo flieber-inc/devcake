@@ -132,6 +132,20 @@ class _Meter:
         while self._bins and self._bins[0][0] < minute - 59:
             self._bins.popleft()
 
+    def count(self, now: float) -> int:
+        """Raw events in the last hour — no extrapolation (rejections)."""
+        minute = int(now // 60)
+        return sum(c for m, c in self._bins if m >= minute - 59)
+
+    def absorb(self, other: "_Meter") -> None:
+        """Fold another meter's bins in (bucket merge by principal)."""
+        merged: dict[int, int] = {}
+        for m, c in list(self._bins) + list(other._bins):
+            merged[m] = merged.get(m, 0) + c
+        self._bins = deque(sorted(merged.items()))
+        borns = [b for b in (self._born, other._born) if b is not None]
+        self._born = min(borns) if borns else None
+
     def per_hour(self, now: float) -> int | None:
         if self._born is None:
             return None
@@ -174,6 +188,10 @@ class RequestBudget:
         self.waits = 0
         self.wait_seconds = 0.0
         self.limited_seen = 0
+        # the vendor's own rejections over the last hour — the loud tier
+        # (self-throttle stays in `rejections`: the governor working)
+        self._limited = _Meter()
+        self.last_limited_at: float | None = None
         self._meters: dict[str, _Meter] = {}
 
     # ── identity ──
@@ -219,6 +237,8 @@ class RequestBudget:
             self.last_observed_at = now
         if sig.limited:
             self.limited_seen += 1
+            self._limited.tick(now)
+            self.last_limited_at = now
             if sig.retry_after_s is not None:
                 block = float(sig.retry_after_s)
             elif sig.remaining == 0 and self._ttr(now) is not None:
@@ -395,6 +415,10 @@ class RequestBudget:
         self.waits += other.waits
         self.wait_seconds += other.wait_seconds
         self.limited_seen += other.limited_seen
+        self._limited.absorb(other._limited)
+        self.last_limited_at = max(
+            (t for t in (self.last_limited_at, other.last_limited_at)
+             if t is not None), default=None)
         self.foreign_spend += other.foreign_spend
         for name, meter in other._meters.items():
             self._meters.setdefault(name, meter)
@@ -428,6 +452,8 @@ class RequestBudget:
             "waits": self.waits,
             "wait_seconds": round(self.wait_seconds, 1),
             "limited_seen": self.limited_seen,
+            "limited_last_hour": self._limited.count(now),
+            "last_limited_at": self.last_limited_at,
             "foreign_spend": self.foreign_spend,
             "observed_at": self.last_observed_at,
             "demand_per_hour": {name: m.per_hour(now)

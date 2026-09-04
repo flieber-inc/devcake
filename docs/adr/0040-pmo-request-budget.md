@@ -100,6 +100,22 @@ naming the poll interval that would fit and the instances sharing the
 bucket. The admin derives a dismissable warning from it. Waits of a second
 or more emit a `pmo.budget.wait` span.
 
+**Addendum — two tiers, and the number an interested person can read.**
+A self-throttle (`PMOBudgetExceeded`, no vendor call) is the governor
+working and stays an advisory. A rejection by the tracker itself means
+demand outran the governor's model — a credential shared with something
+else, a burst, a second deployment — and routine reads on the named
+instances are being skipped, so their missions are processed late. That is
+the loud tier: every bucket keeps a rolling one-hour meter of vendor
+rejections (`limited_last_hour`, `last_limited_at`); `/health` derives
+`pmo_rate_limited` (count, instances, when the pause lifts, the poll
+interval that would fit); the admin paints it critical and not dismissable,
+and it clears itself an hour after the last rejection. The discreet number
+lives where the operator already looks: each PMO card shows the
+connection's measured requests per hour against the credential's limit
+(hover for remaining, refill, rejections), and `devcake status` prints the
+same rows on the host without opening the admin.
+
 ### 7 — A switch for rollout
 
 `DEVCAKE_PMO_BUDGET_OFF=1` keeps the governor observing and reporting

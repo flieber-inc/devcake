@@ -463,3 +463,39 @@ def test_foreign_spend_is_reported_per_hour_of_our_own_clock(clock):
                                              refill="continuous")),
                   instance="a"))
     assert b.foreign_spend == 0
+
+
+# ── the loud tier: the vendor's own rejections over the last hour ────────────
+
+def test_vendor_rejections_are_metered_over_the_last_hour():
+    """`limited_seen` counts forever; `limited_last_hour` is the raw count
+    the alarm reads, so the alarm clears itself an hour after the last
+    rejection. Self-throttles (no vendor call) never touch it."""
+    b = B.budget_for("tracker.example", "k", system="linear", instance="a")
+    t = 1_700_000_000.0
+    snap = b.snapshot(now=t)
+    assert snap["limited_last_hour"] == 0 and snap["last_limited_at"] is None
+    for i in range(3):
+        b.observe(B.RateSignal(limited=True, retry_after_s=1), now=t + i * 60)
+    snap = b.snapshot(now=t + 200)
+    assert snap["limited_last_hour"] == 3
+    assert snap["limited_seen"] == 3
+    assert snap["last_limited_at"] == t + 120
+    assert b.snapshot(now=t + 3600 + 130)["limited_last_hour"] == 0
+    assert b.snapshot(now=t + 3600 + 130)["limited_seen"] == 3
+
+
+def test_merged_buckets_fold_their_rejection_meters():
+    limited = B.RateSignal(limited=True, retry_after_s=1)
+    t = 1_700_000_000.0
+    a = B.budget_for("tracker.example", "k1", system="linear", instance="a")
+    c = B.budget_for("tracker.example", "k2", system="linear", instance="b")
+    a.observe(limited, now=t)
+    a.observe(limited, now=t + 60)                   # same minute as c's
+    c.observe(limited, now=t + 60)
+    c.observe(limited, now=t + 60)
+    a.merge(c)
+    snap = a.snapshot(now=t + 120)
+    assert snap["limited_last_hour"] == 4            # overlapping minute summed
+    assert snap["last_limited_at"] == t + 60
+    assert a._limited._bins[-1] == (int((t + 60) // 60), 3)

@@ -1152,11 +1152,16 @@ def test_delivery_over_the_inline_ceiling_keeps_fingerprints(
 
 def test_delivery_body_round_trips_as_a_content_duplicate(tmp_path):
     """The real delivery (blockquoted findings, unquoted head) re-read from
-    the recipient's feed is recognised — by the pair marker first, and the
-    fingerprints survive `unquoted` for the cross-source case."""
+    the recipient's feed is recognised — by the pair marker first — and its
+    fingerprints survive `unquoted` (the cross-source scan surface)."""
+    from devcake.domain.orchestrator.feed import unquoted
+    from devcake.domain.orchestrator.markers import (
+        finding_fingerprint, finding_fingerprints)
     pmo, mgr, run = _route_setup(tmp_path)
     assert _apply(mgr, run, [_route()]) == (1, 0)
     body = next(md for pid, md in pmo.comments if pid == "tgt")
+    assert finding_fingerprint({"finding": "finding 0 about the config"}) \
+        in finding_fingerprints(unquoted(body))
     pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
     assert _apply(mgr2, run2, [_route()]) == (0, 0)   # pair dedup precedent
     assert not any(pid == "tgt" for pid, _ in pmo2.comments)

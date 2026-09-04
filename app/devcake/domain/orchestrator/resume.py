@@ -59,6 +59,7 @@ def resumed_after_handoff(mgr: Any, pmo_id: str) -> dict | None:
         return None
     ask = redact(str((last.result or {}).get("summary") or "")).strip()
     return {"mission_type": last.mission_type,
+            "run": last,
             "at": seen_until(last),
             "ended": aware(last.ended_at or last.created_at),
             "ask": ask[:ASK_MAX] + ("…" if len(ask) > ASK_MAX else "")}
@@ -78,12 +79,23 @@ def seen_until(run: Run) -> datetime:
     return aware(run.created_at)
 
 
+def unseen_human_comments(info: dict, entries: list) -> list:
+    """Human comments the hand-off run never saw: the freshness gate's own
+    reading of its watermark (by entry position, so a second comment in the
+    watermark's second still counts), else the timestamp boundary."""
+    # local import: freshness → dispatch → activity_payload → resume
+    from .freshness import entries_after_watermark
+    run = info.get("run")
+    after = (entries_after_watermark(entries, run) if run is not None
+             else [e for e in entries if aware(e.ts) > info["at"]])
+    return [e for e in after
+            if getattr(e, "kind", "comment") == "comment"
+            and not is_devcake_comment(e.body or "")]
+
+
 def banner_lines(info: dict, entries: list) -> list[str]:
     """The ACTIVITY.md banner (precedes the mirror, like the gap banners)."""
-    since = [e for e in entries
-             if getattr(e, "kind", "comment") == "comment"
-             and not is_devcake_comment(e.body or "")
-             and aware(e.ts) > info["at"]]
+    since = unseen_human_comments(info, entries)
     when = info["ended"].astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         f"▶ RESUMED BY A HUMAN — your previous {info['mission_type']} run "

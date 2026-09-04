@@ -58,9 +58,9 @@ def test_no_runs_or_no_handoff_is_not_a_resume():
 
 def test_a_genuine_handoff_is_reported_with_its_ask_and_boundaries():
     wm = {"entry_id": "e9", "ts": (T0 - timedelta(minutes=3)).isoformat()}
-    info = resume.resumed_after_handoff(
-        _mgr(_handoff(mission_type="REVIEW", watermark=wm)), "h")
-    assert info == {"mission_type": "REVIEW",
+    handoff = _handoff(mission_type="REVIEW", watermark=wm)
+    info = resume.resumed_after_handoff(_mgr(handoff), "h")
+    assert info == {"mission_type": "REVIEW", "run": handoff,
                     "at": T0 - timedelta(minutes=3),       # what it had read
                     "ended": T0 + timedelta(hours=1),
                     "ask": "approve the outline?"}
@@ -158,6 +158,21 @@ def test_banner_counts_human_comments_the_run_never_saw():
     assert any("Human comments that run never saw: 2" in ln for ln in lines)
     assert not any("release itself is the answer" in ln for ln in lines)
     assert lines[-1] == ""                              # separates the mirror
+
+
+def test_watermark_entry_decides_by_position_not_second():
+    """Two human comments in the watermark's own second: the one the run
+    saw (the watermark entry) is excluded, the next one counts."""
+    seen = _entry("first, same second", T0)
+    seen.entry_id = "e9"
+    unseen = _entry("second, same second", T0)
+    unseen.entry_id = "e10"
+    run = _handoff(watermark={"entry_id": "e9", "ts": T0.isoformat()})
+    info = resume.resumed_after_handoff(_mgr(run), "h")
+    assert [e.entry_id for e in resume.unseen_human_comments(
+        info, [seen, unseen])] == ["e10"]
+    lines = resume.banner_lines(info, [seen, unseen])
+    assert any("Human comments that run never saw: 1" in ln for ln in lines)
 
 
 def test_banner_prints_the_end_time_in_utc():

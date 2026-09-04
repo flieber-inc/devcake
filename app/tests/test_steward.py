@@ -1124,3 +1124,27 @@ def test_apply_routes_skips_a_finding_already_on_the_recipient(tmp_path):
     stamped = FINDING_MARKER_RE.findall(body)
     assert stamped == [finding_fingerprint({"finding": "finding 1 about the config"})]
     assert sha not in stamped
+
+
+def test_delivery_over_the_inline_ceiling_keeps_fingerprints(
+        tmp_path, monkeypatch):
+    """The ceiling fallback drops finding bodies but never a counted marker;
+    the per-finding fingerprints ride the head so content dedup survives a
+    truncated delivery."""
+    from devcake.domain.orchestrator.markers import (
+        FINDING_MARKER_RE, finding_fingerprint)
+    monkeypatch.setattr(steward, "FEED_INLINE_MAX", 240)
+    pmo, mgr, run = _route_setup(tmp_path)
+    delivered, rejected = _apply(mgr, run, [_route(finding=1),
+                                            _route(finding=2)])
+    assert (delivered, rejected) == (2, 0)
+    body = next(md for pid, md in pmo.comments if pid == "tgt")
+    assert "`devcake:discovery-in:v1 src=T-S step=2`" in body
+    assert "about the config" not in body                 # bodies dropped
+    assert sorted(FINDING_MARKER_RE.findall(body)) == sorted(
+        finding_fingerprint({"finding": f"finding {i} about the config"})
+        for i in (0, 1))
+    # ...and a re-route of either finding is now a content duplicate
+    pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
+    assert _apply(mgr2, run2, [_route(finding=2)]) == (0, 0)
+    assert not any(pid == "tgt" for pid, _ in pmo2.comments)

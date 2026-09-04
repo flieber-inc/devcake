@@ -519,17 +519,20 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                 (step, tgt.key.upper()))
             if not fresh:
                 continue
+            # fingerprints ride the head, next to the pair marker, so the
+            # ceiling fallback below (bodies dropped) keeps them inline
             head = [f"`devcake:discovery-in:v1 src={skey} step={step}`",
                     f"🔎 [{skey} · step {step} · {utcnow():%Y-%m-%d}] — "
                     f"leads, not truths: verify against the source before "
                     f"relying. Full record: `DISCOVERY_{step}.md` on "
-                    f"{skey}."]
+                    f"{skey}.",
+                    " ".join(f"`devcake:finding:v1 sha="
+                             f"{finding_fingerprint(x['entry'])}`"
+                             for x in fresh)]
             body_lines: list[str] = []
             for x in fresh:
                 body_lines += render_entry_lines(
                     [x["entry"]], cap=DISCOVERY_IN_EXCERPT_MAX)
-                body_lines.append(
-                    f"`devcake:finding:v1 sha={finding_fingerprint(x['entry'])}`")
                 if x["because"]:
                     body_lines.append(f"*— steward: {defang(x['because'])}*")
             sections.append("\n\n".join(head + body_lines))

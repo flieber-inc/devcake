@@ -66,6 +66,9 @@ check("the card line states demand, limit, share and the instances sharing it", 
     budgetLine(budgetForInstance(health, "board")),
     "about 250 requests/hour — the tracker publishes no limit",
   );
+  const zero = { pmo_budget: { x: { instances: ["a"], limit: 0, demand_per_hour: { a: 5 } } } };
+  assert.equal(budgetLine(budgetForInstance(zero, "a")),
+    "about 5 requests/hour — the tracker publishes no limit");
 });
 
 check("an unmeasured instance says so instead of showing zero", () => {

@@ -45,8 +45,9 @@ def _fetch_health(root: Path, *, timeout: float = HEALTH_TIMEOUT_S,
                 if exc.code in (401, 403) else "")
         return None, f"the admin proxy answered HTTP {exc.code}{hint}"
     except (OSError, ValueError, http.client.HTTPException) as exc:
-        return None, (f"the admin proxy at {ADMIN_URL} did not answer within "
-                      f"{timeout:g} s ({exc.__class__.__name__}) — stack down?")
+        detail = getattr(exc, "reason", None) or exc
+        return None, (f"the admin proxy at {ADMIN_URL} could not be reached "
+                      f"({exc.__class__.__name__}: {detail}) — stack down?")
     if not isinstance(body, dict):
         return None, "the admin proxy returned something other than the health payload"
     return body, None

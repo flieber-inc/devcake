@@ -49,7 +49,7 @@ export function budgetLine(b) {
   if (!b) return null;
   if (b.perHour == null) return "requests: measuring this connection's demand…";
   const mine = `about ${fmt(b.perHour)} requests/hour`;
-  if (b.limit == null) return `${mine} — the tracker publishes no limit`;
+  if (!b.limit) return `${mine} — the tracker publishes no limit`;
   const share = budgetShare(b);
   const shared = b.sharedWith.length
     ? `, ${fmt(b.totalPerHour)}/hour together with ${b.sharedWith.join(", ")}`

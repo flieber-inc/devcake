@@ -210,8 +210,8 @@ def test_status_says_when_the_budget_is_unavailable(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(
         status_mod, "_fetch_health",
         lambda root, **kw: (None, "the admin proxy at http://127.0.0.1:8080 "
-                            "did not answer within 10 s (ConnectionRefusedError) "
-                            "— stack down?"))
+                            "could not be reached (URLError: [Errno 111] "
+                            "Connection refused) — stack down?"))
     assert cli_main.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "pmo_budget: unavailable (the admin proxy at http://127.0.0.1:8080" in out
@@ -263,10 +263,16 @@ def test_fetch_health_never_raises(monkeypatch, tmp_path):
     body, why = status_mod._fetch_health(tmp_path, timeout=0.5)
     assert body is None and "ADMIN_USER" in why
     _env_with_admin(tmp_path)
-    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")   # would swallow it
+    # a proxy that WOULD answer: an env-honouring opener returns its body
+    # (and hands it the admin password); the loopback call must never see it
+    proxy = _serve_once(b"HTTP/1.0 200 OK\r\nContent-Length: 15\r\n\r\n{\"via\":\"proxy\"}")
+    monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy}")
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy}")
     monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{_free_port()}")
     body, why = status_mod._fetch_health(tmp_path, timeout=0.5)
-    assert body is None and "did not answer" in why and "stack down" in why
+    assert body is None and "could not be reached" in why and "stack down" in why
+    monkeypatch.delenv("http_proxy")
+    monkeypatch.delenv("HTTP_PROXY")
     port = _serve_once(b"HTTP/1.0 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
     monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{port}")
     body, why = status_mod._fetch_health(tmp_path, timeout=2)

@@ -83,13 +83,21 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         # names one repository per child); the app stamps the marker itself
         # below, after defang() has neutralized any marker written in prose
         raw_repo = d.get("repo")
-        if raw_repo not in (None, ""):
+        if isinstance(raw_repo, str) and not raw_repo.strip():
+            raw_repo = None
+        if raw_repo is not None:
             if not isinstance(raw_repo, str):
                 raise ValueError(f"decomposition part {i}: repo must be a card name")
             card, reason = resolve_draft_repo(
                 raw_repo, mgr.instance, repo_names, repo_urls)
             if card is None:
-                raise ValueError(f"decomposition part {i}: {reason}")
+                if steps.DECOMP_CHILD(i) in run.finalized_steps:
+                    # this part was already created on an earlier delivery:
+                    # a config change since must not fail the replay —
+                    # keep the token so the manifest hashes as it did
+                    card = raw_repo.strip().lower()
+                else:
+                    raise ValueError(f"decomposition part {i}: {reason}")
             draft_repos[i] = card
     # Redact agent-generated fields before hashing and create_mission so
     # redelivery and secrets scrubbing stay consistent. Marker syntax in the

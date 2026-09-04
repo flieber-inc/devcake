@@ -113,8 +113,6 @@ Write EXACTLY one of:
   "decomposition": [{{"title": "...", "description": "<standalone — reads as an
   independent mission, no references to siblings or 'this mission'>",
   "priority": "urgent|high|medium|low",
-  "repo": "<the card name of the repository this part's work lands in; omit it
-  when every part inherits the parent's repository>",
   "blocked_by": [<1-based indexes of EARLIER parts this part must not start
   before — omit for independent parts>]}}, ...]}}
   Order the parts so prerequisites come first. Declare blocked_by whenever one

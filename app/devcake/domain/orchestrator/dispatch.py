@@ -313,15 +313,15 @@ def _onboard_repo_options(mgr, primary: str) -> str:
         + "\n".join(lines) + "\n\n"
         "**Cross-repo work must never be one mission.** If completing this "
         "mission requires changes in more than one repository, take the "
-        "high-complexity path: decompose into ONE child per repository, set "
-        "each child's `repo` field to its repository's card name (the "
+        "high-complexity path: decompose into ONE child per repository and "
+        "add `\"repo\": \"<card name>\"` to each child's manifest entry (the "
         "backticked name at the START of each line above; DevCake also "
-        "accepts the repository URL's last path segment), and order them "
+        "accepts the repository URL's last path segment), ordering them "
         "with blocked_by where one repository's change depends on another's. "
         "Only the `repo` field routes — a `devcake-repo:` marker written "
-        "inside a description is neutralized on purpose. "
-        f"A child without a `repo` lands on the default repository "
-        f"(`{default}`).\n\n")
+        "inside a description is neutralized on purpose. A child without a "
+        "`repo` inherits this mission's repository marker when it has one, "
+        f"else lands on the default repository (`{default}`).\n\n")
 
 
 def _reference_repos_note(mgr, primary: str) -> str:

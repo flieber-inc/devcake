@@ -276,7 +276,7 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 
 - **CRITICAL regression fixed:** the A12 label-pagination change nested a paginated labels connection under `teams(filter:)` and blew Linear's ~10k query-complexity budget ("Query too complex", 15560) — every `_team` consumer was down. `_team` now splits into a cheap team-shell query + cursor-paged single-team label reads (live-verified green against the sandbox: 10/10 labels, 35 missions).
 - **PMO repo SET (schema v4.1-shape):** `PMOInstance.default_repo` → ordered `repos: [..]` — first entry is the default for unmarked missions, markers must name a listed repo (unlisted gates), `[]` = per-mission internal repos; sticky-wins semantics preserved; stale `default_repo` shapes refused with a hand-migration hint. SPA: ordered toggle chips on the PMO card.
-- **Repo-aware + multi-clone ONBOARD (founder decision — cross-repo work splits at triage):** multi-repo instances give ONBOARD every set repo as a shallow read-only sibling clone (per-repo read tokens via `extra_repos` in the runspec, non-fatal failures) and a `{repo_options}` playbook section stating the rule: cross-repo work decomposes into one child per repo, each with its own `devcake-repo:` marker + `blocked_by` ordering. EXECUTE/REVIEW keep the one-branch-one-PR contract. Dev images rebuilt lockstep.
+- **Repo-aware + multi-clone ONBOARD (founder decision — cross-repo work splits at triage):** multi-repo instances give ONBOARD every set repo as a shallow read-only sibling clone (per-repo read tokens via `extra_repos` in the runspec, non-fatal failures) and a `{repo_options}` playbook section stating the rule: cross-repo work decomposes into one child per repo, each with its own `repo` field (stamped as a `devcake-repo:` footer by the app) + `blocked_by` ordering. EXECUTE/REVIEW keep the one-branch-one-PR contract. Dev images rebuilt lockstep.
 - **Operator repos on the bundled Gitea:** repo cards offer "gitea (internal)" with a Create-repository modal — the repo lands in the separate `devcake-repos` org (never touched by the per-mission list/sweep) with its full card token set minted and stored automatically.
 - **Reference repos (founder request, same day):** each PMO instance carries an ordered `reference_repos` list (multiple supported) — configured repo cards cloned READ-ONLY into **every** stage's workspace (external and internal-forge missions alike) as consultation material, each with its own read token. Disjoint from the routing set by validation; a `devcake-repo:` marker naming one gates ("read-only context, never a work target"); all four playbooks gain a `{reference_repos}` section naming the clones. SPA: a second chips row on the PMO card, mutually exclusive with the work-repo chips.
 - **Smaller fixes:** Gitea UI quick link on Overview + a persistent Internal forge section (with the link) even when empty; a bulk "Clear data" action for internal repos; Connect-via-OAuth follows the DRAFTED harness (disabled until saved) — grok/codex flows verified (`codex login --device-auth` live-probed on the pinned CLI); claude-code cards explain the paste-token path.
@@ -734,8 +734,10 @@ until that run exists, field evidence below stays operator-self-reported.
   manifest as data (`resolve_draft_repo`: card or unique slug, work repos
   only, rejects as `DEV_BAD_OUTPUT`); the app stamps the footer, so
   `defang()` on Dev prose can no longer eat a routing marker; ONBOARD runs
-  excluded from the sticky repo history. Field receipt: a five-child split
-  whose children all landed on the default repository.
+  excluded from the sticky repo history (a marker or default edit after an
+  unmarked triage now takes effect at the first post-triage step instead of
+  gating). Field receipt: a five-child split whose children all landed on
+  the default repository.
 
 ### Field evidence (receipted)
 

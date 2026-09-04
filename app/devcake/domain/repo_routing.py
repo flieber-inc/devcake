@@ -99,7 +99,9 @@ def resolve_draft_repo(token: str, instance: "PMOInstance",
     or unique URL slug; a work repo of THIS instance, never a reference
     repo — applied to structured data the app stamps itself, so a child's
     routing can never be neutralized with the Dev-written prose around it."""
+    from .orchestrator.markers import defang
     tok = (token or "").strip().lower()
+    shown = defang(token or "")[:40]
     if not tok:
         return None, "empty repo"
     card = tok if tok in repo_names else None
@@ -108,11 +110,11 @@ def resolve_draft_repo(token: str, instance: "PMOInstance",
         if len(cands) == 1:
             card = cands[0]
         elif len(cands) > 1:
-            return None, (f"ambiguous repo {token[:40]!r} — the URL slug "
+            return None, (f"ambiguous repo {shown!r} — the URL slug "
                           f"matches several cards: {', '.join(cands)}; "
                           f"use the card name")
         else:
-            return None, (f"unknown repo {token[:40]!r} — use the card name "
+            return None, (f"unknown repo {shown!r} — use the card name "
                           f"or the repository URL's last path segment; "
                           f"configured: {_cards_with_slugs(repo_names, repo_urls)}")
     if card in (instance.reference_repos or []):

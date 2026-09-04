@@ -1201,7 +1201,6 @@ def test_onboard_runs_never_latch_the_repo(tmp_path):
     default-routed repo_ref must not latch the mission — the first WRITING
     step resolves the marker (field finding: a child routed to the default
     at triage stayed there for every EXECUTE)."""
-    from devcake.domain.orchestrator.manager import MissionManager
     from fakes import FakeForgeRuntime, make_mission_manager
     from devcake.adapters.files.run_store import RunStore
     store = RunStore(tmp_path / "runs")
@@ -1230,4 +1229,3 @@ def test_onboard_runs_never_latch_the_repo(tmp_path):
         assert name is None and "sticky" in reason
     finally:
         rr.resolve_repo = orig
-    assert MissionManager  # imported for the type only

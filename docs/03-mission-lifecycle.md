@@ -164,7 +164,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
   "report_md": "…full review report…",    // REVIEW only
   "decomposition": [                       // ONBOARD 'decomposed' only
     {"title": "…", "description": "…", "priority": "high",
-     "repo": "billing-api",                 // optional: the child's repository card (02 §11)
+     "repo": "billing_api",                 // optional: the child's repository card (02 §11)
      "blocked_by": [1]}                    // optional: earlier-sibling indexes (§1.3)
                                            // parent_ref is NOT in the draft — the app
                                            // supplies create_mission's parent_ref

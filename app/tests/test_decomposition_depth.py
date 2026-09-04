@@ -321,3 +321,21 @@ def test_manifest_hash_is_unchanged_for_drafts_without_repo(tmp_path):
         {"title": "b", "description": "", "priority": "medium", "blocked_by": []},
     ], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     assert first == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_redelivery_does_not_revalidate_parts_already_created(tmp_path):
+    """A config change between deliveries (the card left the instance's
+    repo set) must not fail the replay of a manifest whose parts already
+    exist — the checkpointed part keeps its token and the manifest hashes
+    as it did."""
+    from devcake.domain.orchestrator import steps
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake = _repos_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    payload = {"outcome": "decomposed",
+               "decomposition": [{"title": "a", "repo": "beta"}, {"title": "b"}]}
+    run_coro(decomposition.finalize_decomposition(mgr, run, payload))
+    assert steps.DECOMP_CHILD(1) in run.finalized_steps
+    mgr.instance.repos = ["alpha"]                       # beta left the set
+    run_coro(decomposition.finalize_decomposition(mgr, run, payload))  # replay
+    assert len([x for x in fake.all_missions if "DEVCAKE-CREATED" in x.labels]) == 2

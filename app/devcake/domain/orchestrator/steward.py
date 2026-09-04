@@ -21,7 +21,8 @@ from ..workspaces import WorkspaceUnavailable
 from . import dispatch
 from ..run import Run, utcnow
 from .feed import unquoted
-from .markers import (DISCOVERY_IN_EXCERPT_MAX, FEED_INLINE_MAX, defang,
+from .markers import (finding_fingerprint, finding_fingerprints,
+                      DISCOVERY_IN_EXCERPT_MAX, FEED_INLINE_MAX, defang,
                       discovery_in_keys)
 
 log = logging.getLogger("devcake.missions")
@@ -481,8 +482,10 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                                f"it matters."))
             continue
         existing: set[tuple[str, int]] = set()
+        seen_shas: set[str] = set()
         for en in act.entries:
             existing |= discovery_in_keys(unquoted(en.body))
+            seen_shas |= finding_fingerprints(unquoted(en.body))
         by_pair: dict[tuple[str, int], list[dict]] = {}
         for x in batch:
             by_pair.setdefault((x["src"].key.upper(), x["step"]),
@@ -499,21 +502,38 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                 mgr._audit(src.pmo_id, "discovery_route_duplicate",
                            f"{skey} step {step}→{tgt.key}")
                 continue
+            # content dedup (ADR-0033 addendum): the same finding already on
+            # this recipient — from ANY source — is not delivered twice; the
+            # receipt still records the route so the batch dispositions
+            fresh: list[dict] = []
+            for x in xs:
+                sha = finding_fingerprint(x["entry"])
+                if sha in seen_shas:
+                    mgr._audit(src.pmo_id, "discovery_route_duplicate_content",
+                               f"{skey} step {step}→{tgt.key}: finding "
+                               f"already on the recipient (sha {sha})")
+                    continue
+                seen_shas.add(sha)
+                fresh.append(x)
+            receipts.setdefault(src.pmo_id, set()).add(
+                (step, tgt.key.upper()))
+            if not fresh:
+                continue
             head = [f"`devcake:discovery-in:v1 src={skey} step={step}`",
                     f"🔎 [{skey} · step {step} · {utcnow():%Y-%m-%d}] — "
                     f"leads, not truths: verify against the source before "
                     f"relying. Full record: `DISCOVERY_{step}.md` on "
                     f"{skey}."]
             body_lines: list[str] = []
-            for x in xs:
+            for x in fresh:
                 body_lines += render_entry_lines(
                     [x["entry"]], cap=DISCOVERY_IN_EXCERPT_MAX)
+                body_lines.append(
+                    f"`devcake:finding:v1 sha={finding_fingerprint(x['entry'])}`")
                 if x["because"]:
                     body_lines.append(f"*— steward: {defang(x['because'])}*")
             sections.append("\n\n".join(head + body_lines))
-            landed.extend(xs)
-            receipts.setdefault(src.pmo_id, set()).add(
-                (step, tgt.key.upper()))
+            landed.extend(fresh)
         if not sections:
             continue
         body = "\n\n---\n\n".join(sections)

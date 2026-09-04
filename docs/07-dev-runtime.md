@@ -37,7 +37,9 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
     MISSION.md           # the brief: key/title/meta/labels, FULL description, mission
                          #   attachments (ADR-0014 — every playbook points here)
     ACTIVITY.md          # faithful mirror of the Mission's feed (format: §2);
-                         #   opens with upstream-offer / gap / truncation banners
+                         #   opens with the resumed-by-a-human banner (after a
+                         #   hand-off, 03 §4a) and upstream-offer / gap /
+                         #   truncation banners
                          #   when this mission has decomposition ancestors (ADR-0036)
     upstream/
       {MISSION-KEY}/     # ZERO OR MORE decomposition-ancestor mirrors (ADR-0036 /

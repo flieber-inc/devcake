@@ -1087,3 +1087,40 @@ def test_finalize_steward_failed_leaves_outcome_summary_empty(tmp_path):
     saved = mgr.runs.store.get(run.run_id)
     assert saved.state == "failed"
     assert saved.outcome_summary == ""
+
+
+def test_apply_routes_skips_a_finding_already_on_the_recipient(tmp_path):
+    """ADR-0033 addendum (content dedup): the same finding reaching a
+    recipient from a second source is not delivered again — the fingerprint
+    line of an earlier delivery (any source) is authoritative. The receipt
+    still records the route so the batch dispositions."""
+    from devcake.domain.orchestrator.markers import (
+        FINDING_MARKER_RE, finding_fingerprint)
+    sha = finding_fingerprint({"finding": "Finding 0 about the CONFIG!"})
+    earlier = ("`devcake:discovery-in:v1 src=T-Q step=1`\n"
+               "leads, not truths\n"
+               "- finding 0 about the config\n"
+               f"  `devcake:finding:v1 sha={sha}`\n")
+    pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=[earlier])
+    mgr._discoveries_pending.add("src")
+    audits = []
+    mgr._audit = lambda pid, ev, *a, **kw: audits.append((pid, ev, a))
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 0)     # like the pair dedup: skipped
+    assert not any(pid == "tgt" for pid, _ in pmo.comments)   # nothing new
+    assert any(ev == "discovery_route_duplicate_content" and pid == "src"
+               for pid, ev, _a in audits)
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo))
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+    assert "src" not in mgr._discoveries_pending
+    # a fresh finding from the same batch still lands, stamped with its sha
+    pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[earlier])
+    delivered, rejected = _apply(mgr2, run2, [_route(finding=2)])
+    assert (delivered, rejected) == (1, 0)
+    body = next(md for pid, md in pmo2.comments if pid == "tgt")
+    assert "finding 1 about the config" in body
+    assert "finding 0 about the config" not in body
+    stamped = FINDING_MARKER_RE.findall(body)
+    assert stamped == [finding_fingerprint({"finding": "finding 1 about the config"})]
+    assert sha not in stamped

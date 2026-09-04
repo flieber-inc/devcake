@@ -170,6 +170,27 @@ DISCOVERY_IN_MARKER_RE = re.compile(
 DISCOVERY_IN_EXCERPT_MAX = 700
 
 
+# Per-finding content fingerprint on every delivery (ADR-0033 addendum):
+# the pair dedup above bounds re-delivery of the SAME source batch; this
+# bounds the same FINDING arriving from several sources — the field showed
+# one environment limitation rediscovered by sibling after sibling and
+# routed to dozens of recipients each time.
+FINDING_MARKER_RE = re.compile(r"`devcake:finding:v1 sha=([0-9a-f]{12})`")
+
+
+def finding_fingerprint(entry: dict) -> str:
+    """Stable fingerprint of a finding's substance: the `finding` text,
+    case-folded, whitespace-collapsed, punctuation-light."""
+    import hashlib
+    text = str(entry.get("finding") or "").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
+def finding_fingerprints(unquoted_text: str) -> set[str]:
+    return set(FINDING_MARKER_RE.findall(unquoted_text))
+
+
 def discovery_in_keys(unquoted_text: str) -> set[tuple[str, int]]:
     """(src key, step) pairs delivered to a recipient, parsed from unquoted
     feed text (caller applies feed.unquoted — the IRON RULE call-site

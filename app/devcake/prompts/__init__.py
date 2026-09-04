@@ -176,6 +176,12 @@ evidence; a hand-off without evidence wastes a human's time. Then stop and
 write /workspace/out/result.json EXACTLY as:
 {"schema_version": 1, "outcome": "human_needed", "summary": "<precisely what a
 human must do to unblock this mission, including the exact error you hit>"}
+If ACTIVITY.md opens with a "RESUMED BY A HUMAN" banner, a person released this
+mission after a hand-off — that is the only way a hand-off is released. A human
+comment since then is the answer; without one, the release itself is the answer:
+an approval or decision you asked for is granted, and something you asked to be
+provided should now be there — verify it and continue. Hand off again only if
+the obstacle demonstrably persists; never to ask the same question twice.
 """
 
 # ADR-0033 — appended to ONBOARD/EXECUTE/REVIEW, the result.json authors
@@ -190,7 +196,10 @@ between runs: record exactly what a future colleague working near this code
 would pay to know, and nothing else. They are EXCEPTIONAL, not routine —
 most runs ship none. When your work collides with reality — a fact that
 contradicts the plan, a trap, a surprise other missions in this family must
-know — add it to result.json alongside your other fields:
+know — add it to result.json alongside your other fields. A limitation of
+your OWN run — a credential you lack, a tracker or API you could not reach,
+a mount that was absent — is about this run, not the family's code: it
+belongs in your summary or hand-off, never in `discoveries`.
 "discoveries": [{"finding": "<the fact, stated for a stranger with zero
 session context — no coined terminology, no unanchored references>",
 "evidence": "<the receipt: file paths, exact error text, the reproducing
@@ -552,6 +561,9 @@ nothing is often the right answer.
 - If a finding implies the plan itself is wrong (a mission mooted, a
   decomposition mis-cut), say so in that route's "because" — a human acts
   on topology; you route information, never intent.
+- A finding about the harness or the environment (missing credentials, an
+  API the Dev could not call, an absent mount) describes the run, not the
+  family's work: decline it with reason `environment`; never route it.
 - There is no numeric route budget — your judgment IS the budget
   (discoveries are the system's memory between runs): route the findings
   with the widest consequences and decline the rest.

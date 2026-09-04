@@ -18,7 +18,7 @@ from datetime import datetime, timedelta  # noqa: F401 — datetime is type cont
 from pathlib import Path
 
 from ..model import MissionRef
-from . import board
+from . import board, resume
 from .feed import coalesced_step_files, is_devcake_comment, unquoted
 from .markers import decomposition_parent_ref, discovery_in_keys
 
@@ -566,6 +566,10 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
             # Banners precede the feed mirror so a Dev scanning ACTIVITY.md
             # sees gaps/truncation before the chronological entries.
             lines = banners + lines
+    # a hand-off released by a person is the first thing the Dev must read
+    resumed = resume.resumed_after_handoff(mgr, pmo_id)
+    if resumed is not None:
+        lines = resume.banner_lines(resumed, act.entries) + lines
 
     return {"mission_md": _mission_md(m, mission_lines, document_lines,
                                       blocker_lines,

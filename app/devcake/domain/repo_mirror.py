@@ -129,6 +129,10 @@ class RepoCache:
         # freshness bookkeeping rides monotonic time; synced_at (wall) is for
         # humans on /health only
         self._synced_mono: dict[str, float] = {}
+        # when DevCake last wrote to each mirror's repository (monotonic):
+        # a sync that STARTED before that moment advertised refs which may
+        # predate the write, so its completion must not stamp freshness
+        self._invalidated_at: dict[str, float] = {}
 
     # ── identity / eligibility (pure) ────────────────────────────────────────
 
@@ -313,9 +317,13 @@ class RepoCache:
         drop its freshness so the next dispatch resyncs regardless of
         `sync_max_age_seconds`. The window covers PASSIVE staleness only —
         an own write is known, so it is never served stale (the feed memo's
-        own-write rule, ADR-0003 amendment, applied to mirrors). The ledger
-        row (last-good, health) is untouched; unknown names are a no-op."""
+        rule — our own posts bump a generation — applied to mirrors). The
+        ledger row (last-good, health) is untouched. A sync in flight right
+        now is covered too: the moment is recorded, and `sync_one` refuses
+        to stamp a fetch that started before it (the fetch may have
+        advertised refs from before the write)."""
         physical = self.mirror_name_of(name)
+        self._invalidated_at[physical] = self._monotonic()
         if physical in self._synced_mono:
             self._synced_mono.pop(physical, None)
             log.debug("mirror %s: freshness dropped after an own write", physical)
@@ -370,6 +378,7 @@ class RepoCache:
 
     async def sync_one(self, name: str) -> MirrorStatus:
         """One init-or-fetch. Caller holds the name's lock."""
+        t_start = self._monotonic()
         inst = self.forges.instance(name)
         forge = self.forges.get(name)
         now = datetime.now(timezone.utc)
@@ -522,7 +531,15 @@ class RepoCache:
 
         st = MirrorStatus(ok=True, synced_at=now, attempted_at=now)
         self.ledger[name] = st
-        self._synced_mono[name] = self._monotonic()
+        if self._invalidated_at.get(name, float("-inf")) >= t_start:
+            # an own write landed while this fetch was in flight: the refs
+            # it advertised may predate the write, so this sync is NOT
+            # fresh — the next gate fetches again (one extra fetch, never
+            # a stale serve; `>=` errs on that side)
+            self._invalidated_at.pop(name, None)
+            self._synced_mono.pop(name, None)
+        else:
+            self._synced_mono[name] = self._monotonic()
         return st
 
     async def _local_heads(self, mirror: Path) -> list[str] | None:
@@ -733,6 +750,7 @@ class RepoCache:
         must never keep a ghost /health entry until restart."""
         self.ledger.pop(name, None)
         self._synced_mono.pop(name, None)
+        self._invalidated_at.pop(name, None)
         self._locks.pop(name, None)
         p = self.mirror_path(name)
         if not p.exists():
@@ -767,6 +785,8 @@ class RepoCache:
             self.ledger[new] = self.ledger.pop(old)
         if old in self._synced_mono:
             self._synced_mono[new] = self._synced_mono.pop(old)
+        if old in self._invalidated_at:
+            self._invalidated_at[new] = self._invalidated_at.pop(old)
         lock = self._locks.pop(old, None)
         if lock is not None:
             self._locks[new] = lock

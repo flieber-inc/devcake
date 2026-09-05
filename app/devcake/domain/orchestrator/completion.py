@@ -96,6 +96,13 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
     assert run is not None or mission is not None, (
         "complete_merged needs a Run (finalize path) or a Mission (sweep path)")
     spec = _CAUSES[cause]
+    # the repository just changed under DevCake's hands — its PR is merged,
+    # by the app or found merged — so the mirror's freshness is dropped
+    # FIRST: a dependent child dispatched this very cycle must resync
+    # (own-write invalidation, ADR-0024 item 7). Idempotent; never raises.
+    repo = run.repo_ref if run is not None else (mission.repo or "")
+    if repo:
+        mgr.repo_cache.invalidate(repo)
     with tracer.start_as_current_span("mission.complete") as span:
         span.set_attribute("devcake.mission.key", mission_key)
         span.set_attribute("devcake.cause", str(cause))

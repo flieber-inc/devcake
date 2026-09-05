@@ -244,9 +244,10 @@ class MissionManager:
         try:
             return await finalize.finalize(self, run, payload)
         finally:
-            # the Dev may have pushed to its work repository whatever the
-            # outcome — the next dispatch on it resyncs the mirror
-            # (own-write invalidation, docs/07 §5a)
+            # whatever the outcome, the Dev may have pushed to its work
+            # repository — the next dispatch on it resyncs the mirror
+            # (own-write invalidation, docs/07 §7b). A review or plan run
+            # pushes nothing; one fetch of one card is the belt's price.
             if run.repo_ref:
                 self.repo_cache.invalidate(run.repo_ref)
 

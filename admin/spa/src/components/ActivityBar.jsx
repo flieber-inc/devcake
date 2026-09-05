@@ -28,9 +28,11 @@ export default function ActivityBar() {
     });
   };
   const s = summarizeActivity(payload);
+  // one hue per state: green idle · accent busy · amber waiting ·
+  // red stalled (the only one that pulses) · grey unknown
   const dot = failed ? "bg-neutral-400"
-    : s.state === "stalled" ? "bg-amber-500"
-      : s.state === "busy" ? "bg-accent-500 animate-pulse"
+    : s.state === "stalled" ? "bg-red-600 animate-pulse"
+      : s.state === "busy" ? "bg-accent-500"
         : s.state === "waiting" ? "bg-amber-400"
           : "bg-green-500";
   const line = failed ? "activity unavailable — backend not answering" : s.line;

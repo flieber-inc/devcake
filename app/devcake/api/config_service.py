@@ -170,7 +170,7 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
             body, config=config, dev_types=dev_types, managers=managers,
             reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
             run_store=run_store)
-    with IN_FLIGHT.phase("config.apply", "settings save", expect_s=90,
+    with IN_FLIGHT.phase("config.apply", "settings save", expect_s=300,
                          state="waiting for the poll cycle") as ph:
         async with cycle_lock:
             ph.set(state="applying")

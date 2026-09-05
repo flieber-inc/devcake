@@ -114,6 +114,8 @@ class Services:
             return
         if old in self.poll_rt.poll_degraded:
             self.poll_rt.poll_degraded[new] = self.poll_rt.poll_degraded.pop(old)
+        if old in self.poll_rt.poll_skips:
+            self.poll_rt.poll_skips[new] = self.poll_rt.poll_skips.pop(old)
         for mid, owner in list(self.poll_rt.mission_owner.items()):
             if owner == old:
                 self.poll_rt.mission_owner[mid] = new

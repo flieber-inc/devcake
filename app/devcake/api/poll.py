@@ -19,6 +19,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ..activity import IN_FLIGHT
+from ..security import redact
 from ..adapters.files.owner_store import OwnerStore
 from ..config import intake_blocks_dispatch
 from ..domain import backend_health
@@ -53,6 +54,12 @@ def _claim_missions(mgr: MissionManager, fetched: list,
         owner[m.pmo_id] = mgr.instance_name
         missions.append(m)
     return missions
+
+
+# A poll cycle legitimately contains a dispatch (mirror sync + provision,
+# bounded at DISPATCH_EXPECT_S) and a governed wait for tracker quota; its
+# own bound must not call that "stalled" (docs/11 §0).
+CYCLE_EXPECT_SLACK_S = 360
 
 
 class PollRuntime:
@@ -92,6 +99,7 @@ class PollRuntime:
         # a 5xx) — cleared by its next green segment. Not degraded (that is
         # permanent trouble); the status bar shows "waiting", not "frozen".
         self.poll_skips: dict[str, dict] = {}
+
         # dev_type → reason (ADR-0018). THIS class is the sole writer; every
         # MissionManager holds the same dict object and only reads it, so the
         # refresh below must mutate IN PLACE and never rebind.
@@ -116,7 +124,7 @@ class PollRuntime:
         """Record a transient per-instance skip for the status bar."""
         self.poll_skips[instance] = {
             "at": datetime.now(timezone.utc).isoformat(),
-            "reason": reason,
+            "reason": redact(reason),
             "retry_after_s": (round(float(retry_after), 1)
                               if retry_after is not None else None),
         }
@@ -154,6 +162,8 @@ class PollRuntime:
         live = set(self.managers)
         for name in [n for n in self.poll_degraded if n not in live]:
             del self.poll_degraded[name]
+        for name in [n for n in self.poll_skips if n not in live]:
+            del self.poll_skips[name]
         self.missions_cache[:] = [
             row for row in self.missions_cache
             if row.get("instance") in live]
@@ -262,7 +272,8 @@ class PollRuntime:
         surface in /health `poll_degraded` until a green segment clears them."""
         with tracer.start_as_current_span("poll.cycle") as span, \
                 IN_FLIGHT.phase("poll.cycle", f"cycle {cycle}",
-                                expect_s=self.config.poll_interval_seconds):
+                                expect_s=self.config.poll_interval_seconds
+                                + CYCLE_EXPECT_SLACK_S):
             span.set_attribute("devcake.poll.cycle", cycle)
             try:
                 # a latched repo re-probes every cycle so a transient failure
@@ -327,7 +338,8 @@ class PollRuntime:
                     with tracer.start_as_current_span("poll.instance") as ispan, \
                             IN_FLIGHT.phase(
                                 "poll.instance", mgr.instance_name,
-                                expect_s=self.config.poll_interval_seconds):
+                                expect_s=self.config.poll_interval_seconds
+                                + CYCLE_EXPECT_SLACK_S):
                         ispan.set_attribute("devcake.instance", mgr.instance_name)
                         try:
                             s, c, d, ids = await self.poll_instance(mgr, cache_rows)
@@ -355,6 +367,8 @@ class PollRuntime:
                                         cycle, mgr.instance_name, e, hint)
                         except Exception as e:  # noqa: BLE001 — poll loop guard: a permanent per-instance failure must not starve the remaining instances (audit A1); surfaced via poll_degraded
                             ispan.set_attribute("devcake.outcome", "INSTANCE_ERROR")
+                            # degraded supersedes "waiting" on the status bar
+                            self.poll_skips.pop(mgr.instance_name, None)
                             self.poll_degraded[mgr.instance_name] = (
                                 f"{type(e).__name__}: {str(e)[:200]}")
                             log.exception("poll.cycle %d: instance %s FAILED — "

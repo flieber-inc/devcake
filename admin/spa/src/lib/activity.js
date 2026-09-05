@@ -34,15 +34,20 @@ export function phaseLabel(item) {
   return f ? f(item) : `${item.kind}${item.subject ? ` ${item.subject}` : ""}`;
 }
 
+const DEAD_LOOP_FACTOR = 2;   // no cycle for > interval × factor, nothing in flight
+
 /**
- * Summarise the payload for the bar. `nowMs` is the client clock; elapsed
- * values come from the server so clock skew never invents a stall.
- * state: "idle" | "busy" | "stalled" | "unknown"
+ * Summarise the payload for the bar. Every duration is measured against
+ * the SERVER's clock (`payload.now`, falling back to `nowMs`), so a viewer's
+ * clock skew never invents a stall or hides one.
+ * state: "idle" | "waiting" | "busy" | "stalled" | "unknown"
  */
 export function summarizeActivity(payload, nowMs = Date.now()) {
   if (!payload || typeof payload !== "object") {
     return { state: "unknown", line: "activity unavailable", items: [], skips: [] };
   }
+  const serverNow = Date.parse(payload.now);
+  const ref = Number.isFinite(serverNow) ? serverNow : nowMs;
   const items = (payload.items || []).map((i) => ({
     label: phaseLabel(i),
     elapsed: formatElapsed(i.elapsed_s),
@@ -54,15 +59,28 @@ export function summarizeActivity(payload, nowMs = Date.now()) {
       + (s.retry_after_s != null ? ` (retry after ${Math.round(s.retry_after_s)} s)` : ""),
     at: s.at,
   }));
+  const skipText = skips.length ? ` · ${skips.length} board${skips.length > 1 ? "s" : ""} waiting` : "";
   if (items.length === 0) {
+    // the one frozen state the registry cannot see: a dead poll loop
+    const interval = Number(payload.poll_interval_s);
+    const lastPoll = Date.parse(payload.last_poll_at);
+    if (interval > 0 && Number.isFinite(lastPoll)) {
+      const since = (ref - lastPoll) / 1000;
+      if (since > interval * DEAD_LOOP_FACTOR) {
+        return {
+          state: "stalled",
+          line: `no poll cycle finished for ${formatElapsed(since)} (interval ${formatElapsed(interval)}) and nothing is in flight — the poll loop may be wedged${skipText}`,
+          items, skips,
+        };
+      }
+    }
     let idle = "";
     if (payload.idle_since) {
-      const secs = (nowMs - Date.parse(payload.idle_since)) / 1000;
+      const secs = (ref - Date.parse(payload.idle_since)) / 1000;
       idle = Number.isFinite(secs) ? ` for ${formatElapsed(secs)}` : "";
     }
     const last = (payload.recent || [])[0];
     const lastText = last ? ` · last: ${phaseLabel(last)} in ${formatElapsed(last.elapsed_s)}` : "";
-    const skipText = skips.length ? ` · ${skips.length} board${skips.length > 1 ? "s" : ""} waiting` : "";
     return { state: skips.length ? "waiting" : "idle", line: `idle${idle}${lastText}${skipText}`, items, skips };
   }
   const stalled = items.some((i) => i.overdue);
@@ -71,7 +89,7 @@ export function summarizeActivity(payload, nowMs = Date.now()) {
   const n = items.length;
   return {
     state: stalled ? "stalled" : "busy",
-    line: `${n} in flight — ${head}${more}${stalled ? " · one phase is overdue" : ""}`,
+    line: `${n} in flight — ${head}${more}${stalled ? " · one phase is overdue" : ""}${skipText}`,
     items, skips,
   };
 }

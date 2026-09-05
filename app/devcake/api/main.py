@@ -286,7 +286,9 @@ async def activity_now():
     """In-flight phases + transient poll skips for the admin status bar
     (docs/11 §0). Cheap: no probes, no tracker calls."""
     from .activity import build_activity_payload
-    return build_activity_payload(poll_rt=svc().poll_rt)
+    s = svc()
+    return build_activity_payload(
+        poll_rt=s.poll_rt, poll_interval_s=s.config.poll_interval_seconds)
 
 
 @app.get("/api/v1/missions")

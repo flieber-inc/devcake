@@ -10,15 +10,41 @@ const check = (name, fn) => {
 };
 
 const NOW = Date.parse("2026-01-10T12:00:40Z");
+const SERVER_NOW = "2026-01-10T12:00:40+00:00";
 
 check("idle reads how long, what ran last, and how long that took", () => {
   const s = summarizeActivity({
-    items: [], idle_since: "2026-01-10T12:00:10Z",
+    now: SERVER_NOW, items: [], idle_since: "2026-01-10T12:00:10Z",
     recent: [{ kind: "poll.cycle", subject: "cycle 9", elapsed_s: 1.8 }],
-    poll_skips: {},
+    poll_skips: {}, poll_interval_s: 75, last_poll_at: "2026-01-10T12:00:10+00:00",
   }, NOW);
   assert.equal(s.state, "idle");
   assert.equal(s.line, "idle for 30 s · last: poll cycle 9 in 2 s");
+});
+
+check("durations are measured against the server clock, not the viewer's", () => {
+  const skewed = NOW + 3 * 60 * 1000;                       // laptop 3 min ahead
+  const s = summarizeActivity({
+    now: SERVER_NOW, items: [], idle_since: "2026-01-10T12:00:39Z",
+    recent: [], poll_skips: {},
+  }, skewed);
+  assert.equal(s.line, "idle for 1 s");
+});
+
+check("a dead poll loop reads stalled, never idle", () => {
+  const s = summarizeActivity({
+    now: SERVER_NOW, items: [], idle_since: "2026-01-10T11:50:00Z", recent: [],
+    poll_skips: {}, poll_interval_s: 75, last_poll_at: "2026-01-10T11:50:00+00:00",
+  }, NOW);
+  assert.equal(s.state, "stalled");
+  assert.match(s.line, /no poll cycle finished for 10 m 40 s \(interval 1 m 15 s\)/);
+  assert.match(s.line, /may be wedged/);
+  // a long cycle IN FLIGHT is busy, not a dead loop
+  const busy = summarizeActivity({
+    now: SERVER_NOW, items: [{ kind: "poll.cycle", subject: "cycle 3", elapsed_s: 700, overdue: false }],
+    idle_since: null, recent: [], poll_skips: {}, poll_interval_s: 75, last_poll_at: "2026-01-10T11:50:00+00:00",
+  }, NOW);
+  assert.equal(busy.state, "busy");
 });
 
 check("busy lists the first three phases and counts the rest", () => {
@@ -33,6 +59,14 @@ check("busy lists the first three phases and counts the rest", () => {
   }, NOW);
   assert.equal(s.state, "busy");
   assert.equal(s.line, "4 in flight — polling board · syncing mirrors 212/325 · dispatching T-12 EXECUTE · +1 more");
+  // a waiting board stays on the line while others are busy
+  const withSkip = summarizeActivity({
+    now: SERVER_NOW,
+    items: [{ kind: "poll.instance", subject: "cs", elapsed_s: 4, overdue: false }],
+    idle_since: null, recent: [],
+    poll_skips: { board: { at: "2026-01-10T12:00:30Z", reason: "request budget", retry_after_s: 40 } },
+  }, NOW);
+  assert.match(withSkip.line, /1 in flight — polling cs · 1 board waiting$/);
   assert.deepEqual(s.items.map((i) => i.elapsed), ["4 s", "3 s", "2 s", "1 s"]);
 });
 

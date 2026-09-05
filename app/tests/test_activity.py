@@ -124,3 +124,115 @@ def test_poll_runtime_records_and_clears_transient_skips():
     assert rt.poll_skips["board"]["retry_after_s"] is None
     rt.poll_skips.pop("board", None)                   # what a green segment does
     assert rt.poll_skips == {}
+
+
+# ── the hooks, exercised (review round) ─────────────────────────────────────
+
+def test_cancellation_through_a_phase_finishes_it_and_names_it():
+    import asyncio
+    reg, _ = _registry()
+
+    async def body():
+        with reg.phase("mirror.sync", "3 mirrors"):
+            await asyncio.sleep(30)
+
+    async def main():
+        t = asyncio.ensure_future(body())
+        await asyncio.sleep(0)
+        assert reg.snapshot()["items"][0]["kind"] == "mirror.sync"
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+    asyncio.new_event_loop().run_until_complete(main())
+    assert reg.snapshot()["items"] == []
+    assert reg.snapshot()["recent"][0]["error"] == "CancelledError"
+
+
+def test_connection_write_phase_waits_then_writes_and_finishes_on_a_raise(monkeypatch):
+    import asyncio
+    from devcake.api import connections_service as cs
+    reg, _ = _registry()
+    monkeypatch.setattr(cs, "IN_FLIGHT", reg)
+    lock = asyncio.Lock()
+    seen = []
+
+    async def holder():
+        async with lock:
+            await asyncio.sleep(0.05)
+
+    async def writer():
+        async with cs._cycle(lock, "token copy"):
+            seen.append(reg.snapshot()["items"][0]["detail"]["state"])
+
+    async def main():
+        h = asyncio.ensure_future(holder())
+        await asyncio.sleep(0)
+        w = asyncio.ensure_future(writer())
+        await asyncio.sleep(0.01)
+        item = reg.snapshot()["items"][0]
+        assert item["kind"] == "config.apply" and item["subject"] == "token copy"
+        assert item["detail"]["state"] == "waiting for the poll cycle"
+        await asyncio.gather(h, w)
+        assert seen == ["writing"]
+        assert reg.snapshot()["items"] == []
+        with pytest.raises(RuntimeError):
+            async with cs._cycle(None, "secret write"):
+                raise RuntimeError("boom")
+        assert reg.snapshot()["items"] == []
+    asyncio.new_event_loop().run_until_complete(main())
+
+
+def test_mirror_sync_phase_carries_progress(tmp_path, monkeypatch):
+    from devcake.domain import repo_mirror as rm
+    from test_repo_mirror import R1, R2, make_cache, run_coro
+    reg, _ = _registry()
+    monkeypatch.setattr(rm, "IN_FLIGHT", reg)
+    seen = []
+
+    def script(args):
+        if "fetch" in args:
+            seen.append(reg.snapshot()["items"][0]["detail"])
+        return None
+    cache, _, _ = make_cache(tmp_path, [R1, R2], script=script)
+    assert run_coro(cache.ensure_fresh(["alpha", "beta"])) == (True, {})
+    assert seen[0]["total"] == 2 and seen[0]["done"] in (0, 1)
+    assert reg.snapshot()["items"] == []
+    assert reg.snapshot()["recent"][0]["kind"] == "mirror.sync"
+
+
+def test_poll_skips_are_pruned_and_rekeyed_like_poll_degraded():
+    from devcake.api.poll import PollRuntime
+    rt = PollRuntime.__new__(PollRuntime)
+    rt.poll_skips = {"gone": {"at": "t", "reason": "x", "retry_after_s": None},
+                     "kept": {"at": "t", "reason": "y", "retry_after_s": 5.0}}
+    rt.poll_degraded = {"gone": "revoked"}
+    rt.managers = {"kept": object()}
+    rt.missions_cache = []
+    rt.mission_owner = {}
+    rt.release_stale_ownership = lambda polled: None
+    rt.owner_store = SimpleNamespace(save=lambda m: None)
+    rt.prune_removed_instances()
+    assert set(rt.poll_skips) == {"kept"} and rt.poll_degraded == {}
+    # rename rekey rides the services chokepoint
+    from devcake.api.services import Services
+    svc = Services.__new__(Services)
+    svc.managers = {"kept": SimpleNamespace(instance_name="kept")}
+    svc.stewards = {}
+    svc.poll_rt = rt
+    Services.rekey_pmo_instance(svc, "kept", "renamed")
+    assert set(rt.poll_skips) == {"renamed"}
+
+
+def test_activity_payload_carries_the_poll_interval():
+    from devcake.api.activity import build_activity_payload
+    reg, _ = _registry()
+    out = build_activity_payload(in_flight=reg, poll_interval_s=75)
+    assert out["poll_interval_s"] == 75 and out["poll_skips"] == {}
+    assert build_activity_payload(in_flight=reg)["poll_interval_s"] is None
+
+
+def test_odd_floats_never_break_the_payload():
+    reg, _ = _registry()
+    with reg.phase("pmo.budget.wait", "t/u", wait_s=float("nan"), ratio=float("inf")):
+        text = json.dumps(reg.snapshot(), allow_nan=False)
+    assert "nan" in text and "inf" in text

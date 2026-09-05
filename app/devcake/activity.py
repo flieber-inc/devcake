@@ -7,12 +7,14 @@ poll cycle, a board's segment, a mirror sync with its progress, a forge
 sweep, a dispatch, a finalize, a steward launch, a budget wait, a config
 save waiting out the cycle — each with its start time and, when the phase
 has a natural bound, whether it is overdue. Honest by construction: a
-phase appears only between a real start and a real finish (the same
-context managers that open the tracing spans), never inferred from
-timestamps. Process-local, no persistence, no I/O.
+phase appears only between a real start and a real finish, registered at
+the same chokepoints as the tracing spans (alongside the span where one
+exists), never inferred from timestamps. Process-local, no persistence,
+no I/O.
 """
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -28,6 +30,8 @@ def _iso(ts: float) -> str:
 
 
 def _jsonable(v: Any) -> Any:
+    if isinstance(v, float) and not math.isfinite(v):
+        return str(v)                     # NaN/inf would 500 the endpoint
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
     return str(v)

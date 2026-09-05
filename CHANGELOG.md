@@ -23,9 +23,9 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   waiting out the poll cycle — each with its duration, or how long the app
   has been idle and what ran last. A phase past twice its natural bound is
   marked overdue; a board whose poll segment was skipped for a tracker's
-  quota reserve reads as waiting, not frozen. Fed by a new cheap
-  `GET /api/v1/activity`; phases are registered by the same context managers
-  that open the tracing spans, never inferred.
+  quota reserve reads as waiting, not frozen, and a dead poll loop reads
+  stalled. Fed by a new cheap `GET /api/v1/activity`; phases are registered
+  at the same chokepoints as the tracing spans, never inferred.
 
 ## v0.5.5 (2026-09-05)
 

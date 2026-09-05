@@ -66,7 +66,7 @@ async def _cycle(lock: asyncio.Lock | None, what: str = "connection write"):
     serialization, mirroring `apply_config_patch`. The wait is a visible
     phase: a Save that sits behind a long cycle reads "waiting", not
     "frozen" (docs/11 §0)."""
-    with IN_FLIGHT.phase("config.apply", what, expect_s=90,
+    with IN_FLIGHT.phase("config.apply", what, expect_s=300,
                          state="waiting for the poll cycle") as ph:
         async with (lock if lock is not None else nullcontext()):
             ph.set(state="writing")
@@ -84,7 +84,7 @@ async def put_secret(scope: str, instance: str, field: str, body: dict, *,
     value = body.get("value")
     if not isinstance(value, str) or not value:
         raise HTTPException(422, "value must be a non-empty string")
-    async with _cycle(cycle_lock):
+    async with _cycle(cycle_lock, "secret write"):
         secrets_store.write_connection_secret(scope, instance, field, value)
         if scope == "repo":
             forge_runtime.clear_breaker(instance)
@@ -99,7 +99,7 @@ async def delete_secret(scope: str, instance: str, field: str, *,
                         forge_runtime, reload,
                         cycle_lock: asyncio.Lock | None = None):
     _require_secret_ref(scope, instance, field)
-    async with _cycle(cycle_lock):
+    async with _cycle(cycle_lock, "secret delete"):
         secrets_store.delete_connection_field(scope, instance, field)
         if scope == "repo":
             forge_runtime.clear_breaker(instance)
@@ -233,7 +233,7 @@ async def copy_secrets(body: dict, *, config, forge_runtime, reload,
             raise HTTPException(
                 422, "each target must be {scope: repo|pmo, name: <card>}")
 
-    async with _cycle(cycle_lock):
+    async with _cycle(cycle_lock, "token copy"):
         cards = {"repo": {r.name: r for r in config.repos},
                  "pmo": {p.name: p for p in config.pmos}}
         src_scope, src_name = src["scope"], src["name"]
@@ -456,7 +456,7 @@ async def clear_secrets(body: dict, *, forge_runtime, reload, config,
             raise HTTPException(422, str(e)) from e
         credential_files.append((dev_type, filename))
 
-    async with _cycle(cycle_lock):
+    async with _cycle(cycle_lock, "clear secrets"):
         # ── pause first (if requested) — no deletes yet ─────────────────────
         if pause_intake:
             config.intake_paused = True

@@ -60,7 +60,7 @@ Deliberately span-free besides heartbeats: the watchdog's quiet 10 s scan (its
 
 **Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3), and every app-side consumer of a run message re-extracts it; `TRACEPARENT` rides params into BOTH of a run's containers (provision and harness, ADR-0025), so one trace spans dispatch → provision → harness execution → ingress handling → finalization (or kill). This is the primary debugging view: "show me everything about run X" is one trace ID.
 
-**In-flight registry (docs/11 §0).** The phases the admin's activity bar shows — poll cycle and segment, mirror sync, forge sweep, dispatch, finalize, steward launch, budget wait, config apply — are registered by the same context managers that open the spans above (`devcake.activity.IN_FLIGHT`), so the bar and the traces cannot disagree about what is running; the registry is process-local and never exported.
+**In-flight registry (docs/11 §0).** The phases the admin's activity bar shows — poll cycle and segment, mirror sync, forge sweep, dispatch, finalize, steward launch, budget wait, config apply — are registered at the same chokepoints as the spans above (`devcake.activity.IN_FLIGHT`; alongside the span where one exists, wrapping the whole verb for dispatch, finalize and the steward launch, and without a span for the mirror sync and the forge sweep), so the bar and the traces cannot disagree about what is running; the registry is process-local and never exported.
 
 ## 3. Attribute registry (normative — spelled exactly)
 

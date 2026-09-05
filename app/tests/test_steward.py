@@ -568,7 +568,7 @@ def test_steward_seq_scoped_to_own_instance():
     from devcake.domain.orchestrator import steward as steward_mod
     # the seq computation lives in the shared launch body (ADR-0033) —
     # both flavors inherit the own-instance scoping
-    assert "_run_is_ours" in inspect.getsource(steward_mod._launch_steward)
+    assert "_run_is_ours" in inspect.getsource(steward_mod._launch_steward_inner)
 
 
 def test_activity_payload_marks_unavailable_attachment(tmp_path):

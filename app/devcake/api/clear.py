@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 from opentelemetry import trace
 
+from ..activity import IN_FLIGHT
 from ..adapters.dagu import DaguExecutor
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import INGRESS, Messaging
@@ -453,12 +454,18 @@ async def run_clear_runs(
         # Order poll_rt.lock → dispatch_lock matches the poll loop's own order
         # (run_cycle holds poll_rt.lock, then launch takes dispatch_lock), so
         # there is no lock-ordering inversion / deadlock.
-        async with poll_lock, dispatch_lock:
-            result = await clear_all(
-                store, executor, messaging, runlog,
-                internal_forge=internal_forge,
-                run_manager=run_manager,
-                claims=claims, config=config, repo_cache=repo_cache)
+        # registered like the poll cycle it displaces: a drain plus the
+        # deletes can outlast two poll intervals, and an unregistered lock
+        # hold would read as a wedged loop on the activity bar
+        with IN_FLIGHT.phase("system.clear_runs", "clear runs", expect_s=120,
+                             state="waiting for the poll cycle") as ph:
+            async with poll_lock, dispatch_lock:
+                ph.set(state="clearing")
+                result = await clear_all(
+                    store, executor, messaging, runlog,
+                    internal_forge=internal_forge,
+                    run_manager=run_manager,
+                    claims=claims, config=config, repo_cache=repo_cache)
         missions_cache.clear()
         for mgr in managers.values():
             mgr._grace.clear()

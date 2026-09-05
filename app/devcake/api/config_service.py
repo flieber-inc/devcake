@@ -18,6 +18,7 @@ from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
                       reconcile_managed_pmos, reconcile_reserved_crons,
                       reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
+from ..activity import IN_FLIGHT
 from ..settings_bundle import (BundleError, dry_run_adapters,
                                validate_config_semantics)
 
@@ -164,16 +165,19 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
                              run_store=None,
                              cycle_lock: asyncio.Lock | None = None) -> dict:
     """Serialize the config transaction against an in-flight poll cycle."""
-    if cycle_lock is None:
+    def _apply():
         return _apply_config_patch(
             body, config=config, dev_types=dev_types, managers=managers,
             reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
             run_store=run_store)
-    async with cycle_lock:
-        return _apply_config_patch(
-            body, config=config, dev_types=dev_types, managers=managers,
-            reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
-            run_store=run_store)
+    with IN_FLIGHT.phase("config.apply", "settings save", expect_s=300,
+                         state=("waiting for the poll cycle"
+                                if cycle_lock is not None else "applying")) as ph:
+        if cycle_lock is None:
+            return _apply()
+        async with cycle_lock:
+            ph.set(state="applying")
+            return _apply()
 
 
 def _apply_config_patch(body: dict, *, config, dev_types, managers,

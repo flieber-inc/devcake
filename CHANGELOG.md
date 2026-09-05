@@ -16,6 +16,16 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Added — a backend activity bar.** A discreet, collapsible strip under
+  every admin page shows what the app is doing right now — the poll cycle
+  and segment, a mirror sync with its progress, a forge sweep, a dispatch,
+  a finalize, a steward launch, a wait for tracker quota, a settings save
+  waiting out the poll cycle — each with its duration, or how long the app
+  has been idle and what ran last. A phase past twice its natural bound is
+  marked overdue; a board whose poll segment was skipped for a tracker's
+  quota reserve reads as waiting, not frozen, and a dead poll loop reads
+  stalled. Fed by a new cheap `GET /api/v1/activity`; phases are registered
+  at the same chokepoints as the tracing spans, never inferred.
 - **Changed — DevCake's own writes invalidate the mirror freshness
   window.** With `repo_mirror.sync_max_age_seconds` above zero, dispatches
   reuse a recent mirror sync; now a run finishing on its work repository,

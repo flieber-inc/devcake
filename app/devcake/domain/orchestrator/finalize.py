@@ -15,6 +15,7 @@ from ..run import Run, is_pre_wipe, utcnow
 from . import discovery, steps, transitions
 from .feed import blockquote, post_attachment_comment, stage_of
 from .markers import FEED_INLINE_MAX, REPLY_MARKER
+from ...activity import IN_FLIGHT
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -74,7 +75,19 @@ async def _checkpoint(mgr, run: Run, key: str, fn) -> None:
     mgr.runs.store.save(run)
 
 
+FINALIZE_EXPECT_S = 180     # incl. one governed wait for tracker quota
+
+
 async def finalize(mgr, run: Run, payload: dict) -> None:
+    """Close one run (docs/04 §4). The in-flight phase wraps the whole verb —
+    result handling, harvest, transition, replies — so the status bar shows
+    "finalizing R" including any tracker-quota wait inside."""
+    with IN_FLIGHT.phase("run.finalize", run.run_id, expect_s=FINALIZE_EXPECT_S,
+                         instance=getattr(mgr, "instance_name", "")):
+        return await _finalize(mgr, run, payload)
+
+
+async def _finalize(mgr, run: Run, payload: dict) -> None:
     # Clear-runs wipe generation (docs/10): a run stamped before the last
     # wipe must not post to the PMO or resurrect local records. Saves are
     # already no-ops at RunStore; re-check after every await so a wipe that

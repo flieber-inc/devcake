@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Literal
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
+from ..activity import IN_FLIGHT
 
 if TYPE_CHECKING:
     from ..config import RepoInstance
@@ -334,11 +335,19 @@ class ForgeRuntime:
         concurrent rebuild unregistered, so overlapping sweeps are benign
         last-writer-wins per repo."""
         sem = asyncio.Semaphore(limit)
+        names = list(self.forges)
+        progress = {"done": 0}
 
-        async def _one(name: str) -> None:
+        async def _one(name: str, ph) -> None:
             async with sem:
-                await self.refresh_health(name)
+                try:
+                    await self.refresh_health(name)
+                finally:
+                    progress["done"] += 1
+                    ph.set(done=progress["done"], total=len(names))
 
-        await asyncio.gather(*(_one(n) for n in list(self.forges)))
+        with IN_FLIGHT.phase("forge.sweep", f"{len(names)} repositories",
+                             done=0, total=len(names)) as ph:
+            await asyncio.gather(*(_one(n, ph) for n in names))
         self.last_full_probe_at = datetime.now(timezone.utc)
         return dict(self.health)

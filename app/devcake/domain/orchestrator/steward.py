@@ -21,6 +21,7 @@ from ..workspaces import WorkspaceUnavailable
 from . import dispatch
 from ..run import Run, utcnow
 from .feed import unquoted
+from ...activity import IN_FLIGHT
 from .markers import (finding_fingerprint, finding_fingerprints,
                       DISCOVERY_IN_EXCERPT_MAX, FEED_INLINE_MAX, defang,
                       discovery_in_keys)
@@ -41,6 +42,21 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
     the discovery flavor's family repos (RO clones via the runspec extras).
     Returns None when the workspace base is unusable (AUD-001: a periodic
     steward must skip cleanly, never poison the poll segment)."""
+    with IN_FLIGHT.phase("steward.launch", duty or "relations",
+                         expect_s=dispatch.DISPATCH_EXPECT_S,
+                         instance=getattr(mgr, "instance_name", "")):
+        return await _launch_steward_inner(
+            mgr, dev_type, duty=duty, prompt_text=prompt_text,
+            blocker_work=blocker_work, batches=batches,
+            context_stale=context_stale, context_omit=context_omit)
+
+
+async def _launch_steward_inner(mgr, dev_type: DevType, *, duty: str,
+                                prompt_text: str,
+                                blocker_work: list[dict] | None = None,
+                                batches: list[dict] | None = None,
+                                context_stale=frozenset(),
+                                context_omit=frozenset()) -> Run | None:
     from ..ids import make_run_id
     from ..repo_sourcing import resolved_skill_cards
     repo_name = dispatch.steward_repo(mgr)

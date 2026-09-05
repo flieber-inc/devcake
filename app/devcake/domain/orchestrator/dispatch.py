@@ -33,6 +33,7 @@ from .activity_payload import activity_payload, push_activity_repo
 from ..run import Run, aware, utcnow
 from .feed import is_devcake_comment, stage_of, unquoted
 from .markers import STEP_MARKER
+from ...activity import IN_FLIGHT
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -346,8 +347,22 @@ def _reference_repos_note(mgr, primary: str) -> str:
         + "\n".join(lines) + "\n")
 
 
+DISPATCH_EXPECT_S = 300     # mirror sync + provision on a big board
+
+
 async def dispatch(mgr, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
+    """Gate + provision + launch one run (docs/04 §1). The in-flight phase
+    wraps the whole verb — mirror gate, activity push, launch — so the
+    status bar shows "dispatching X" for as long as a poll segment is."""
+    with IN_FLIGHT.phase("mission.dispatch", f"{mission.key} {mtype.value}",
+                         expect_s=DISPATCH_EXPECT_S,
+                         instance=getattr(mgr, "instance_name", "")):
+        return await _dispatch(mgr, mission, mtype, dev_type)
+
+
+async def _dispatch(mgr, mission: Mission, mtype: MissionType,
+                    dev_type: DevType) -> Run | None:
     missing = missing_referenced_secret_env(dev_type)
     if missing:
         # founder decision 2026-07-16: a referenced-but-unstored secret env

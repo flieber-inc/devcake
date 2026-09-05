@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { TriangleAlert, OctagonAlert } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
+import ActivityBar from "./components/ActivityBar.jsx";
 import OverviewPage, { SETUP_INTERNAL_FORGE_KEY } from "./pages/OverviewPage.jsx";
 import FleetPage from "./pages/FleetPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -279,6 +280,7 @@ export default function App() {
             )}
           </div>
         </main>
+        <ActivityBar />
       </div>
     </div>
     </ConfigDraftProvider>

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from ..activity import IN_FLIGHT
 from ..adapters.files.owner_store import OwnerStore
 from ..config import intake_blocks_dispatch
 from ..domain import backend_health
@@ -86,6 +87,11 @@ class PollRuntime:
         # failure (revoked key, deleted team) skips only that instance's
         # segment; surfaced in /health as `poll_degraded`. Cleared on green.
         self.poll_degraded: dict[str, str] = {}
+        # instance → {at, reason, retry_after_s}: the last poll segment this
+        # instance SKIPPED on transient trouble (a tracker's quota reserve,
+        # a 5xx) — cleared by its next green segment. Not degraded (that is
+        # permanent trouble); the status bar shows "waiting", not "frozen".
+        self.poll_skips: dict[str, dict] = {}
         # dev_type → reason (ADR-0018). THIS class is the sole writer; every
         # MissionManager holds the same dict object and only reads it, so the
         # refresh below must mutate IN PLACE and never rebind.
@@ -104,6 +110,16 @@ class PollRuntime:
         # Host baker heartbeat (None = not observed yet). Transition spans
         # fire from this, not from /health — health only reads.
         self.baker_alive: bool | None = None
+
+    def note_skip(self, instance: str, reason: str,
+                  retry_after: float | None = None) -> None:
+        """Record a transient per-instance skip for the status bar."""
+        self.poll_skips[instance] = {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "reason": reason,
+            "retry_after_s": (round(float(retry_after), 1)
+                              if retry_after is not None else None),
+        }
 
     def next_cycle_id(self) -> int:
         """Advance the shared cycle counter and return the new id."""
@@ -244,7 +260,9 @@ class PollRuntime:
         instance (PMOTransient or a PERMANENT error like a revoked key — audit
         A1) skips only ITS segment, never the whole cycle; permanent failures
         surface in /health `poll_degraded` until a green segment clears them."""
-        with tracer.start_as_current_span("poll.cycle") as span:
+        with tracer.start_as_current_span("poll.cycle") as span, \
+                IN_FLIGHT.phase("poll.cycle", f"cycle {cycle}",
+                                expect_s=self.config.poll_interval_seconds):
             span.set_attribute("devcake.poll.cycle", cycle)
             try:
                 # a latched repo re-probes every cycle so a transient failure
@@ -306,11 +324,15 @@ class PollRuntime:
                 polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids
                 owner_before = dict(self.mission_owner)  # persisted iff changed
                 for mgr in self.managers_in_config_order():
-                    with tracer.start_as_current_span("poll.instance") as ispan:
+                    with tracer.start_as_current_span("poll.instance") as ispan, \
+                            IN_FLIGHT.phase(
+                                "poll.instance", mgr.instance_name,
+                                expect_s=self.config.poll_interval_seconds):
                         ispan.set_attribute("devcake.instance", mgr.instance_name)
                         try:
                             s, c, d, ids = await self.poll_instance(mgr, cache_rows)
                             polled_ok[mgr.instance_name] = ids
+                            self.poll_skips.pop(mgr.instance_name, None)
                             stats = mgr.cycle_stats
                             ispan.set_attribute("devcake.pmo.feed_scan_reads",
                                                 stats.get("feed_scan_reads", 0))
@@ -327,6 +349,8 @@ class PollRuntime:
                             ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
                             hint = (f" (retry after {e.retry_after:.0f}s)"
                                     if getattr(e, "retry_after", None) else "")
+                            self.note_skip(mgr.instance_name, str(e)[:200],
+                                           getattr(e, "retry_after", None))
                             log.warning("poll.cycle %d: instance %s skipped: %s%s",
                                         cycle, mgr.instance_name, e, hint)
                         except Exception as e:  # noqa: BLE001 — poll loop guard: a permanent per-instance failure must not starve the remaining instances (audit A1); surfaced via poll_degraded

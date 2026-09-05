@@ -26,6 +26,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..activity import IN_FLIGHT
 from ..adapters.git import GIT_TIMEOUT_SECONDS, run_git
 from ..security import redact
 
@@ -323,8 +324,9 @@ class RepoCache:
             return False, {n: f"mirror volume: {self.volume_error}"
                            for n in names}
         sem = asyncio.Semaphore(SYNC_CONCURRENCY)
+        progress = {"done": 0}
 
-        async def _one(name: str) -> None:
+        async def _one(name: str, ph) -> None:
             try:
                 async with sem:
                     lock = self._locks.setdefault(name, asyncio.Lock())
@@ -337,8 +339,14 @@ class RepoCache:
             except Exception as e:  # noqa: BLE001 — the gate reports, never raises
                 log.exception("mirror sync of %r raised", name)
                 failures[name] = f"internal: {type(e).__name__}: {str(e)[:120]}"
+            finally:
+                progress["done"] += 1
+                ph.set(done=progress["done"], total=len(names),
+                       failed=len(failures))
 
-        await asyncio.gather(*(_one(n) for n in names))
+        with IN_FLIGHT.phase("mirror.sync", f"{len(names)} mirrors",
+                             done=0, total=len(names), failed=0) as ph:
+            await asyncio.gather(*(_one(n, ph) for n in names))
         return (not failures), failures
 
     # ── sync ─────────────────────────────────────────────────────────────────

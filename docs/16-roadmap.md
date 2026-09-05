@@ -739,6 +739,14 @@ until that run exists, field evidence below stays operator-self-reported.
   gating). Field receipt: a five-child split whose children all landed on
   the default repository.
 
+- **Backend activity bar** (2026-09-05): `devcake.activity.InFlight`
+  registry hooked at the span chokepoints (poll cycle/segment, mirror
+  sync, forge sweep, dispatch, finalize, steward launch, budget wait,
+  config apply) → `GET /api/v1/activity` → `ActivityBar.jsx`. Field
+  receipt: after releasing a large parked backlog the tracker budget sat
+  inside the governor's reserve for seven minutes, polls skipped by design,
+  and the admin looked frozen while it was waiting.
+
 - **Default branch from the repository's HEAD** (2026-09-05, ADR-0024
   addendum): `RepoInstance.default_branch` blank by default = inquire
   HEAD every sync (skill-source path); verify-before-HEAD-move on pins;

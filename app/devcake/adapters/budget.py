@@ -46,6 +46,7 @@ import httpx
 from opentelemetry import trace
 
 from ..ports.pmo import PMOBudgetExceeded, PMOTransient, pmo_call_ctx
+from ..activity import IN_FLIGHT
 
 log = logging.getLogger("devcake.adapters.budget")
 tracer = trace.get_tracer("devcake")
@@ -387,7 +388,11 @@ class RequestBudget:
         if wait < WAIT_SPAN_MIN_S:
             await _sleep(wait)
             return
-        with tracer.start_as_current_span("pmo.budget.wait") as span:
+        with tracer.start_as_current_span("pmo.budget.wait") as span, \
+                IN_FLIGHT.phase("pmo.budget.wait", self.label,
+                                expect_s=wait + 5, wait_s=round(wait, 1),
+                                call_class=cls, instance=instance or "",
+                                reason=why):
             span.set_attribute("devcake.instance", instance or "")
             span.set_attribute("devcake.pmo.call_class", cls)
             span.set_attribute("devcake.pmo.wait_s", round(wait, 3))

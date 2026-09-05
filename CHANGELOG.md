@@ -16,6 +16,17 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Added — a backend activity bar.** A discreet, collapsible strip under
+  every admin page shows what the app is doing right now — the poll cycle
+  and segment, a mirror sync with its progress, a forge sweep, a dispatch,
+  a finalize, a steward launch, a wait for tracker quota, a settings save
+  waiting out the poll cycle — each with its duration, or how long the app
+  has been idle and what ran last. A phase past twice its natural bound is
+  marked overdue; a board whose poll segment was skipped for a tracker's
+  quota reserve reads as waiting, not frozen. Fed by a new cheap
+  `GET /api/v1/activity`; phases are registered by the same context managers
+  that open the tracing spans, never inferred.
+
 ## v0.5.5 (2026-09-05)
 
 Patch release in the v0.5 "Java Lava" line.

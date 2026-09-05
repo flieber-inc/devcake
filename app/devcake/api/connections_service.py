@@ -21,6 +21,8 @@ from ..ports.forge import ForgeError, mission_branch
 from ..ports.pmo import PMOTransient, with_pmo_call
 from ..security import redact
 from .health import reset_health_caches
+from ..activity import IN_FLIGHT
+from contextlib import asynccontextmanager
 
 log = logging.getLogger("devcake.connections")
 
@@ -54,14 +56,21 @@ def _require_harness_var(var: str) -> None:
             422, f"harness var must match ^{HARNESS_VAR_PATTERN}$")
 
 
-def _cycle(lock: asyncio.Lock | None):
+@asynccontextmanager
+async def _cycle(lock: asyncio.Lock | None, what: str = "connection write"):
     """Serialize the write + adapter-graph swap against an in-flight poll
     cycle — the config-PUT precedent (PR #104). The poll loop holds
     `poll_rt.lock` for a whole cycle but suspends at awaits; without this,
     a secret write mid-cycle swaps the graph (or deletes the credential)
     underneath the suspended cycle. None (tests, scripts) = no
-    serialization, mirroring `apply_config_patch`."""
-    return lock if lock is not None else nullcontext()
+    serialization, mirroring `apply_config_patch`. The wait is a visible
+    phase: a Save that sits behind a long cycle reads "waiting", not
+    "frozen" (docs/11 §0)."""
+    with IN_FLIGHT.phase("config.apply", what, expect_s=90,
+                         state="waiting for the poll cycle") as ph:
+        async with (lock if lock is not None else nullcontext()):
+            ph.set(state="writing")
+            yield
 
 
 async def put_secret(scope: str, instance: str, field: str, body: dict, *,

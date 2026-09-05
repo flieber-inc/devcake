@@ -18,6 +18,7 @@ from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
                       reconcile_managed_pmos, reconcile_reserved_crons,
                       reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
+from ..activity import IN_FLIGHT
 from ..settings_bundle import (BundleError, dry_run_adapters,
                                validate_config_semantics)
 
@@ -169,11 +170,14 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
             body, config=config, dev_types=dev_types, managers=managers,
             reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
             run_store=run_store)
-    async with cycle_lock:
-        return _apply_config_patch(
-            body, config=config, dev_types=dev_types, managers=managers,
-            reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
-            run_store=run_store)
+    with IN_FLIGHT.phase("config.apply", "settings save", expect_s=90,
+                         state="waiting for the poll cycle") as ph:
+        async with cycle_lock:
+            ph.set(state="applying")
+            return _apply_config_patch(
+                body, config=config, dev_types=dev_types, managers=managers,
+                reload=reload, repo_cache=repo_cache, rekey_pmo=rekey_pmo,
+                run_store=run_store)
 
 
 def _apply_config_patch(body: dict, *, config, dev_types, managers,

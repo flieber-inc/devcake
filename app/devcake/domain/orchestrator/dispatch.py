@@ -527,6 +527,22 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         log.warning("dispatch of %s omitting unavailable context %s",
                     live.key, ", ".join(sorted(omit_cards)))
 
+    # The branch a Dev merges from and targets: the card's pin, else what
+    # the mirror resolved from the repository's HEAD (the gate above just
+    # synced it). A blank that is still unresolved must never reach the
+    # playbook as `origin/` — deferred HERE, before the activity snapshot
+    # push, exactly like the mirror gate (no container, no attempt burned,
+    # no snapshot commit per deferred cycle; retried next cycle).
+    default_branch = resolved_default_branch(mgr, repo)
+    if not default_branch:
+        mgr.blocked_reasons[live.pmo_id] = (
+            f"repository {repo_name}: default branch unresolved — the "
+            f"card's Branch is blank and the mirror has not resolved the "
+            f"repository's HEAD yet; dispatch deferred")
+        log.warning("dispatch of %s deferred — %s", live.key,
+                    mgr.blocked_reasons[live.pmo_id])
+        return None
+
     # ADR-0014 D4 + ADR-0036: build the activity payload (own folder +
     # upstream/{KEY}/ ancestor mirrors) BEFORE the snapshot push so a
     # strict upstream gap can fail-closed with no attempt burned. The
@@ -578,20 +594,6 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             return text
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        # The branch a Dev merges from and targets: the card's pin, else what
-        # the mirror resolved from the repository's HEAD (the gate above just
-        # synced it). A blank that is still unresolved must never reach the
-        # playbook as `origin/` — defer like the mirror gate does (no
-        # container, no attempt burned; retried next cycle).
-        default_branch = resolved_default_branch(mgr, repo)
-        if not default_branch:
-            mgr.blocked_reasons[live.pmo_id] = (
-                f"repository {repo_name}: default branch unresolved — the "
-                f"card's Branch is blank and the mirror has not resolved the "
-                f"repository's HEAD yet; dispatch deferred")
-            log.warning("dispatch of %s deferred — %s", live.key,
-                        mgr.blocked_reasons[live.pmo_id])
-            return None
         ref_note = _reference_repos_note(mgr, repo_name)
         ident = _identifying_prompt(mgr, dev_type)
         prompt = {

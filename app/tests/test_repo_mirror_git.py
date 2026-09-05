@@ -451,3 +451,21 @@ def test_empty_checkout_detects_a_dangling_head_clone(rig):
     sh("git", "clone", "-q", f"file://{mirror}", str(bad))
     assert not (bad / "a.txt").exists()
     assert empty_checkout(str(mirror), str(bad)) is True
+
+
+def test_blank_card_on_an_empty_remote_bootstraps_main(tmp_path):
+    """Real git: an empty origin advertises no HEAD symref; a blank card's
+    mirror takes `main` and syncs green (the first commit creates it)."""
+    from devcake.domain.repo_mirror import BOOTSTRAP_BRANCH
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    sh("git", "init", "-q", "-b", "trunk", cwd=origin)          # no commits
+    inst = LocalRepo.model_construct(name="alpha", url=str(origin),
+                                     default_branch="")
+    cache = RepoCache(AppConfig(pmos=[], repos=[]), Forges([inst]),
+                      root=tmp_path / "mirrors")
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok, st.detail
+    head = (cache.mirror_path("alpha") / "HEAD").read_text().strip()
+    assert head == f"ref: refs/heads/{BOOTSTRAP_BRANCH}"
+    assert cache.resolved_branch("alpha") == ""          # nothing to serve yet

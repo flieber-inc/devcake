@@ -779,7 +779,7 @@ export default function ReposPage({ onHealthChange }) {
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
                 <Field label="Branch" hint="Empty = the repository's default"
-                  help="The branch Devs branch from and PRs target. Empty = the repository's own default, asked from its HEAD before every dispatch (one extra round trip per sync). A value pins it and is verified at every sync: a pin the repository does not have fails the mirror sync loud and defers this repo's missions until fixed. Discover fills the field with the branch the repository names right now — review on Save.">
+                  help="The branch Devs branch from and PRs target. Empty = the repository's own default, asked from its HEAD before every dispatch (one extra round trip per sync); an empty repository with no branches yet bootstraps on `main`. A value pins it and is verified at every sync: a pin the repository does not have fails the mirror sync loud and defers this repo's missions until fixed. Discover fills the field with the branch the repository names right now — review on Save.">
                   <span className="flex items-center gap-2">
                     <Input value={repo.default_branch || ""}
                       aria-label={`Repository ${repo.name || idx + 1} branch`}
@@ -792,7 +792,10 @@ export default function ReposPage({ onHealthChange }) {
                     <span className={`mt-1 block text-xs ${discoverResult[repo.name].ok ? "text-neutral-500 dark:text-neutral-400" : "text-red-600 dark:text-red-400"}`}
                       data-testid={`discover-branch-result-${repo.name}`}>
                       {discoverResult[repo.name].ok
-                        ? `repository default: ${discoverResult[repo.name].branch}${discoverResult[repo.name].pinned && discoverResult[repo.name].pin_exists === false ? " — the previous pin did not exist" : ""}`
+                        ? (discoverResult[repo.name].pinned && discoverResult[repo.name].pin_exists !== false
+                          && (repo.default_branch || "").trim() && (repo.default_branch || "").trim() !== discoverResult[repo.name].branch
+                          ? `pin ${repo.default_branch.trim()} kept — repository default: ${discoverResult[repo.name].branch}`
+                          : `repository default: ${discoverResult[repo.name].branch}${discoverResult[repo.name].pinned && discoverResult[repo.name].pin_exists === false ? " — the previous pin did not exist" : ""}`)
                         : `✗ ${discoverResult[repo.name].error || "discovery failed"}`}
                     </span>
                   )}
@@ -994,6 +997,63 @@ export default function ReposPage({ onHealthChange }) {
             )}
             <div className="flex justify-end">
               <Button kind="primary" onClick={() => setBulkApplyResult(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {bulkDiscover && (
+        <Modal onClose={() => setBulkDiscover(null)}>
+          <h4 className="mb-2 text-base font-semibold tracking-tight">
+            Discovered default branches
+          </h4>
+          <div className="space-y-3 text-sm" data-testid="discover-branches-summary">
+            {bulkDiscover.filled.length === 0 && bulkDiscover.kept.length === 0
+              && bulkDiscover.failed.length === 0 ? (
+              <p className="text-neutral-600 dark:text-neutral-300">
+                No saved repository cards to ask.
+              </p>
+            ) : null}
+            {bulkDiscover.filled.length > 0 && (
+              <div>
+                <p className="font-medium">Filled into the draft (review on Save):</p>
+                <ul className="mt-1 space-y-1">
+                  {bulkDiscover.filled.map((f) => (
+                    <li key={`f-${f.name}`} className="text-green-700 dark:text-green-400">
+                      <span className="font-mono font-semibold">{f.name}</span>
+                      {" — "}{f.from ? `pin ${f.from} did not exist → ${f.to}` : `blank → ${f.to}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {bulkDiscover.kept.length > 0 && (
+              <div>
+                <p className="font-medium">Pins kept (the repository has them):</p>
+                <ul className="mt-1 space-y-1">
+                  {bulkDiscover.kept.map((k) => (
+                    <li key={`k-${k.name}`} className="text-neutral-600 dark:text-neutral-300">
+                      <span className="font-mono font-semibold">{k.name}</span>
+                      {" — "}{k.pin === k.branch ? `pin ${k.pin} is the repository default` : `pin ${k.pin} kept; repository default is ${k.branch}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {bulkDiscover.failed.length > 0 && (
+              <div>
+                <p className="font-medium">Could not ask:</p>
+                <ul className="mt-1 space-y-1">
+                  {bulkDiscover.failed.map((f) => (
+                    <li key={`x-${f.name}`} className="text-red-600">
+                      <span className="font-mono font-semibold">{f.name}</span>
+                      {" — "}{f.error}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button kind="primary" onClick={() => setBulkDiscover(null)}>Close</Button>
             </div>
           </div>
         </Modal>

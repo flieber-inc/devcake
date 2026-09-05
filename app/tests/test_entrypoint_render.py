@@ -975,3 +975,17 @@ def test_clone_extra_repos_removes_an_empty_checkout_and_records_it(tmp_path):
     assert (dest_parent / "beta").exists()
     assert any("cloned read-only from mirror" in n for n in notes)
     assert failures == []
+
+
+def test_primary_clone_belt_refuses_an_empty_checkout_of_a_mirror_with_branches():
+    """The work-repo clone runs the same belt as the siblings, before the
+    origin rewrite, and fails the run as DEV_FORGE — a Dev never starts on
+    an empty tree of a non-empty repository. Source-level pin: the
+    provision path needs a live forge to drive end to end."""
+    src = ENTRYPOINT.read_text()
+    i = src.index("if mirror_path and empty_checkout(mirror_path, str(workdir)):")
+    j = src.index("origin must be the REAL forge")
+    assert i < j
+    belt = src[i:j]
+    assert '"DEV_FORGE"' in belt
+    assert "mirror clone produced an empty checkout" in belt

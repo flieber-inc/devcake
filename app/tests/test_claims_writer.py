@@ -376,17 +376,27 @@ def test_blank_branch_on_a_populated_remote_whose_clone_fails_is_unlistable(toke
     w = ClaimsWriter(_cfg(card), git=flaky)
     assert run_coro(w.list_json_names("nb")) is None
 
-    inits = []
+    # real git clones an EMPTY repository with exit 0 and an unborn HEAD
+    # named by the image's init.defaultBranch — the blank card's first push
+    # must create the bootstrap branch, so HEAD is re-pointed at it
+    seen = []
 
     async def empty(args, cwd=None, env=None):
+        seen.append(list(args))
         if args[:1] == ["clone"]:
-            return _git_result(128, stderr="warning: You appear to have "
-                                           "cloned an empty repository")
-        if args[:2] == ["ls-remote", "--heads"]:
-            return _git_result(0, stdout="")
-        if args[:1] == ["init"]:
-            inits.append(list(args))
+            return _git_result(0, stderr="warning: You appear to have "
+                                         "cloned an empty repository.")
+        if args[:2] == ["rev-parse", "--verify"]:
+            return _git_result(128)                    # unborn HEAD
+        if args[:2] == ["rev-parse", "--abbrev-ref"]:
+            return _git_result(0, stdout="main\n")
+        if args[:2] == ["diff", "--cached"]:
+            return _git_result(1)
         return _git_result(0)
     w2 = ClaimsWriter(_cfg(card), git=empty)
     assert run_coro(w2.list_json_names("nb")) == []
-    assert inits == [["init", "-b", "main"]]
+    assert ["symbolic-ref", "HEAD", "refs/heads/main"] in seen
+    seen.clear()
+    run_coro(w2.commit("nb", creates={".claims/x.json": "{}\n"}, deletes=[],
+                       message="devcake:claims:v1 run=r1 n=1"))
+    assert ["push", "origin", "HEAD:refs/heads/main"] in seen

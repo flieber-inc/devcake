@@ -23,8 +23,10 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   pinned cards too: a pin the repository does not have fails that card's
   sync with both names, and missions on it defer until the card is fixed —
   previously the sync went green over a dangling HEAD and Devs received an
-  empty clone. The Dev's environment and playbook, branch protection and
-  claims pushes use the resolved branch. Repositories gains a Branch field
+  empty clone. The Dev's environment and playbook and branch protection use the
+  resolved branch; the claims writer clones a blank card's repository at
+  its own HEAD. An empty repository with no branches yet bootstraps on
+  `main` for a blank card (a pin keeps its name). Repositories gains a Branch field
   with a **Discover** button and a section action that fills every card
   from the repositories' HEADs (blank fields and missing pins; existing
   pins are kept). The provision step refuses an empty checkout of a

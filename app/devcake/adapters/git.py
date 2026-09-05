@@ -57,6 +57,11 @@ async def run_git(args: list[str], *, cwd: Path | None = None,
         return GitResult(127, "", f"git spawn failed: {type(e).__name__}: {e}")
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        # a cancelled caller (a bounded bulk probe past its deadline) must
+        # not leave git running: kill, then re-raise the cancellation
+        proc.kill()
+        raise
     except TimeoutError:
         proc.kill()
         # reap; communicate after kill returns promptly

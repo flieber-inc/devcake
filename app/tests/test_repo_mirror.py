@@ -95,6 +95,11 @@ def make_cache(tmp_path, repos, *, internal=(), lfs=False, max_age=0,
         if "get-url" in args:
             name = Path(args[1]).name.removesuffix(".git")
             inst = forges.instance(name)
+            if inst is None:
+                # a dedicated skill source: no forge adapter, no clone user
+                src = next((x for x in (cfg.skill_sources or [])
+                            if x.name == name), None)
+                return GitResult(0, (src.url if src else "") + "\n", "")
             user = FakeForge.descriptor.clone_user
             url = RepoCache._origin_url(inst.url, user)
             return GitResult(0, url + "\n", "")
@@ -790,18 +795,29 @@ def test_empty_branch_probe_error_keeps_stderr_and_latches_auth(tmp_path):
 
 def test_resolved_branch_missing_from_fetch_fails_loud(tmp_path):
     """symbolic-ref succeeds on a DANGLING ref — a probed default the fetch
-    never brought over (unborn HEAD / changed mid-sync) must not ledger a
-    green sync whose clones would check out nothing."""
+    never brought over (changed mid-sync) must not ledger a green sync
+    whose clones would check out nothing. Zero branches is the one
+    exception: an empty repository advertising an unborn HEAD bootstraps
+    on that name (ADR-0024 addendum)."""
+    heads = {"out": "refs/heads/master\n"}
+
     def script(args):
         if args[:1] == ["ls-remote"]:
             return GitResult(0, "ref: refs/heads/main\tHEAD\nabc\tHEAD\n", "")
         if "rev-parse" in args:
             return GitResult(1, "", "")
+        if "for-each-ref" in args:
+            return GitResult(0, heads["out"], "")
         return None
-    cache, _, _ = _skill_cache(tmp_path, script=script)
+    cache, calls, _ = _skill_cache(tmp_path, script=script)
     st = run_coro(cache.sync_one("shelf"))
     assert not st.ok
-    assert "no such branch" in st.detail
+    assert "no such branch" in st.detail and "master" in st.detail
+    assert not any("symbolic-ref" in c for c in calls)
+    heads["out"] = ""                                    # an empty repository
+    st = run_coro(cache.sync_one("shelf"))
+    assert st.ok
+    assert any("symbolic-ref" in c and c[-1] == "refs/heads/main" for c in calls)
 
 
 def test_delete_mirror_pops_bookkeeping_even_without_a_dir(tmp_path):
@@ -911,18 +927,18 @@ def test_pin_on_an_empty_repository_syncs_green(tmp_path):
 
 
 def test_probed_default_the_fetch_never_brought_fails(tmp_path):
-    """Blank card, remote HEAD names `main`, but the fetch brought no such
-    branch (unborn HEAD advertisement): fail, name the branches."""
+    """Blank card, remote HEAD names `main`, the mirror has branches but
+    not that one (the default changed mid-sync): fail, name the branches."""
     def script(args):
         if "rev-parse" in args:
             return GitResult(1, "", "")
         if "for-each-ref" in args:
-            return GitResult(0, "", "")
+            return GitResult(0, "refs/heads/master\nrefs/heads/dev\n", "")
         return None
     cache, calls, _ = make_cache(tmp_path, [R1], script=script)
     st = run_coro(cache.sync_one("alpha"))
     assert not st.ok
-    assert "remote's HEAD names 'main'" in st.detail
+    assert "remote's HEAD names 'main'" in st.detail and "master, dev" in st.detail
     assert not any("symbolic-ref" in c for c in calls)
 
 
@@ -1021,3 +1037,93 @@ def test_dispatch_defers_while_a_blank_card_is_unresolved(tmp_path):
                                 mgr.dev_types["senior-dev"]))
     assert run is None and not launched
     assert "default branch unresolved" in mgr.blocked_reasons[m.pmo_id]
+
+
+def test_blank_card_on_an_empty_repository_bootstraps_main(tmp_path):
+    """No HEAD symref and no branches = an empty repository: the mirror's
+    HEAD takes the bootstrap name so the first push creates it (a fresh
+    work repo or notebook must not be a permanent deferral)."""
+    from devcake.domain.repo_mirror import BOOTSTRAP_BRANCH
+
+    def script(args):
+        if args[:2] == ["ls-remote", "--symref"]:
+            return GitResult(0, "", "")                  # nothing advertised
+        if "rev-parse" in args:
+            return GitResult(1, "", "")
+        if "for-each-ref" in args:
+            return GitResult(0, "", "")
+        return None
+    cache, calls, _ = make_cache(tmp_path, [R1], script=script)
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok, st.detail
+    assert any("symbolic-ref" in c and c[-1] == f"refs/heads/{BOOTSTRAP_BRANCH}"
+               for c in calls)
+    # a populated repository that advertises no symref still asks for a pin
+    def populated(args):
+        if args[:2] == ["ls-remote", "--symref"]:
+            return GitResult(0, "", "")
+        if "for-each-ref" in args:
+            return GitResult(0, "refs/heads/master\n", "")
+        return None
+    cache2, _, _ = make_cache(tmp_path / "b", [R1], script=populated)
+    st = run_coro(cache2.sync_one("alpha"))
+    assert not st.ok and "set Branch on the card" in st.detail
+
+
+def test_changed_pin_invalidates_the_freshness_window(tmp_path):
+    """Within sync_max_age_seconds a re-pinned card must resync: the env
+    and playbook would carry the new pin while the mirror serves the old."""
+    pinned = Repo(name="alpha", url="https://gitlab.com/o/alpha.git",
+                  default_branch="main", fake_token="rw-a")
+    cache, calls, forges = make_cache(tmp_path, [pinned], max_age=3600)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    n_fetch = sum(1 for c in calls if "fetch" in c)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n_fetch     # window held
+    pinned.default_branch = "release"
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n_fetch + 1  # resynced
+    assert (cache.mirror_path("alpha") / "HEAD").read_text().strip() \
+        == "ref: refs/heads/release"
+
+
+def test_pinned_card_first_fetch_fails_then_succeeds(tmp_path):
+    """A failed first fetch returns before the HEAD block: red ledger, no
+    resolvable HEAD, nothing last-good; the next sync resolves normally."""
+    pinned = Repo(name="alpha", url="https://gitlab.com/o/alpha.git",
+                  default_branch="main", fake_token="rw-a")
+    state = {"fail": True}
+
+    def script(args):
+        if "fetch" in args and state["fail"]:
+            return GitResult(128, "", "fatal: unable to access")
+        return None
+    cache, calls, _ = make_cache(tmp_path, [pinned], script=script)
+    st = run_coro(cache.sync_one("alpha"))
+    assert not st.ok
+    assert not cache.has_last_good("alpha")
+    assert cache.resolved_branch("alpha") == "main"      # the pin, unverified
+    state["fail"] = False
+    assert run_coro(cache.sync_one("alpha")).ok
+    (cache.mirror_path("alpha") / "refs" / "heads").mkdir(parents=True, exist_ok=True)
+    (cache.mirror_path("alpha") / "refs" / "heads" / "main").write_text("a" * 40)
+    assert cache.has_last_good("alpha")
+
+
+def test_backed_skill_source_with_a_blank_backing_card_resolves_its_head(tmp_path):
+    """A repo-backed skill source with no pin of its own reads the backing
+    card's resolved branch; its own pin still wins."""
+    from devcake.config import SkillSource
+    cache, _, _ = make_cache(tmp_path, [R1])
+    cache.config.skill_sources = [
+        SkillSource(name="skills", url="", backed_by="alpha"),
+        SkillSource(name="pinned", url="", backed_by="alpha",
+                    default_branch="stable"),
+    ]
+    p = cache.mirror_path("alpha")
+    (p / "refs" / "heads").mkdir(parents=True)
+    (p / "HEAD").write_text("ref: refs/heads/trunk\n")
+    (p / "refs" / "heads" / "trunk").write_text("a" * 40 + "\n")
+    assert cache.resolved_branch("skills") == "trunk"
+    assert cache.resolved_branch("pinned") == "stable"
+    assert cache.has_last_good("skills")

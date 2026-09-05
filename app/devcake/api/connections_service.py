@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 
-from ..adapters.git import GIT_TIMEOUT_SECONDS
 import logging
 import re
 from contextlib import nullcontext
@@ -796,7 +795,9 @@ async def apply_forge_protection_bulk(*, config, forge_runtime,
         if f is None:
             continue
         branch = _protection_branch(inst, repo_cache)
-        if branch and not await _repo_looks_unprotected(f, branch):
+        if not branch:
+            continue          # unresolved blank card: not a member (docs/11)
+        if not await _repo_looks_unprotected(f, branch):
             continue
         # Reuse the single chokepoint so audit + cache reset stay one path
         # (an unresolved blank card refuses there, with the same wording).
@@ -841,37 +842,49 @@ async def discover_forge_branch(name: str, *, config, repo_cache):
     return out
 
 
-DISCOVER_CONCURRENCY = 4      # git subprocesses, same bound as the mirror sync
+# The bulk probe must answer inside the admin proxy's window (60 s): every
+# card that finished is reported, the rest read "timed out" and the operator
+# presses Discover on those cards individually.
+BULK_DISCOVER_DEADLINE_S = 45
 
 
-async def discover_forge_branches(*, config, repo_cache):
+async def discover_forge_branches(*, config, repo_cache,
+                                  deadline_s: float = BULK_DISCOVER_DEADLINE_S):
     """Discover default branches for every saved repo card (section ⋯ menu).
-    Bounded-parallel, per-card outcomes, one card's failure never aborts
-    the rest; partial results are still results. The SPA fills blank
-    Branch fields and replaces pins the repository lacks, and keeps pins
-    that exist (reported as such)."""
-    sem = asyncio.Semaphore(DISCOVER_CONCURRENCY)
+    Bounded-parallel (the mirror sync's bound), per-card outcomes, one
+    card's failure never aborts the rest, and an overall deadline under the
+    proxy window: finished cards are results, unfinished ones are reported
+    as timed out (their git children are killed on cancellation). The SPA
+    fills blank Branch fields and replaces pins the repository lacks, and
+    keeps pins that exist (reported as such)."""
+    from ..domain.repo_mirror import SYNC_CONCURRENCY
+    sem = asyncio.Semaphore(SYNC_CONCURRENCY)
     results: dict[str, dict] = {}
 
     async def _one(inst) -> None:
         async with sem:
             try:
-                r = await asyncio.wait_for(
-                    discover_forge_branch(inst.name, config=config,
-                                          repo_cache=repo_cache),
-                    timeout=GIT_TIMEOUT_SECONDS + 5)
+                r = await discover_forge_branch(inst.name, config=config,
+                                                repo_cache=repo_cache)
             except HTTPException as e:
                 r = {"ok": False, "repo_name": inst.name, "error": str(e.detail)}
-            except asyncio.TimeoutError:
-                r = {"ok": False, "repo_name": inst.name,
-                     "error": "timed out asking the repository"}
             except Exception as e:  # noqa: BLE001 — per-card contract: text, never a 500
                 r = {"ok": False, "repo_name": inst.name,
                      "error": _branch_probe_error(e)}
         results[inst.name] = {k: v for k, v in r.items() if k != "repo_name"}
 
-    await asyncio.gather(*(_one(inst) for inst in config.repos
-                           if inst.configured))
+    cards = [inst for inst in config.repos if inst.configured]
+    tasks = [asyncio.ensure_future(_one(inst)) for inst in cards]
+    if tasks:
+        _done, pending = await asyncio.wait(tasks, timeout=deadline_s)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    for inst in cards:
+        results.setdefault(inst.name, {
+            "ok": False,
+            "error": "timed out — press Discover on this card to retry"})
     return {"ok": True, "results": results}
 
 

@@ -379,3 +379,40 @@ def test_discover_branch_single_and_bulk(tmp_path, monkeypatch):
     from devcake.settings_bundle import _audit_path
     rows = _audit_path().read_text() if _audit_path().exists() else ""
     assert "forge_branch_discovered" in rows and "master" in rows
+
+
+def test_discover_branches_answers_inside_the_deadline_with_partial_results(
+        tmp_path, monkeypatch):
+    """A black-holed remote must not hold the bulk probe past the proxy
+    window: finished cards are results, the rest read timed out, and the
+    slow probe is cancelled."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import connections_service as cs
+    fast = RepoInstance(name="fast", url="https://github.com/o/f")
+    slow = RepoInstance(name="slow", url="https://github.com/o/s")
+    cancelled = []
+
+    class Cache:
+        def resolved_branch(self, name):
+            return ""
+
+        async def remote_default_branch(self, name):
+            if name == "slow":
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    cancelled.append(name)
+                    raise
+            return "master"
+
+        async def remote_head(self, name):
+            return "0" * 40
+
+    out = _run(cs.discover_forge_branches(
+        config=AppConfig(repos=[fast, slow]), repo_cache=Cache(),
+        deadline_s=0.3))
+    assert out["results"]["fast"] == {"ok": True, "pinned": False,
+                                      "branch": "master"}
+    assert out["results"]["slow"]["ok"] is False
+    assert "timed out" in out["results"]["slow"]["error"]
+    assert cancelled == ["slow"]

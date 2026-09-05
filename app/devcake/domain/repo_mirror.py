@@ -33,6 +33,14 @@ log = logging.getLogger("devcake.mirror")
 
 SYNC_CONCURRENCY = 4     # git subprocesses, not HTTP probes — lower than the
 #                          forge sweep's PROBE_CONCURRENCY on purpose
+# A remote HEAD/ref probe is one round trip: a human pressed a button (the
+# connection test, Discover) or the sync is about to fetch anyway. Far
+# below the fetch timeout so a black-holed host cannot hold a bulk probe.
+PROBE_TIMEOUT_S = 30
+# A blank card on an EMPTY repository has no HEAD to inherit: the mirror's
+# HEAD (and so the first push, by the Dev or the claims writer) takes this
+# name — the same literal the claims bootstrap uses.
+BOOTSTRAP_BRANCH = "main"
 
 # Auth wording that latches the per-repo forge breaker. Pinned mirror of the
 # Dev-side clone_error_class markers (workspace/clone.py) MINUS
@@ -246,6 +254,14 @@ class RepoCache:
         if mono is None:
             return False
         max_age = self.config.repo_mirror.sync_max_age_seconds
+        inst = self.forges.instance(name) or self._skill_source(name)
+        pin = ((getattr(inst, "default_branch", "") or "").strip()
+               if inst is not None else "")
+        if pin and self._head_branch(self.mirror_path(name)) != pin:
+            # the card's pin changed under a freshness window: the env and
+            # playbook would carry the new pin while the mirror still serves
+            # the old branch — resync, never serve a stale HEAD
+            return False
         if max_age == 0:
             # a sync that COMPLETED after the caller asked satisfies "sync
             # before every dispatch" — this is what lets concurrent waiters
@@ -401,10 +417,19 @@ class RepoCache:
                                   + (" (timeout)" if r.timed_out else ""))
             branch = _symref_head_branch(r.stdout)
             if not branch:
-                return await fail(
-                    "default branch: the card's branch is empty and the "
-                    "remote's HEAD does not name one (empty repository or "
-                    "detached HEAD) — set Branch on the card")
+                heads = await self._local_heads(p)
+                if heads is None:
+                    return await fail("could not list the mirror's branches")
+                if heads:
+                    return await fail(
+                        "default branch: the card's branch is empty and the "
+                        "remote's HEAD does not name one (detached HEAD, or "
+                        "a server that omits the symref) — set Branch on "
+                        "the card")
+                # an EMPTY repository (no HEAD symref, no branches): there
+                # is no default to inherit yet — the mirror's HEAD takes the
+                # bootstrap name so the first push creates that branch
+                branch = BOOTSTRAP_BRANCH
         # Verify BEFORE the HEAD move: symbolic-ref succeeds on a DANGLING
         # ref, and a green ledger over a dangling HEAD is exactly the silent
         # empty checkout this guards against. A failed verification leaves
@@ -416,7 +441,9 @@ class RepoCache:
                             "--quiet", f"refs/heads/{branch}^{{commit}}"])
         if r.returncode != 0:
             heads = await self._local_heads(p)
-            if heads or probed:
+            if heads is None:
+                return await fail("could not list the mirror's branches")
+            if heads:
                 shown = ", ".join(heads[:5]) + (", …" if len(heads) > 5 else "")
                 if pin:
                     return await fail(
@@ -447,13 +474,14 @@ class RepoCache:
         self._synced_mono[name] = self._monotonic()
         return st
 
-    async def _local_heads(self, mirror: Path) -> list[str]:
-        """Branch names the bare mirror holds (for failure wording only —
-        never a network call on the failure path)."""
+    async def _local_heads(self, mirror: Path) -> list[str] | None:
+        """Branch names the bare mirror holds; None when git could not list
+        them (never silently "zero heads"). Local — no network on the
+        failure path."""
         r = await self.git(["-C", str(mirror), "for-each-ref",
                             "--format=%(refname)", "refs/heads"])
         if r.returncode != 0:
-            return []
+            return None
         return [line.strip().removeprefix("refs/heads/")
                 for line in (r.stdout or "").splitlines() if line.strip()]
 
@@ -489,7 +517,7 @@ class RepoCache:
             raise RuntimeError("repository URL is empty")
         inst, url, _pin = target
         r = await self.git(["ls-remote", "--symref", url, "HEAD"],
-                           env=self._git_env(inst))
+                           env=self._git_env(inst), timeout=PROBE_TIMEOUT_S)
         if r.returncode != 0:
             detail = redact(" ".join((r.stderr or r.stdout or "").split()))
             raise RuntimeError((detail[-300:] or "ls-remote failed")
@@ -501,29 +529,17 @@ class RepoCache:
         mirror-INELIGIBLE cards (bundled Gitea), whose `tree_head` has no
         mirror to read (PLAN_MEMORY §3.6). One `ls-remote` with the card's
         read token via askpass; None on any failure."""
-        pin = ""
-        backing = self.mirror_name_of(name)
-        if backing != name:
-            # repo-backed skill source: the BACKING card supplies remote,
-            # clone user, and token — but the SOURCE's branch pin (when
-            # set) still names the ref, so a bad pin fails THIS probe
-            # instead of riding the backing card's default to a false green
-            src = self._skill_source(name)
-            pin = (getattr(src, "default_branch", "") or "").strip()
-            name = backing
-        inst = self.forges.instance(name)
-        forge = self.forges.get(name)
-        if inst is None or forge is None:
-            inst, forge = self._skill_source(name), None
-        if inst is None or not (inst.url or "").strip():
+        # a repo-backed skill source's OWN pin (when set) still names the
+        # ref, so a bad pin fails THIS probe instead of riding the backing
+        # card's default to a false green (_remote_probe_target returns it)
+        target = self._remote_probe_target(name)
+        if target is None:
             return None
-        url = inst.url.strip()
-        clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
-                      if forge is not None else self.clone_user_of(inst.forge))
-        url = self._origin_url(url, clone_user)
+        inst, url, pin = target
         branch = pin or (inst.default_branch or "").strip()
         ref = f"refs/heads/{branch}" if branch else "HEAD"
-        r = await self.git(["ls-remote", url, ref], env=self._git_env(inst))
+        r = await self.git(["ls-remote", url, ref], env=self._git_env(inst),
+                           timeout=PROBE_TIMEOUT_S)
         if r.returncode != 0 or not (r.stdout or "").strip():
             return None
         return r.stdout.split()[0]

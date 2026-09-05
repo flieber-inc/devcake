@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from ..adapters.git import run_git
+from ..domain.repo_mirror import BOOTSTRAP_BRANCH
 from ..ports.claims import ClaimsNotebooks
 
 log = logging.getLogger("devcake.claims")
@@ -115,6 +116,17 @@ class ClaimsWriter:
         if r.returncode != 0:
             await self._empty_or_unlistable(dest, url=url, branch=branch,
                                             env=env, clone=r)
+        elif not branch:
+            # git clones an EMPTY repository with exit 0 and an unborn HEAD
+            # named by the local `init.defaultBranch` — a blank card's first
+            # push must create the bootstrap branch, not whatever the image
+            # defaults to
+            head = await self.git(["rev-parse", "--verify", "--quiet",
+                                   "HEAD^{commit}"], cwd=dest, env=env)
+            if head.returncode != 0:
+                await self._run(["symbolic-ref", "HEAD",
+                                 f"refs/heads/{BOOTSTRAP_BRANCH}"],
+                                cwd=dest, env=env)
         return dest
 
     async def _current_branch(self, dest: Path, env: dict) -> str:
@@ -168,8 +180,8 @@ class ClaimsWriter:
         # empty-init so the first commit can push the branch.
         dest.mkdir(parents=True)
         # a blank card on an EMPTY remote has no default to inherit: the
-        # bootstrap branch is the literal `main` the first push creates
-        for args in (["init", "-b", branch or "main"],
+        # bootstrap branch is the one the first push creates
+        for args in (["init", "-b", branch or BOOTSTRAP_BRANCH],
                      ["remote", "add", "origin", url]):
             await self._run(args, cwd=dest, env=env)
 
@@ -289,7 +301,8 @@ class ClaimsWriter:
             # pinned: push to the pin; blank: HEAD is whatever the clone (or
             # the bootstrap init) checked out — push it by name so an
             # empty-remote bootstrap creates the branch the init named
-            target = branch or (await self._current_branch(dest, env)) or "main"
+            target = (branch or (await self._current_branch(dest, env))
+                      or BOOTSTRAP_BRANCH)
             await self._run(
                 ["push", "origin", f"HEAD:refs/heads/{target}"],
                 cwd=dest, env=env)

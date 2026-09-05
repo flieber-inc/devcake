@@ -87,6 +87,11 @@ def make_cache(tmp_path, repos, *, internal=(), lfs=False, max_age=0,
         if args[:1] == ["init"]:
             # the fake must materialize the dir — sync_one branches on it
             Path(args[-1]).mkdir(parents=True, exist_ok=True)
+        if "symbolic-ref" in args and args[-2] == "HEAD":
+            # like real git: HEAD is a file the resolver reads back
+            mirror = Path(args[args.index("-C") + 1])
+            mirror.mkdir(parents=True, exist_ok=True)
+            (mirror / "HEAD").write_text(f"ref: {args[-1]}\n")
         if "get-url" in args:
             name = Path(args[1]).name.removesuffix(".git")
             inst = forges.instance(name)

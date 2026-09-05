@@ -118,7 +118,10 @@ def test_has_last_good_true_when_only_packed_refs(tmp_path):
     p = cache.mirror_path("alpha")
     p.mkdir(parents=True)
     (p / "refs" / "heads").mkdir(parents=True)
-    # packed-refs only — no loose heads (post-gc shape)
+    # packed-refs only — no loose heads (post-gc shape); HEAD survives gc
+    # and must name the packed branch: last-good = "HEAD names a branch
+    # that is there" (ADR-0024 addendum)
+    (p / "HEAD").write_text("ref: refs/heads/main\n")
     (p / "packed-refs").write_text(
         "# pack-refs with: peeled fully-peeled sorted\n"
         f"{'a' * 40} refs/heads/main\n"

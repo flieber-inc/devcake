@@ -16,7 +16,12 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
-- **Added — a backend activity bar.** A discreet, collapsible strip under
+## v0.5.6 (2026-09-05)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.6).
+
+- **Added — a backend activity bar** (#396). A discreet, collapsible strip under
   every admin page shows what the app is doing right now — the poll cycle
   and segment, a mirror sync with its progress, a forge sweep, a dispatch,
   a finalize, a steward launch, a wait for tracker quota, a settings save
@@ -27,7 +32,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   stalled. Fed by a new cheap `GET /api/v1/activity`; phases are registered
   at the same chokepoints as the tracing spans, never inferred.
 - **Changed — DevCake's own writes invalidate the mirror freshness
-  window.** With `repo_mirror.sync_max_age_seconds` above zero, dispatches
+  window** (#397). With `repo_mirror.sync_max_age_seconds` above zero, dispatches
   reuse a recent mirror sync; now a run finishing on its work repository,
   a mission completing on a merged pull request (merged by the app or
   found merged), a claims push to a notebook, or a Clear pruning the
@@ -37,7 +42,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   window covers passive staleness only, and a Dev's mid-run pulls always
   go to the real forge.
 - **Fixed — a settings save that waited out a long poll cycle came back
-  as a proxy 504 although the app applied it.** The admin proxy now waits
+  as a proxy 504 although the app applied it** (#397). The admin proxy now waits
   up to five minutes on API calls, so a slow-but-successful write is
   reported as what it was.
 

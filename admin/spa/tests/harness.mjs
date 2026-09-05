@@ -64,6 +64,29 @@ export async function checked(name, fn, detail = "") {
   }
 }
 
+// A predicate over DOM the page decorates AFTER a later fetch lands (a
+// select whose option labels gain their stored-token suffix once the
+// presence check answers) is read again until it holds or the budget is
+// spent: a one-shot read races the decoration and fails only on a slow
+// runner. The last predicate error, if any, becomes the failure detail.
+export async function checkedEventually(name, fn, { timeout = 8000, every = 150 } = {}) {
+  const deadline = Date.now() + timeout;
+  let lastErr = "";
+  for (;;) {
+    try {
+      if (await fn()) { check(name, true); return; }
+      lastErr = "";
+    } catch (e) {
+      lastErr = String(e).split("\n")[0];
+    }
+    if (Date.now() >= deadline) {
+      check(name, false, `still false after ${timeout} ms${lastErr ? ` — ${lastErr}` : ""}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, every));
+  }
+}
+
 export function skip(name, why) {
   skips += 1;
   console.log(`  - ${name} (skipped: ${why})`);

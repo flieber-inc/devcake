@@ -343,7 +343,11 @@ A UI change is done when you have personally seen:
    to as-found) to prove the save-revert regression; run it against
    stacks whose config you own. New interactions get
    real predicates added here (`checked(name, fn)` — never `check(name,
-   true)` after a bare wait), not just screenshots. CI runs the full
+   true)` after a bare wait), not just screenshots; a predicate over
+   text the page decorates after a later fetch (a stored-token suffix,
+   a presence-driven disabled state) uses `checkedEventually(name, fn)`,
+   which re-reads until it holds, so a slow runner cannot turn a
+   one-shot read into a flake. CI runs the full
    suite (`npm run check:ui`) against the compose-backed admin on
    `:8080` after hello dispatch + forge/PMO contract batteries (founder
    REVIEW_LEDGER item 9 — CI-minutes cost accepted). Local operators

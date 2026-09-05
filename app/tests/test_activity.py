@@ -255,6 +255,14 @@ def test_a_container_is_overdue_only_when_no_child_is_within_its_bound():
     assert [i["overdue"] for i in items] == [True, True]
     reg.finish(child)
     assert reg.snapshot()["items"][0]["overdue"] is True
+    # a save parked on the poll lock is waiting FOR the cycle, not working
+    # inside it — it never shields a wedged cycle
+    save = reg.start("config.apply", "settings save", expect_s=300,
+                     state="waiting for the poll cycle")
+    assert reg.snapshot()["items"][0]["overdue"] is True
+    save.set(state="applying")
+    assert reg.snapshot()["items"][0]["overdue"] is False
+    reg.finish(save)
     reg.finish(cycle)
     # a segment inside a cycle is a container too; a leaf never shields a leaf
     seg = reg.start("poll.instance", "board", expect_s=10)

@@ -81,6 +81,15 @@ check("an overdue phase makes the bar stalled and says so", () => {
   assert.equal(s.items[0].overdue, true);
 });
 
+check("a clear-runs in progress is named, with its state", () => {
+  const s = summarizeActivity({
+    items: [{ kind: "system.clear_runs", subject: "clear runs", elapsed_s: 12, overdue: false, detail: { state: "clearing" } }],
+    idle_since: null, recent: [], poll_skips: {},
+  }, NOW);
+  assert.equal(s.state, "busy");
+  assert.match(s.line, /clearing runs — clearing/);
+});
+
 check("a skipped poll segment reads as waiting, not frozen", () => {
   const s = summarizeActivity({
     items: [], idle_since: "2026-01-10T12:00:35Z", recent: [],

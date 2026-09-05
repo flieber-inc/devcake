@@ -29,6 +29,9 @@ OVERDUE_FACTOR = 2.0        # elapsed > expect_s × factor ⇒ overdue
 # bound has passed AND no later-started phase is still within its bound:
 # while a child is working, the parent is working.
 CONTAINERS = frozenset({"poll.cycle", "poll.instance"})
+# A phase parked on the poll lock is not working inside the cycle — it is
+# waiting for it — so it never shields the cycle (detail `state` value).
+WAITING_FOR_CYCLE = "waiting for the poll cycle"
 
 
 def _iso(ts: float) -> str:
@@ -121,7 +124,9 @@ class InFlight:
         def shielded(p: Phase) -> bool:
             return p.kind in CONTAINERS and any(
                 q.started_mono > p.started_mono and q.kind not in CONTAINERS
-                and q.expect_s and not own_overdue(q) for q in ordered)
+                and q.expect_s and not own_overdue(q)
+                and q.detail.get("state") != WAITING_FOR_CYCLE
+                for q in ordered)
 
         items = []
         for p in ordered:

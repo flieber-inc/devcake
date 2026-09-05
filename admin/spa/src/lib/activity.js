@@ -1,4 +1,4 @@
-// The status bar's reading of GET /api/v1/activity (docs/11 §0): what the
+// The status bar's reading of GET /api/v1/activity (docs/11 §0a): what the
 // app is doing right now, or how long it has been idle. Pure — covered by
 // tests/activity_helpers.mjs.
 
@@ -12,6 +12,7 @@ const KIND_LABEL = {
   "steward.launch": (i) => `launching the steward (${i.subject})`,
   "pmo.budget.wait": (i) => `waiting for tracker quota${i.detail?.wait_s != null ? ` (${Math.round(i.detail.wait_s)} s)` : ""}`,
   "config.apply": (i) => `${i.subject}${i.detail?.state ? ` — ${i.detail.state}` : ""}`,
+  "system.clear_runs": (i) => `clearing runs${i.detail?.state ? ` — ${i.detail.state}` : ""}`,
 };
 
 function progress(i) {

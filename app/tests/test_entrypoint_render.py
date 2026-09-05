@@ -667,7 +667,10 @@ def test_clone_extra_repos_mirror_entries_file_url_depth_and_origin_rewrite():
     extras = [{"name": "beta", "url": "https://gitlab.com/o/beta.git",
                "clone_user": "oauth2", "mirror_path": "/mirrors/beta.git"}]
     notes = ep.clone_extra_repos(extras, Path("/tmp/ws/repo"), runner=runner)
-    (clone_cmd, tok, askpass), (seturl_cmd, _, _) = calls
+    # the empty-checkout belt adds read-only probes; the contract under test
+    # is the clone and the origin rewrite
+    (clone_cmd, tok, askpass), = [c for c in calls if c[0][:2] == ["git", "clone"]]
+    (seturl_cmd, _, _), = [c for c in calls if "set-url" in c[0]]
     assert clone_cmd[:4] == ["git", "clone", "-c",
                              "lfs.url=file:///mirrors/beta.git"]
     assert clone_cmd[4:6] == ["--depth", "1"]
@@ -741,7 +744,7 @@ def test_clone_memory_repos_uses_card_name_not_url_slug(tmp_path):
           "clone_user": "x-access-token", "mirror_path": "/mirrors/nb.git"}],
         dest, runner=runner)
     assert dest.is_dir()
-    clone_cmd = calls[0]
+    clone_cmd = next(c for c in calls if c[:2] == ["git", "clone"])
     assert clone_cmd[-1] == str(dest / "nb")
     assert "notebook" not in clone_cmd[-1]
     assert any("memory/nb" in n for n in notes)
@@ -924,3 +927,51 @@ def test_memory_clone_failures_collected_and_strict_is_fatal(tmp_path):
         [{"name": "nb", "detail": "x", "mirror": False, "entry": {}}]) is None
     # extras keep their non-fatal contract (no failures list at all)
     assert "extra" not in [f.get("label") for f in fails]
+
+
+def test_clone_extra_repos_removes_an_empty_checkout_and_records_it(tmp_path):
+    """A mirror with branches whose HEAD names a missing one clones an
+    EMPTY tree with exit 0: the belt removes the stub, notes why, and records
+    a failure (so a strict memory mount fires); an empty repository (zero
+    heads) is cloned empty as a legitimate state."""
+    dest_parent = tmp_path / "repo"
+
+    class R:
+        def __init__(self, rc=0, stdout="", stderr=""):
+            self.returncode, self.stdout, self.stderr = rc, stdout, stderr
+
+    def make_runner(heads):
+        def runner(cmd, capture_output, text, env):
+            if cmd[:2] == ["git", "clone"]:
+                Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+                (Path(cmd[-1]) / ".git").mkdir(exist_ok=True)
+                return R(0)
+            if "rev-parse" in cmd:
+                return R(1)                                   # no HEAD commit
+            if "for-each-ref" in cmd:
+                return R(0, stdout=heads)
+            return R(0)
+        return runner
+
+    extras = [{"name": "beta", "url": "https://gitlab.com/o/beta.git",
+               "clone_user": "oauth2", "mirror_path": "/mirrors/beta.git"}]
+    failures = []
+    notes = ep.clone_extra_repos(extras, dest_parent,
+                                 runner=make_runner("refs/heads/master\n"))
+    assert not (dest_parent / "beta").exists()
+    assert any("empty checkout" in n for n in notes)
+    # memory mounts share the belt and record the failure for strict mode
+    mem_failures = []
+    ep.clone_memory_repos(
+        [{"name": "nb", "url": "https://github.com/acme/notebook.git",
+          "clone_user": "x", "mirror_path": "/mirrors/nb.git"}],
+        tmp_path / "memory", runner=make_runner("refs/heads/master\n"),
+        failures=mem_failures)
+    assert mem_failures and "empty checkout" in mem_failures[0]["detail"]
+    assert mem_failures[0]["mirror"] is True
+    # zero heads: legitimately empty, kept
+    notes = ep.clone_extra_repos(extras, dest_parent,
+                                 runner=make_runner(""))
+    assert (dest_parent / "beta").exists()
+    assert any("cloned read-only from mirror" in n for n in notes)
+    assert failures == []

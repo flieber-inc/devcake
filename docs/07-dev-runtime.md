@@ -130,7 +130,7 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `DEVCAKE_MODEL` | 2 | Per-Dev-Type model pin; empty = harness default. |
 | `DEVCAKE_SEQ` | 2 | Step number (transcript naming `{seq}_{type}.md`). |
 | `DEVCAKE_REPO_URL` | 2 | Clone URL (credential-free; auth via helper, §5). |
-| `DEVCAKE_DEFAULT_BRANCH` | 2 | The resolved work repo's `default_branch` (from that `RepoInstance` — not a singular `config.repo`). Present in the runspec for playbooks/spec; the shared entrypoint itself may not read it. |
+| `DEVCAKE_DEFAULT_BRANCH` | 2 | The resolved work repo's branch — the card's pin, else the branch the mirror resolved from the repository's HEAD (`RepoCache.resolved_branch`; `02` `RepoInstance`). Present in the runspec for playbooks/spec; nothing in the shared entrypoint reads it, and a blank card that is still unresolved defers the dispatch instead of rendering an empty name. |
 | `DEVCAKE_CLONE_USER` | 2 | Credential-in-URL user for the https clone (from the forge descriptor, `06-forge-adapter.md` §3a — `x-access-token` / `oauth2`). |
 | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` | 2 | The Dev's git identity (from the forge descriptor). |
 | `DEVCAKE_FORGE_CLI_ENVS` | 2 | Comma-joined env-var names the entrypoint mirrors `DEVCAKE_FORGE_TOKEN` into for the forge CLI (from the descriptor's `cli_token_envs`, e.g. `GH_TOKEN`). |
@@ -400,6 +400,8 @@ health probe. The ONE sanctioned sharing is a repo-backed skill source
 (ADR-0039): the operator declares `backed_by: <repo card>` on the skill
 source and its reads ride that card's mirror; the runtime never infers
 sharing from equal URLs.
+
+A sync resolves the mirror's HEAD before it moves it: a blank card asks the remote which branch its HEAD names (`ls-remote --symref`), a pinned card names it, and either way the branch must have arrived in the mirror — a pin the repository does not have fails that card's sync with both names in the reason (missions on it defer; Overview alerts), so a `file://` clone can never check out nothing from a non-empty repository. An empty repository (zero branches) keeps its pin: the first commit is still to come. The provision step carries the same belt — a reference clone that checked nothing out of a mirror that has branches is removed and noted (a strict memory mount fails the run), and the work-repo clone fails as `DEV_FORGE` rather than start a Dev on an empty tree.
 
 ## 8. Building a new Dev image (checklist)
 

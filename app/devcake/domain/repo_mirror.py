@@ -149,33 +149,31 @@ class RepoCache:
                  and name not in self.forges.internal)
                 or self._skill_source(name) is not None)
 
-    def has_last_good(self, name: str) -> bool:
-        """Open-mode stale_cache precondition (ADR-0035 / PLAN_MEMORY §3.5).
-
-        True only when a prior successful sync left branch content — the
-        in-process ledger recorded a success, or the on-disk bare mirror
-        still has heads (loose ``refs/heads/*`` or a ``packed-refs``
-        heads line — survives process restart and ADR-0024 offline
-        ``git gc``). A bare `git init` dir alone (fetch never succeeded)
-        is False so callers omit rather than proceeding on empty heads.
-        Do NOT use ``mirror_path.is_dir`` as a stand-in: that is true
-        after a failed first sync too.
-        """
-        name = self.mirror_name_of(name)
-        st = self.ledger.get(name)
-        if st is not None and st.synced_at is not None:
-            return True
-        if name in self._synced_mono:
-            return True
-        mirror = self.mirror_path(name)
-        heads = mirror / "refs" / "heads"
+    @staticmethod
+    def _head_branch(mirror: Path) -> str:
+        """The branch a bare mirror's HEAD names ("" when detached, unborn
+        file, or unreadable). Disk truth — survives process restart."""
         try:
-            if heads.is_dir() and any(heads.iterdir()):
+            text = (mirror / "HEAD").read_text(errors="replace").strip()
+        except OSError:
+            return ""
+        prefix = "ref: refs/heads/"
+        return text[len(prefix):].strip() if text.startswith(prefix) else ""
+
+    @staticmethod
+    def _ref_exists(mirror: Path, branch: str) -> bool:
+        """``refs/heads/<branch>`` present as a loose ref or a packed-refs
+        line (after offline ``git gc``, ADR-0024, heads may live only in
+        packed-refs). No subprocess: callers run on the request path."""
+        if not branch:
+            return False
+        try:
+            if (mirror / "refs" / "heads" / branch).is_file():
                 return True
         except OSError:
             return False
-        # After offline `git gc` (ADR-0024), heads may live only in packed-refs.
         packed = mirror / "packed-refs"
+        want = f"refs/heads/{branch}"
         try:
             if not packed.is_file():
                 return False
@@ -183,13 +181,45 @@ class RepoCache:
                 line = line.strip()
                 if not line or line.startswith("#") or line.startswith("^"):
                     continue
-                # "<sha> <ref>" — any refs/heads/* counts as branch content
                 parts = line.split()
-                if len(parts) >= 2 and parts[1].startswith("refs/heads/"):
+                if len(parts) >= 2 and parts[1] == want:
                     return True
         except OSError:
             return False
         return False
+
+    def has_last_good(self, name: str) -> bool:
+        """Open-mode stale_cache precondition (ADR-0035 / PLAN_MEMORY §3.5).
+
+        True only when the on-disk bare mirror's HEAD names a branch that
+        is actually there — the one predicate that decides whether a
+        ``file://`` clone checks anything out. A bare `git init` dir (fetch
+        never succeeded), a mirror whose HEAD dangles (the card pinned a
+        branch the repository lacks), or a branch pruned since the last
+        good sync are all False, so callers omit rather than serving an
+        empty tree as "last known good". Do NOT use ``mirror_path.is_dir``
+        or the in-process ledger as a stand-in: both are true after a
+        sync that left nothing servable.
+        """
+        mirror = self.mirror_path(self.mirror_name_of(name))
+        return self._ref_exists(mirror, self._head_branch(mirror))
+
+    def resolved_branch(self, name: str) -> str:
+        """The branch a Dev, a PR, a protection probe or a claims push must
+        use for this card: the card's pin when it has one, else the branch
+        the mirror's HEAD names once a sync resolved it from the remote —
+        never a bare-init HEAD whose target does not exist. "" = unresolved
+        (blank card, no successful sync yet); consumers that need a NAME
+        must defer or say "unknown until the first sync", never render "".
+        Sync and subprocess-free: safe on the request path."""
+        inst = self.forges.instance(name) or self._skill_source(name)
+        pin = ((getattr(inst, "default_branch", "") or "").strip()
+               if inst is not None else "")
+        if pin:
+            return pin
+        mirror = self.mirror_path(self.mirror_name_of(name))
+        head = self._head_branch(mirror)
+        return head if self._ref_exists(mirror, head) else ""
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict],
@@ -348,16 +378,19 @@ class RepoCache:
 
         # HEAD — load-bearing: a bare init defaults HEAD to main/master; a
         # wrong HEAD makes `git clone file://…` check out nothing
-        branch = (inst.default_branch or "").strip()
+        pin = (inst.default_branch or "").strip()
+        branch = pin
         probed = not branch
         if probed:
-            # The card contract is "empty branch = the repository's default"
-            # (skill sources default to empty; SPA hint says so) — resolve it
-            # from the remote's HEAD symref. Never write the empty ref: git
-            # refuses `refs/heads/` and the sync would fail every cycle.
-            # Probed EVERY sync on purpose: caching the last answer would
-            # quietly turn "the repository's default" into "the default as
-            # of some earlier sync"; the RTT rides alongside the fetch's.
+            # The card contract — repo cards and skill sources alike — is
+            # "empty branch = the repository's default": resolve it from the
+            # remote's HEAD symref. Never write the empty ref: git refuses
+            # `refs/heads/` and the sync would fail every cycle. Probed
+            # EVERY sync on purpose (founder ruling 2026-09-05): caching the
+            # last answer would quietly turn "the repository's default" into
+            # "the default as of some earlier sync"; the RTT rides alongside
+            # the fetch's, and an operator who wants to skip it pins the
+            # discovered branch on the card (Discover default branch).
             r = await self.git(["ls-remote", "--symref", expected_url, "HEAD"],
                                env=env)
             if r.returncode != 0:
@@ -372,23 +405,36 @@ class RepoCache:
                     "default branch: the card's branch is empty and the "
                     "remote's HEAD does not name one (empty repository or "
                     "detached HEAD) — set Branch on the card")
+        # Verify BEFORE the HEAD move: symbolic-ref succeeds on a DANGLING
+        # ref, and a green ledger over a dangling HEAD is exactly the silent
+        # empty checkout this guards against. A failed verification leaves
+        # the previous (valid) HEAD in place for any clone already in flight.
+        # A pin on an EMPTY repository (zero heads) is legitimate — the first
+        # commit is still to come — and keeps its HEAD; a pin the repository
+        # does not have, or a probed default the fetch never brought, fails.
+        r = await self.git(["-C", str(p), "rev-parse", "--verify",
+                            "--quiet", f"refs/heads/{branch}^{{commit}}"])
+        if r.returncode != 0:
+            heads = await self._local_heads(p)
+            if heads or probed:
+                shown = ", ".join(heads[:5]) + (", …" if len(heads) > 5 else "")
+                if pin:
+                    return await fail(
+                        f"default branch: the card pins {pin!r} but the "
+                        f"repository has no such branch (branches: "
+                        f"{shown or 'none'}) — blank the card's Branch to "
+                        f"follow the repository's default, or pin one of "
+                        f"its branches")
+                return await fail(
+                    f"default branch: the remote's HEAD names {branch!r} "
+                    f"but the fetch brought no such branch (branches: "
+                    f"{shown or 'none'}; unborn HEAD, or it changed "
+                    f"mid-sync) — retried next cycle; a Branch on the "
+                    f"card pins it")
         r = await self.git(["-C", str(p), "symbolic-ref", "HEAD",
                             f"refs/heads/{branch}"], env=env)
         if r.returncode != 0:
             return await fail(f"symbolic-ref: {r.stderr}")
-        if probed:
-            # symbolic-ref succeeds on a DANGLING ref — a resolved branch
-            # the fetch never brought over (unborn HEAD advertisement, or
-            # the remote default changed between fetch and probe) must not
-            # ledger a green sync whose clones check out nothing
-            r = await self.git(["-C", str(p), "rev-parse", "--verify",
-                                "--quiet", f"refs/heads/{branch}^{{commit}}"])
-            if r.returncode != 0:
-                return await fail(
-                    f"default branch: the remote's HEAD names {branch!r} "
-                    f"but the fetch brought no such branch (unborn HEAD, "
-                    f"or it changed mid-sync) — retried next cycle; a "
-                    f"Branch on the card pins it")
 
         if self.config.repo_mirror.lfs:
             r = await self.git(["-C", str(p), "lfs", "fetch", "origin",
@@ -400,6 +446,55 @@ class RepoCache:
         self.ledger[name] = st
         self._synced_mono[name] = self._monotonic()
         return st
+
+    async def _local_heads(self, mirror: Path) -> list[str]:
+        """Branch names the bare mirror holds (for failure wording only —
+        never a network call on the failure path)."""
+        r = await self.git(["-C", str(mirror), "for-each-ref",
+                            "--format=%(refname)", "refs/heads"])
+        if r.returncode != 0:
+            return []
+        return [line.strip().removeprefix("refs/heads/")
+                for line in (r.stdout or "").splitlines() if line.strip()]
+
+    def _remote_probe_target(self, name: str):
+        """(inst, credentialed url, source pin) for a remote probe of `name`
+        — the backing card supplies remote, clone user and token for a
+        repo-backed skill source (ADR-0039); None when unconfigured."""
+        pin = ""
+        backing = self.mirror_name_of(name)
+        if backing != name:
+            src = self._skill_source(name)
+            pin = (getattr(src, "default_branch", "") or "").strip()
+            name = backing
+        inst = self.forges.instance(name)
+        forge = self.forges.get(name)
+        if inst is None or forge is None:
+            inst, forge = self._skill_source(name), None
+        if inst is None or not (inst.url or "").strip():
+            return None
+        clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
+                      if forge is not None else self.clone_user_of(inst.forge))
+        return inst, self._origin_url(inst.url.strip(), clone_user), pin
+
+    async def remote_default_branch(self, name: str) -> str:
+        """The branch the repository's HEAD names on the forge, straight
+        from the remote (`ls-remote --symref … HEAD`, the card's read token
+        via askpass) — what a blank card resolves to at sync, and what the
+        Discover default branch actions fill in. "" when the remote has no
+        HEAD symref (empty repository / detached HEAD). Raises RuntimeError
+        with the redacted git error when the remote cannot be reached."""
+        target = self._remote_probe_target(name)
+        if target is None:
+            raise RuntimeError("repository URL is empty")
+        inst, url, _pin = target
+        r = await self.git(["ls-remote", "--symref", url, "HEAD"],
+                           env=self._git_env(inst))
+        if r.returncode != 0:
+            detail = redact(" ".join((r.stderr or r.stdout or "").split()))
+            raise RuntimeError((detail[-300:] or "ls-remote failed")
+                               + (" (timeout)" if r.timed_out else ""))
+        return _symref_head_branch(r.stdout)
 
     async def remote_head(self, name: str) -> str | None:
         """Best-effort branch head straight from the forge — provenance for
@@ -640,6 +735,12 @@ class NullRepoCache:
 
     def has_last_good(self, name: str) -> bool:
         return False
+
+    def resolved_branch(self, name: str) -> str:
+        return ""
+
+    async def remote_default_branch(self, name: str) -> str:
+        return ""
 
     def needed_for(self, **_kw) -> list[str]:
         return []

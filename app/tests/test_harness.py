@@ -395,7 +395,8 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     from devcake.domain.run import Run
     from devcake.config import RepoInstance
     cfg = AppConfig()
-    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
+    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r",
+                             default_branch="main")]
     mgr = make_mission_manager(
         config=cfg,
         instance=PMOInstance(name="linear", team_key="DEV", repos=["main"]),
@@ -457,7 +458,8 @@ def test_runspec_payload_carries_mcp_setup_commands(tmp_path, monkeypatch):
     cmds = ["claude mcp add devcake-logs -e DD_API_KEY=$DD_API_KEY "
             "-- devcake-logs-mcp"]
     cfg = AppConfig()
-    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
+    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r",
+                             default_branch="main")]
     inst = PMOInstance(name="linear", team_key="DEV", repos=["main"])
     dts = {"senior-dev": DevType(name="senior-dev",
                                  harness_template="claude-code",
@@ -628,7 +630,7 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance
     mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
-    repo = RepoInstance(url="https://github.com/o/r")
+    repo = RepoInstance(url="https://github.com/o/r", default_branch="main")
     env = dispatch._protocol_spec_env(mgr, 
         mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
         dev_type=DevType(name="main-dev", harness_template="grok-build"),
@@ -646,7 +648,7 @@ def test_recover_misplaced_result_env_is_flag_not_str_bool():
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance
     mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
-    repo = RepoInstance(url="https://github.com/o/r")
+    repo = RepoInstance(url="https://github.com/o/r", default_branch="main")
     dt = DevType(name="main-dev", harness_template="grok-build")
 
     def flag(**over):
@@ -676,7 +678,7 @@ def test_continuation_env_wire_format():
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance
     mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
-    repo = RepoInstance(url="https://github.com/o/r")
+    repo = RepoInstance(url="https://github.com/o/r", default_branch="main")
     dt = DevType(name="main-dev", harness_template="grok-build")
 
     def env(**over):
@@ -703,7 +705,7 @@ def test_mirror_env_wire_format():
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance
     mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
-    repo = RepoInstance(url="https://github.com/o/r")
+    repo = RepoInstance(url="https://github.com/o/r", default_branch="main")
     dt = DevType(name="main-dev", harness_template="grok-build")
 
     def env(**over):
@@ -729,7 +731,8 @@ def test_harness_default_model_flows_into_spec_env(tmp_path):
     assert HARNESSES["grok-build"].default_model == "grok-4.5"
     mgr, _f, _s = make_mgr(tmp_path, mission())
     from devcake.config import RepoInstance
-    repo = RepoInstance(name="main", url="https://github.com/o/r")
+    repo = RepoInstance(name="main", url="https://github.com/o/r",
+                             default_branch="main")
     forge = type("F", (), {"descriptor": type("D", (), {
         "clone_user": "x", "git_user_name": "n", "git_email": "e",
         "cli_token_envs": ["T"]})()})()

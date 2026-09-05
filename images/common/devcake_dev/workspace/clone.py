@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 
 
@@ -83,6 +84,19 @@ def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
                                  "detail": (r.stderr or "")[-2000:],
                                  "mirror": bool(mirror), "entry": x})
             continue
+        if mirror and empty_checkout(mirror, dest, runner=runner):
+            # a mirror whose HEAD names a branch it lacks clones an EMPTY
+            # tree with exit 0 — never hand that to a Dev as "mounted"
+            # (an empty repository, zero heads, is legitimately empty)
+            shutil.rmtree(dest, ignore_errors=True)
+            detail = (f"empty checkout: the mirror's HEAD names a branch the "
+                      f"mirror does not have ({mirror}) — the card's Branch "
+                      f"is wrong for this repository")
+            notes.append(f"{label} {x.get('name', dest_name)}: {detail}")
+            if failures is not None:
+                failures.append({"name": x.get("name", dest_name),
+                                 "detail": detail, "mirror": True, "entry": x})
+            continue
         src = "mirror" if mirror else "forge"
         if mirror and clone_url:
             # best-effort origin rewrite — a failure leaves a workspace-only
@@ -95,6 +109,25 @@ def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
         notes.append(f"{label} {x.get('name', dest_name)}: cloned "
                      f"read-only from {src} at {rel_prefix}/{dest_name}")
     return notes
+
+def empty_checkout(mirror: str, dest: str, runner=None) -> bool:
+    """True when a clone from `mirror` checked nothing out ALTHOUGH the
+    mirror holds branches: `HEAD^{commit}` does not resolve in `dest` while
+    `for-each-ref refs/heads` in the mirror is non-empty. A mirror with
+    zero heads (an empty repository awaiting its first commit) is not an
+    empty checkout — that tree is empty by construction."""
+    runner = runner or subprocess.run
+    env = dict(os.environ)
+    head = runner(["git", "-C", dest, "rev-parse", "--verify", "--quiet",
+                   "HEAD^{commit}"], capture_output=True, text=True, env=env)
+    if head.returncode == 0 and (getattr(head, "stdout", "") or "").strip():
+        return False
+    heads = runner(["git", "--git-dir", mirror, "for-each-ref",
+                    "--format=%(refname)", "refs/heads"],
+                   capture_output=True, text=True, env=env)
+    return (heads.returncode == 0
+            and bool((getattr(heads, "stdout", "") or "").strip()))
+
 
 def clone_error_class(stderr: str) -> str:
     """DEV_FORGE_AUTH only on git's credential wording — a bare "403"/"401"

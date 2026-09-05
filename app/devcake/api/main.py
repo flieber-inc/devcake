@@ -755,7 +755,8 @@ async def test_pmo(name: str):
 async def test_forge(name: str):
     s = svc()
     return await connections_service.test_forge(name, config=s.config,
-                                                forge_runtime=s.forge_runtime)
+                                                forge_runtime=s.forge_runtime,
+                                                repo_cache=s.repo_cache)
 
 
 @app.post("/api/v1/connections/copy-secrets")
@@ -772,14 +773,32 @@ async def copy_connection_secrets(body: dict):
 async def apply_forge_protection_bulk():
     s = svc()
     return await connections_service.apply_forge_protection_bulk(
-        config=s.config, forge_runtime=s.forge_runtime)
+        config=s.config, forge_runtime=s.forge_runtime,
+        repo_cache=s.repo_cache)
+
+
+@app.post("/api/v1/connections/forge/discover-branches")
+async def discover_forge_branches():
+    """Discover default branches for every saved repository card (read-only
+    `ls-remote` per card; the SPA fills the draft)."""
+    s = svc()
+    return await connections_service.discover_forge_branches(
+        config=s.config, repo_cache=s.repo_cache)
+
+
+@app.post("/api/v1/connections/forge/{name}/discover-branch")
+async def discover_forge_branch(name: str):
+    s = svc()
+    return await connections_service.discover_forge_branch(
+        name, config=s.config, repo_cache=s.repo_cache)
 
 
 @app.post("/api/v1/connections/forge/{name}/apply-protection")
 async def apply_forge_protection(name: str):
     s = svc()
     return await connections_service.apply_forge_protection(
-        name, config=s.config, forge_runtime=s.forge_runtime)
+        name, config=s.config, forge_runtime=s.forge_runtime,
+        repo_cache=s.repo_cache)
 
 
 @app.post("/api/v1/connections/skill/{name}/test")

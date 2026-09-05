@@ -288,7 +288,11 @@ class RepoInstance(BaseModel):
     forge: str = Field(default_factory=_default_forge)  # registry-validated
     url: str = ""
     api_base: str | None = None     # None = the adapter's default API host / the repo's origin
-    default_branch: str = "main"
+    # "" (the default) = the repository's own default branch, inquired from
+    # its HEAD before every sync; a value is a deliberate pin, verified to
+    # exist at every sync (a missing pin fails the sync loud — never a
+    # silently empty checkout). Same contract as a skill source's branch.
+    default_branch: str = ""
     # Per-repo merge doctrine (docs/03 §4.1, ADR-0020). The last two are inert
     # while auto_merge is OFF: on a merge conflict, route back to EXECUTE to
     # sync + resolve (max 2 attempts) instead of parking on DEVCAKE-MERGE;
@@ -335,18 +339,14 @@ class RepoInstance(BaseModel):
 
     @field_validator("default_branch")
     @classmethod
-    def _branch_required(cls, v: str) -> str:
+    def _branch_stripped(cls, v: str) -> str:
         # Normalized at the boundary — sync, reads, DEVCAKE_DEFAULT_BRANCH,
-        # merge prompts, and claims must all compare ONE string — and
-        # NON-empty: unlike a skill source, a repo card's branch feeds
-        # container env and playbook instructions that break silently on
-        # "", so the sync-side default resolution must never mask it.
-        v = (v or "").strip()
-        if not v:
-            raise ValueError(
-                "default_branch must name a branch — repo cards have no "
-                "empty-means-remote-default contract")
-        return v
+        # merge prompts, and claims must all compare ONE string. Empty is
+        # the contract ("the repository's default"): the mirror resolves it
+        # from the remote's HEAD at sync, and every consumer that needs a
+        # NAME reads the resolved branch (RepoCache.resolved_branch), never
+        # this raw field — a blank must never reach a playbook.
+        return (v or "").strip()
 
     @property
     def configured(self) -> bool:

@@ -93,6 +93,11 @@ def make_cache(tmp_path, repos, *, internal=(), lfs=False, max_age=0,
             user = FakeForge.descriptor.clone_user
             url = RepoCache._origin_url(inst.url, user)
             return GitResult(0, url + "\n", "")
+        if args[:2] == ["ls-remote", "--symref"]:
+            # a blank card (the model default) resolves the remote's HEAD:
+            # the fake remote's default is `main`
+            return GitResult(0, "ref: refs/heads/main\tHEAD\n"
+                                "0" * 40 + "\tHEAD\n", "")
         return GitResult(0, "", "")
 
     cache = RepoCache(cfg, forges, root=tmp_path, git=git)
@@ -383,7 +388,12 @@ def test_has_last_good_requires_branch_content_not_bare_dir(tmp_path):
     good.mkdir(parents=True)
     (good / "refs" / "heads").mkdir(parents=True)
     (good / "refs" / "heads" / "main").write_text("b" * 40 + "\n")
-    # seed a prior success in the ledger without going through git
+    # heads alone are not enough: last-good is "HEAD names a branch that is
+    # there" — a mirror whose HEAD dangles must never serve as stale content
+    assert not cache2.has_last_good("alpha")
+    (good / "HEAD").write_text("ref: refs/heads/main\n")
+    # seed a prior success in the ledger without going through git (the
+    # ledger is NOT what decides — disk truth survives restarts)
     from datetime import datetime, timezone
     from devcake.domain.repo_mirror import MirrorStatus
     cache2.ledger["alpha"] = MirrorStatus(
@@ -834,3 +844,175 @@ def test_dispatch_backed_skill_card_failure_stays_context_governed(tmp_path):
     run = run_coro(mgr.dispatch(m, MissionType.EXECUTE, dt))
     assert run is not None                       # stale-cache proceed
     assert "work" in run.mirror_repos            # the PHYSICAL gate snapshot
+
+
+# ── the repository's HEAD is the truth; a wrong pin is loud (ADR-0024 addendum)
+
+def test_blank_repo_card_resolves_head_via_symref_probe_and_verifies_first(tmp_path):
+    """A blank repo card (the model default) rides the skill-source path:
+    `ls-remote --symref … HEAD` every sync, the branch verified to exist
+    BEFORE the HEAD move — never a green ledger over a dangling HEAD."""
+    cache, calls, _ = make_cache(tmp_path, [R1])
+    assert R1.default_branch == ""
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok
+    probe = next(c for c in calls if c[:2] == ["ls-remote", "--symref"])
+    assert probe[-1] == "HEAD"
+    verify = next(i for i, c in enumerate(calls) if "rev-parse" in c)
+    head = next(i for i, c in enumerate(calls) if "symbolic-ref" in c)
+    assert verify < head
+    assert calls[head][-1] == "refs/heads/main"
+
+
+def test_pinned_branch_missing_fails_loud_and_leaves_head_alone(tmp_path):
+    """A pin the repository does not have fails the sync with both names
+    and moves nothing: no symbolic-ref after the failed verification, no
+    remote probe for a pin (the failure wording is local)."""
+    pinned = Repo(name="alpha", url="https://gitlab.com/o/alpha.git",
+                  default_branch="main", fake_token="rw-a")
+
+    def script(args):
+        if "rev-parse" in args:
+            return GitResult(1, "", "")
+        if "for-each-ref" in args:
+            return GitResult(0, "refs/heads/master\nrefs/heads/f/x\n", "")
+        return None
+    cache, calls, _ = make_cache(tmp_path, [pinned], script=script)
+    st = run_coro(cache.sync_one("alpha"))
+    assert not st.ok
+    assert "pins 'main'" in st.detail and "master" in st.detail
+    assert "blank the card's Branch" in st.detail
+    assert not any("symbolic-ref" in c for c in calls)
+    assert not any(c[:2] == ["ls-remote", "--symref"] for c in calls)
+    assert not st.auth                       # a config problem, not a breaker
+
+
+def test_pin_on_an_empty_repository_syncs_green(tmp_path):
+    """Zero heads = a repository awaiting its first commit: the pin keeps
+    its HEAD (the claims bootstrap and a first EXECUTE depend on it)."""
+    pinned = Repo(name="alpha", url="https://gitlab.com/o/alpha.git",
+                  default_branch="main", fake_token="rw-a")
+
+    def script(args):
+        if "rev-parse" in args:
+            return GitResult(1, "", "")
+        if "for-each-ref" in args:
+            return GitResult(0, "", "")
+        return None
+    cache, calls, _ = make_cache(tmp_path, [pinned], script=script)
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok
+    assert any(c[-1] == "refs/heads/main" and "symbolic-ref" in c for c in calls)
+
+
+def test_probed_default_the_fetch_never_brought_fails(tmp_path):
+    """Blank card, remote HEAD names `main`, but the fetch brought no such
+    branch (unborn HEAD advertisement): fail, name the branches."""
+    def script(args):
+        if "rev-parse" in args:
+            return GitResult(1, "", "")
+        if "for-each-ref" in args:
+            return GitResult(0, "", "")
+        return None
+    cache, calls, _ = make_cache(tmp_path, [R1], script=script)
+    st = run_coro(cache.sync_one("alpha"))
+    assert not st.ok
+    assert "remote's HEAD names 'main'" in st.detail
+    assert not any("symbolic-ref" in c for c in calls)
+
+
+def test_resolved_branch_is_pin_then_a_resolving_head_never_bare_init(tmp_path):
+    pinned = Repo(name="beta", url="https://gitlab.com/o/beta.git",
+                  default_branch="release", fake_token="rw-b")
+    cache, _, _ = make_cache(tmp_path, [R1, pinned])
+    assert cache.resolved_branch("beta") == "release"
+    # blank card: nothing on disk → unresolved
+    assert cache.resolved_branch("alpha") == ""
+    p = cache.mirror_path("alpha")
+    (p / "refs" / "heads").mkdir(parents=True)
+    (p / "HEAD").write_text("ref: refs/heads/main\n")      # bare-init shape
+    assert cache.resolved_branch("alpha") == ""            # target missing
+    (p / "refs" / "heads" / "main").write_text("a" * 40 + "\n")
+    assert cache.resolved_branch("alpha") == "main"
+    # packed refs after an offline gc count too
+    (p / "refs" / "heads" / "main").unlink()
+    (p / "packed-refs").write_text("# pack-refs with: peeled\n"
+                                   + "b" * 40 + " refs/heads/main\n")
+    assert cache.resolved_branch("alpha") == "main"
+    # a branch with a slash resolves through the loose path
+    (p / "HEAD").write_text("ref: refs/heads/feat/x\n")
+    (p / "refs" / "heads" / "feat").mkdir()
+    (p / "refs" / "heads" / "feat" / "x").write_text("c" * 40 + "\n")
+    assert cache.resolved_branch("alpha") == "feat/x"
+    assert NullRepoCache().resolved_branch("alpha") == ""
+
+
+def test_remote_default_branch_parses_the_symref_and_surfaces_errors(tmp_path):
+    seen = []
+
+    def script(args):
+        if args[:2] == ["ls-remote", "--symref"]:
+            seen.append(args)
+            return GitResult(0, "ref: refs/heads/trunk\tHEAD\n"
+                                "0" * 40 + "\tHEAD\n", "")
+        return None
+    cache, _, _ = make_cache(tmp_path, [R1], script=script)
+    assert run_coro(cache.remote_default_branch("alpha")) == "trunk"
+    assert seen[0][2] == "https://oauth2@gitlab.com/o/alpha.git"
+
+    def broken(args):
+        if args[:2] == ["ls-remote", "--symref"]:
+            # credentials ride askpass, never the URL — git's own wording
+            return GitResult(128, "", "fatal: Authentication failed for "
+                                      "'https://oauth2@gitlab.com/o/alpha.git'")
+        return None
+    cache2, _, _ = make_cache(tmp_path / "b", [R1], script=broken)
+    with pytest.raises(RuntimeError) as ex:
+        run_coro(cache2.remote_default_branch("alpha"))
+    assert "Authentication failed" in str(ex.value)
+    assert "(timeout)" not in str(ex.value)
+
+    def headless(args):
+        if args[:2] == ["ls-remote", "--symref"]:
+            return GitResult(0, "0" * 40 + "\tHEAD\n", "")   # no symref line
+        return None
+    cache3, _, _ = make_cache(tmp_path / "c", [R1], script=headless)
+    assert run_coro(cache3.remote_default_branch("alpha")) == ""
+    assert run_coro(NullRepoCache().remote_default_branch("alpha")) == ""
+
+
+def test_dispatch_carries_the_resolved_branch_into_env_and_playbook(tmp_path):
+    """The Dev's env and the EXECUTE playbook read the RESOLVED branch —
+    pin, else the mirror's HEAD — never the raw card field."""
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.domain.model import MissionType
+
+    class TrunkCache(GrantingCache):
+        def resolved_branch(self, name):
+            return "trunk"
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, FakeInternalForge())
+    mgr.repo_cache = TrunkCache()
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    assert run is not None and launched
+    assert run.spec_env["DEVCAKE_DEFAULT_BRANCH"] == "trunk"
+    assert "origin/trunk" in run.spec_prompt
+
+
+def test_dispatch_defers_while_a_blank_card_is_unresolved(tmp_path):
+    """A blank card whose mirror has not resolved the repository's HEAD
+    must never reach the playbook as `origin/` — deferred like the mirror
+    gate (no container, no attempt), reason on the missions row."""
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.config import RepoInstance
+    from devcake.domain.model import MissionType
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, FakeInternalForge())
+    mgr.forges._inst = RepoInstance(name="main", url="https://github.com/o/r")
+    assert mgr.forges._inst.default_branch == ""
+    mgr.repo_cache = GrantingCache()                 # resolved_branch → ""
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    assert run is None and not launched
+    assert "default branch unresolved" in mgr.blocked_reasons[m.pmo_id]

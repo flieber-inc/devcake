@@ -105,14 +105,23 @@ class ClaimsWriter:
         dest = Path(tempfile.mkdtemp(prefix="devcake-claims-"))
         env = self._git_env(inst, write=write)
         url = self._remote_url(inst)
-        branch = inst.default_branch or "main"
-        r = await self.git(
-            ["clone", "--depth", "1", "--branch", branch, url, str(dest)],
-            env=env)
+        # blank card = the repository's default: a plain clone checks out
+        # the remote's HEAD, no name needed here (docs/02, RepoInstance)
+        branch = (inst.default_branch or "").strip()
+        argv = ["clone", "--depth", "1"]
+        if branch:
+            argv += ["--branch", branch]
+        r = await self.git(argv + [url, str(dest)], env=env)
         if r.returncode != 0:
             await self._empty_or_unlistable(dest, url=url, branch=branch,
                                             env=env, clone=r)
         return dest
+
+    async def _current_branch(self, dest: Path, env: dict) -> str:
+        r = await self.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=dest,
+                           env=env)
+        out = (r.stdout or "").strip()
+        return "" if r.returncode != 0 or out == "HEAD" else out
 
     async def _empty_or_unlistable(self, dest: Path, *, url: str,
                                    branch: str, env: dict,
@@ -132,12 +141,19 @@ class ClaimsWriter:
             for line in (probe.stdout or "").splitlines()
             if line.strip()
         }
-        want = f"refs/heads/{branch}"
-        if want in heads:
+        want = f"refs/heads/{branch}" if branch else "HEAD"
+        if branch and want in heads:
             detail = (clone.stderr or clone.stdout or "")[-400:]
             raise RuntimeError(
                 f"claims notebook clone failed though {want} exists: "
                 f"{detail}")
+        if heads and not branch:
+            # a populated remote whose default checkout failed is an
+            # outage, never a confidently empty notebook
+            detail = (clone.stderr or clone.stdout or "")[-400:]
+            raise RuntimeError(
+                f"claims notebook unlistable (clone of the repository's "
+                f"default failed on a populated remote): {detail}")
         if heads:
             # Populated remote without the configured branch: almost
             # certainly a misconfigured default_branch — reading it as a
@@ -151,7 +167,9 @@ class ClaimsWriter:
         # Reachable remote with no heads at all (fresh bare repo) —
         # empty-init so the first commit can push the branch.
         dest.mkdir(parents=True)
-        for args in (["init", "-b", branch],
+        # a blank card on an EMPTY remote has no default to inherit: the
+        # bootstrap branch is the literal `main` the first push creates
+        for args in (["init", "-b", branch or "main"],
                      ["remote", "add", "origin", url]):
             await self._run(args, cwd=dest, env=env)
 
@@ -267,9 +285,13 @@ class ClaimsWriter:
             if staged.returncode == 0:
                 return
             await self._run(["commit", "-m", message], cwd=dest, env=env)
-            branch = inst.default_branch or "main"
+            branch = (inst.default_branch or "").strip()
+            # pinned: push to the pin; blank: HEAD is whatever the clone (or
+            # the bootstrap init) checked out — push it by name so an
+            # empty-remote bootstrap creates the branch the init named
+            target = branch or (await self._current_branch(dest, env)) or "main"
             await self._run(
-                ["push", "origin", f"HEAD:refs/heads/{branch}"],
+                ["push", "origin", f"HEAD:refs/heads/{target}"],
                 cwd=dest, env=env)
         finally:
             self._cleanup(dest)

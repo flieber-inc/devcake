@@ -578,6 +578,20 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             return text
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        # The branch a Dev merges from and targets: the card's pin, else what
+        # the mirror resolved from the repository's HEAD (the gate above just
+        # synced it). A blank that is still unresolved must never reach the
+        # playbook as `origin/` — defer like the mirror gate does (no
+        # container, no attempt burned; retried next cycle).
+        default_branch = resolved_default_branch(mgr, repo)
+        if not default_branch:
+            mgr.blocked_reasons[live.pmo_id] = (
+                f"repository {repo_name}: default branch unresolved — the "
+                f"card's Branch is blank and the mirror has not resolved the "
+                f"repository's HEAD yet; dispatch deferred")
+            log.warning("dispatch of %s deferred — %s", live.key,
+                        mgr.blocked_reasons[live.pmo_id])
+            return None
         ref_note = _reference_repos_note(mgr, repo_name)
         ident = _identifying_prompt(mgr, dev_type)
         prompt = {
@@ -597,7 +611,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             MissionType.EXECUTE: lambda: execute_prompt(
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
-                default_branch=repo.default_branch,
+                default_branch=default_branch,
                 playbook=_pb("EXECUTE"),
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
@@ -779,6 +793,16 @@ def append_required_skills(prompt: str, skills_required: list[str],
     )
 
 
+def resolved_default_branch(mgr, repo) -> str:
+    """The ONE reading of a card's branch for everything Dev-facing: the
+    pin when the card has one, else the branch the mirror resolved from
+    the repository's HEAD (docs/02 `RepoInstance.default_branch`). "" only
+    for a blank card whose mirror has not synced — callers defer."""
+    cache = getattr(mgr, "repo_cache", None)
+    resolved = cache.resolved_branch(repo.name) if cache is not None else ""
+    return resolved or (repo.default_branch or "").strip()
+
+
 def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        mission_type: str, dev_type: DevType, seq: int,
                        extra_args: str, repo, forge,
@@ -798,7 +822,10 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
         "DEVCAKE_SEQ": str(seq),
         "DEVCAKE_REPO_URL": repo.url,
-        "DEVCAKE_DEFAULT_BRANCH": repo.default_branch,
+        # the resolved branch (pin, else the mirror's HEAD) — read here so
+        # mission and steward dispatches cannot drift; "" only while a
+        # blank card is unresolved, and nothing in the entrypoint reads it
+        "DEVCAKE_DEFAULT_BRANCH": resolved_default_branch(mgr, repo),
         "DEVCAKE_CLONE_USER": forge.descriptor.clone_user,
         "DEVCAKE_GIT_NAME": forge.descriptor.git_user_name,
         "DEVCAKE_GIT_EMAIL": forge.descriptor.git_email,

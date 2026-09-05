@@ -12,6 +12,7 @@ import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import InstantZone from "../components/InstantZone.jsx";
 import MoreMenu from "../components/MoreMenu.jsx";
+import { DISCOVER_ALL_BRANCHES_DESC, applyDiscoveredBranches } from "../lib/branches.js";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "../components/ClearSecretsDialog.jsx";
 import TokenCopyModal, { TOKEN_COPY_ENTRY } from "../components/TokenCopyModal.jsx";
 
@@ -218,6 +219,8 @@ export default function ReposPage({ onHealthChange }) {
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
   const [testResult, setTestResult] = useState({});
+  const [discoverResult, setDiscoverResult] = useState({}); // repo name → discover outcome
+  const [bulkDiscover, setBulkDiscover] = useState(null);   // { filled, kept, failed }
   const [applyResult, setApplyResult] = useState({}); // repo name → single/bulk member result
   const [bulkApplyResult, setBulkApplyResult] = useState(null); // { results } | null
   const [clearErr, setClearErr] = useState("");
@@ -520,6 +523,49 @@ export default function ReposPage({ onHealthChange }) {
     });
   };
 
+  // Discover default branch (per card): ask the repository which branch its
+  // HEAD names and write it into the DRAFT's Branch field — the operator
+  // reviews on Save; nothing is written server-side by this button.
+  const discoverBranch = async (name, idx) => {
+    try {
+      const result = await send(
+        "POST", `/connections/forge/${encodeURIComponent(name)}/discover-branch`);
+      setDiscoverResult((prev) => ({ ...prev, [name]: result }));
+      if (result?.ok && result.branch) {
+        setField(`cfg.repos.${idx}.default_branch`, result.branch);
+      }
+    } catch (e) {
+      setDiscoverResult((prev) => ({
+        ...prev, [name]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
+
+  // Section ⋯ → Discover default branches for all repositories: fills blank
+  // Branch fields and replaces pins the repository does not have; a pin the
+  // repository has is KEPT (a deliberate non-default base stays deliberate).
+  const requestDiscoverAllBranches = () => {
+    setConfirm({
+      title: "Discover default branches for all repositories?",
+      body: DISCOVER_ALL_BRANCHES_DESC,
+      confirmLabel: "Discover now",
+      confirmKind: "primary",
+      action: async () => {
+        setConfirm(null);
+        try {
+          const out = await send("POST", "/connections/forge/discover-branches");
+          const results = out?.results || {};
+          const plan = applyDiscoveredBranches(cfg.repos, results);
+          if (plan.changed) setField("cfg.repos", plan.repos);
+          setBulkDiscover(plan.summary);
+          setDiscoverResult((prev) => ({ ...prev, ...results }));
+        } catch (e) {
+          setBulkDiscover({ filled: [], kept: [], failed: [{ name: "*", error: String(e.message || e) }] });
+        }
+      },
+    });
+  };
+
   const testForge = async (name) => {
     const key = `forge:${name}`;
     try {
@@ -554,6 +600,9 @@ export default function ReposPage({ onHealthChange }) {
               { label: "Apply protection to unprotected repos…",
                 desc: BULK_APPLY_PROTECTION_DESC,
                 onClick: requestBulkApplyProtection },
+              { label: "Discover default branches for all repositories…",
+                desc: DISCOVER_ALL_BRANCHES_DESC,
+                onClick: requestDiscoverAllBranches },
               { label: `${TOKEN_COPY_ENTRY.menuLabel}…`,
                 desc: TOKEN_COPY_ENTRY.desc,
                 onClick: () => setTokenCopy(true) },
@@ -729,6 +778,25 @@ export default function ReposPage({ onHealthChange }) {
                   help="HTTPS URL of the repository, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it. Empty = repo stays idle.">
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
+                <Field label="Branch" hint="Empty = the repository's default"
+                  help="The branch Devs branch from and PRs target. Empty = the repository's own default, asked from its HEAD before every dispatch (one extra round trip per sync). A value pins it and is verified at every sync: a pin the repository does not have fails the mirror sync loud and defers this repo's missions until fixed. Discover fills the field with the branch the repository names right now — review on Save.">
+                  <span className="flex items-center gap-2">
+                    <Input value={repo.default_branch || ""}
+                      aria-label={`Repository ${repo.name || idx + 1} branch`}
+                      onChange={(e) => setField(`cfg.repos.${idx}.default_branch`, e.target.value)} />
+                    <Button kind="ghost" disabled={!repoIsSaved(repo.name, idx)}
+                      title={repoIsSaved(repo.name, idx) ? "Ask the repository which branch its HEAD names and fill the field (review on Save)" : "Save the card first — discovery reads saved values"}
+                      onClick={() => discoverBranch(repo.name, idx)}>Discover</Button>
+                  </span>
+                  {discoverResult[repo.name] && (
+                    <span className={`mt-1 block text-xs ${discoverResult[repo.name].ok ? "text-neutral-500 dark:text-neutral-400" : "text-red-600 dark:text-red-400"}`}
+                      data-testid={`discover-branch-result-${repo.name}`}>
+                      {discoverResult[repo.name].ok
+                        ? `repository default: ${discoverResult[repo.name].branch}${discoverResult[repo.name].pinned && discoverResult[repo.name].pin_exists === false ? " — the previous pin did not exist" : ""}`
+                        : `✗ ${discoverResult[repo.name].error || "discovery failed"}`}
+                    </span>
+                  )}
+                </Field>
                 <SecretField label="Access token"
                   help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored as plaintext mode 0600 on the app volume — never echoed, never in .env."
                   refKey={connRef("repo", repo.name, "token")} paste

@@ -16,6 +16,24 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — a repository card's branch is blank by default and means
+  the repository's own default; a wrong pin is loud** (ADR-0024 addendum).
+  The mirror asks the repository which branch its HEAD names before every
+  sync and verifies the branch arrived before moving the mirror's HEAD, on
+  pinned cards too: a pin the repository does not have fails that card's
+  sync with both names, and missions on it defer until the card is fixed —
+  previously the sync went green over a dangling HEAD and Devs received an
+  empty clone. The Dev's environment and playbook, branch protection and
+  claims pushes use the resolved branch. Repositories gains a Branch field
+  with a **Discover** button and a section action that fills every card
+  from the repositories' HEADs (blank fields and missing pins; existing
+  pins are kept). The provision step refuses an empty checkout of a
+  non-empty repository. Branch-protection probes cover work repos only.
+  **Upgrade note:** cards pinned to a branch their repository lacks stop
+  dispatch on their board until corrected (Discover all + Save); nothing
+  is migrated for you. A settings bundle exported after this change
+  carries blank branches that an older app refuses to import.
+
 ## v0.5.4 (2026-09-04)
 
 Patch release in the v0.5 "Java Lava" line.

@@ -158,6 +158,7 @@ from devcake_dev.workspace.clone import (  # noqa: E402
     clone_error_class,
     clone_extra_repos,
     clone_memory_repos,
+    empty_checkout,
     inject_clone_user,
     mirror_clone_error_class,
     set_origin_cmd,
@@ -469,6 +470,14 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
                          "mirror clone failed")
         clone_failed(detail, clone_error_class(detail), "clone failed")
     workdir = repo_dir / repo_name
+    if mirror_path and empty_checkout(mirror_path, str(workdir)):
+        # the mirror holds branches but HEAD named one it lacks: a Dev must
+        # never start on an empty tree of a non-empty repository (the card's
+        # Branch is wrong; the app-side sync now refuses this, belt here)
+        clone_failed(f"mirror clone produced an empty checkout "
+                     f"({mirror_path}): the mirror's HEAD names a branch "
+                     f"the mirror does not have — check the card's Branch",
+                     "DEV_FORGE", "mirror clone produced an empty checkout")
     if mirror_path:
         # origin must be the REAL forge — push/PR/mid-run fetch identical to
         # a direct clone; the Dev never learns where the bytes came from

@@ -328,3 +328,65 @@ def test_branch_missing_on_populated_remote_is_unlistable(tokens):
     assert run_coro(w.snapshot("nb")) is None
     assert run_coro(w.has_readme("nb")) is None
     assert run_coro(w.list_claim_meta("nb")) is None
+
+
+# ── blank card = the repository's default (docs/02 RepoInstance) ─────────────
+
+def test_blank_branch_clones_the_remotes_default_and_pushes_that_branch(tokens):
+    """No `--branch` when the card is blank: git checks out the remote's
+    HEAD; the push names the branch the checkout is on."""
+    tokens[("nb", "token")] = "tok"
+    card = RepoInstance(name="nb", forge="github",
+                        url="https://github.com/acme/notes")
+    assert card.default_branch == ""
+    calls = []
+
+    async def git(args, cwd=None, env=None):
+        calls.append(list(args))
+        if args[:1] == ["clone"]:
+            return _git_result(0)
+        if args[:2] == ["rev-parse", "--abbrev-ref"]:
+            return _git_result(0, stdout="trunk\n")
+        if args[:2] == ["diff", "--cached"]:
+            return _git_result(1)                      # something staged
+        return _git_result(0)
+
+    w = ClaimsWriter(_cfg(card), git=git)
+    run_coro(w.commit("nb", creates={".claims/x.json": "{}\n"}, deletes=[],
+                      message="devcake:claims:v1 run=r1 n=1"))
+    clone = next(c for c in calls if c[:1] == ["clone"])
+    assert "--branch" not in clone
+    push = next(c for c in calls if c[:1] == ["push"])
+    assert push == ["push", "origin", "HEAD:refs/heads/trunk"]
+
+
+def test_blank_branch_on_a_populated_remote_whose_clone_fails_is_unlistable(tokens):
+    """A populated remote whose default checkout failed is an outage, never
+    a confidently empty notebook; an empty remote still bootstraps `main`."""
+    tokens[("nb", "token")] = "tok"
+    card = RepoInstance(name="nb", forge="github",
+                        url="https://github.com/acme/notes")
+
+    async def flaky(args, cwd=None, env=None):
+        if args[:1] == ["clone"]:
+            return _git_result(128, stderr="early EOF")
+        if args[:2] == ["ls-remote", "--heads"]:
+            return _git_result(0, stdout="abc\trefs/heads/master\n")
+        return _git_result(0)
+    w = ClaimsWriter(_cfg(card), git=flaky)
+    assert run_coro(w.list_json_names("nb")) is None
+
+    inits = []
+
+    async def empty(args, cwd=None, env=None):
+        if args[:1] == ["clone"]:
+            return _git_result(128, stderr="warning: You appear to have "
+                                           "cloned an empty repository")
+        if args[:2] == ["ls-remote", "--heads"]:
+            return _git_result(0, stdout="")
+        if args[:1] == ["init"]:
+            inits.append(list(args))
+        return _git_result(0)
+    w2 = ClaimsWriter(_cfg(card), git=empty)
+    assert run_coro(w2.list_json_names("nb")) == []
+    assert inits == [["init", "-b", "main"]]

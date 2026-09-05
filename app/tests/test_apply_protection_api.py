@@ -88,7 +88,8 @@ def test_apply_single_applied_ok_shape(tmp_path, monkeypatch):
 
     repo = RepoInstance(
         name="work", forge="github",
-        url="https://github.com/example-org/work")
+        url="https://github.com/example-org/work",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "work", "token", "ghp_write")
     shape = _shape(required_status_checks=["ci"])
     forge = _FakeForge(
@@ -122,7 +123,8 @@ def test_apply_single_already_as_strict(tmp_path, monkeypatch):
 
     repo = RepoInstance(
         name="work", forge="gitea",
-        url="https://gitea.example/o/work")
+        url="https://gitea.example/o/work",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "work", "token", "tok")
     shape = _shape(require_status_checks_unscoped=True)
     forge = _FakeForge(
@@ -150,7 +152,8 @@ def test_apply_single_403_ok_false_preserves_message(tmp_path, monkeypatch):
 
     repo = RepoInstance(
         name="work", forge="github",
-        url="https://github.com/example-org/work")
+        url="https://github.com/example-org/work",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "work", "token", "ghp_x")
     msg = (
         "github write token lacks permission to set branch protection "
@@ -193,7 +196,8 @@ def test_apply_single_reference_only_refuses(tmp_path, monkeypatch):
 
     repo = RepoInstance(
         name="ref", forge="github",
-        url="https://github.com/example-org/docs")
+        url="https://github.com/example-org/docs",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "ref", "token_ro", "ghp_ro")
     forge = _FakeForge(
         apply_result=ApplyProtectionResult(
@@ -219,13 +223,16 @@ def test_bulk_skips_reference_only_includes_unprotected(tmp_path, monkeypatch):
 
     work = RepoInstance(
         name="work", forge="github",
-        url="https://github.com/example-org/work")
+        url="https://github.com/example-org/work",
+        default_branch="main")
     ref = RepoInstance(
         name="docs", forge="github",
-        url="https://github.com/example-org/docs")
+        url="https://github.com/example-org/docs",
+        default_branch="main")
     protected = RepoInstance(
         name="safe", forge="github",
-        url="https://github.com/example-org/safe")
+        url="https://github.com/example-org/safe",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "work", "token", "tok_w")
     secrets_store.write_connection_secret("repo", "docs", "token_ro", "tok_ro")
     secrets_store.write_connection_secret("repo", "safe", "token", "tok_s")
@@ -266,9 +273,11 @@ def test_bulk_403_does_not_stop_siblings(tmp_path, monkeypatch):
     from devcake.api import connections_service as cs
 
     a = RepoInstance(
-        name="a", forge="github", url="https://github.com/o/a")
+        name="a", forge="github", url="https://github.com/o/a",
+        default_branch="main")
     b = RepoInstance(
-        name="b", forge="github", url="https://github.com/o/b")
+        name="b", forge="github", url="https://github.com/o/b",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "a", "token", "tok_a")
     secrets_store.write_connection_secret("repo", "b", "token", "tok_b")
 
@@ -311,7 +320,8 @@ def test_bulk_empty_when_all_protected_or_ineligible(tmp_path, monkeypatch):
     from devcake.api import connections_service as cs
 
     safe = RepoInstance(
-        name="safe", forge="github", url="https://github.com/o/safe")
+        name="safe", forge="github", url="https://github.com/o/safe",
+        default_branch="main")
     secrets_store.write_connection_secret("repo", "safe", "token", "tok")
     forge = _FakeForge(
         protection=BranchProtection(protected=True, requires_reviews=True))
@@ -323,3 +333,31 @@ def test_bulk_empty_when_all_protected_or_ineligible(tmp_path, monkeypatch):
     assert out["ok"] is True
     assert out["results"] == []
     assert forge.apply_calls == []
+
+
+def test_apply_refuses_while_a_blank_card_is_unresolved(tmp_path, monkeypatch):
+    """Protection targets a NAME: a blank card whose mirror has not resolved
+    the repository's HEAD refuses with the Discover hint, never guesses."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_store
+    from devcake.api import connections_service as cs
+
+    repo = RepoInstance(name="work", forge="github",
+                        url="https://github.com/example-org/work")
+    secrets_store.write_connection_secret("repo", "work", "token", "ghp_write")
+    forge = _FakeForge(apply_result=ApplyProtectionResult(
+        outcome="applied", shape=_shape()))
+    out = _run(cs.apply_forge_protection(
+        "work", config=AppConfig(repos=[repo]),
+        forge_runtime=_MultiRuntime({"work": (forge, repo)})))
+    assert out["ok"] is False and "Discover default branch" in out["error"]
+    assert forge.apply_calls == []
+
+    class Cache:
+        def resolved_branch(self, name):
+            return "trunk"
+    out = _run(cs.apply_forge_protection(
+        "work", config=AppConfig(repos=[repo]),
+        forge_runtime=_MultiRuntime({"work": (forge, repo)}),
+        repo_cache=Cache()))
+    assert out["ok"] is True and forge.apply_calls == ["trunk"]

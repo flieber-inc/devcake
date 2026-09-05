@@ -243,3 +243,176 @@ def test_skill_source_backed_probe_delegates_and_names_the_card(
     assert out["ok"] is True
     assert out["remote_head"] == "feedc0de1234"
     assert out["repo"] == "backed by work"
+
+
+# ── the connection test tells the truth about the branch ────────────────────
+
+class _BranchCache:
+    """RepoCache stand-in: what the mirror resolved, what the remote says,
+    and whether a pinned ref exists on the remote."""
+
+    def __init__(self, *, resolved="", remote="master", pin_exists=True,
+                 remote_error=None):
+        self._resolved, self._remote = resolved, remote
+        self._pin_exists, self._remote_error = pin_exists, remote_error
+
+    def resolved_branch(self, name):
+        return self._resolved
+
+    async def remote_default_branch(self, name):
+        if self._remote_error:
+            raise RuntimeError(self._remote_error)
+        return self._remote
+
+    async def remote_head(self, name):
+        return "0" * 40 if self._pin_exists else None
+
+
+class _OkRuntime:
+    def __init__(self):
+        self.forge = type("F", (), {})()
+
+        async def get_pr_by_branch(branch):
+            return None
+
+        async def default_branch_protection(branch):
+            self.probed = branch
+            return None
+        self.forge.get_pr_by_branch = get_pr_by_branch
+        self.forge.default_branch_protection = default_branch_protection
+        self.forge.reviewer_token = None
+
+    def get(self, name):
+        return self.forge
+
+    async def refresh_health(self, name):
+        return {"ok": True, "can_push": True, "detail": ""}
+
+
+def _repo(tmp_path, monkeypatch, **kw):
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_store
+    secrets_store.write_connection_secret("repo", "r", "token", "ghp_test")
+    return RepoInstance(name="r", forge="github",
+                        url="https://github.com/example-org/r", **kw)
+
+
+def test_forge_test_reports_a_pin_the_repository_lacks(tmp_path, monkeypatch):
+    from devcake.api import connections_service as cs
+    repo = _repo(tmp_path, monkeypatch, default_branch="main")
+    out = _run(cs.test_forge(
+        "r", config=AppConfig(repos=[repo]), forge_runtime=_OkRuntime(),
+        repo_cache=_BranchCache(remote="master", pin_exists=False)))
+    assert out["ok"] is False
+    assert "pins 'main'" in out["error"] and "'master'" in out["error"]
+    assert out["pinned"] is True and out["pin_exists"] is False
+    assert out["repository_default"] == "master"
+
+
+def test_forge_test_blank_card_reports_the_repositorys_default(tmp_path, monkeypatch):
+    from devcake.api import connections_service as cs
+    repo = _repo(tmp_path, monkeypatch)
+    rt = _OkRuntime()
+    out = _run(cs.test_forge(
+        "r", config=AppConfig(repos=[repo]), forge_runtime=rt,
+        repo_cache=_BranchCache(resolved="", remote="master")))
+    assert out["ok"] is True
+    assert out["pinned"] is False
+    assert out["default_branch"] == "master"        # the remote's answer
+    assert out["repository_default"] == "master"
+    assert rt.probed == "master"                     # protection asked on it
+    # a resolved mirror wins over the remote's answer for the probe
+    rt2 = _OkRuntime()
+    out2 = _run(cs.test_forge(
+        "r", config=AppConfig(repos=[repo]), forge_runtime=rt2,
+        repo_cache=_BranchCache(resolved="trunk", remote="trunk")))
+    assert out2["default_branch"] == "trunk" and rt2.probed == "trunk"
+    # a remote probe failure is text, not a failed test
+    out3 = _run(cs.test_forge(
+        "r", config=AppConfig(repos=[repo]), forge_runtime=_OkRuntime(),
+        repo_cache=_BranchCache(resolved="trunk", remote_error="timeout")))
+    assert out3["ok"] is True and "timeout" in out3["repository_default_error"]
+
+
+def test_discover_branch_single_and_bulk(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from devcake.api import connections_service as cs
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    blank = RepoInstance(name="blank", url="https://github.com/o/b")
+    wrong = RepoInstance(name="wrong", url="https://github.com/o/w",
+                         default_branch="main")
+    good = RepoInstance(name="good", url="https://github.com/o/g",
+                        default_branch="development")
+    idle = RepoInstance(name="idle", url="")
+    broken = RepoInstance(name="broken", url="https://github.com/o/x")
+
+    class Cache:
+        def resolved_branch(self, name):
+            return ""
+
+        async def remote_default_branch(self, name):
+            if name == "broken":
+                raise RuntimeError("fatal: Authentication failed")
+            return "" if name == "empty" else "master"
+
+        async def remote_head(self, name):
+            return None if name == "wrong" else "0" * 40
+
+    cfg = AppConfig(repos=[blank, wrong, good, idle, broken])
+    one = _run(cs.discover_forge_branch("blank", config=cfg, repo_cache=Cache()))
+    assert one == {"ok": True, "repo_name": "blank", "pinned": False,
+                   "branch": "master"}
+    pinned = _run(cs.discover_forge_branch("wrong", config=cfg, repo_cache=Cache()))
+    assert pinned["branch"] == "master" and pinned["pin_exists"] is False
+    with pytest.raises(HTTPException) as ex:
+        _run(cs.discover_forge_branch("nope", config=cfg, repo_cache=Cache()))
+    assert ex.value.status_code == 404
+    assert _run(cs.discover_forge_branch("idle", config=cfg, repo_cache=Cache()))["ok"] is False
+    bulk = _run(cs.discover_forge_branches(config=cfg, repo_cache=Cache()))
+    assert bulk["ok"] is True
+    r = bulk["results"]
+    assert set(r) == {"blank", "wrong", "good", "broken"}      # idle skipped
+    assert r["good"] == {"ok": True, "pinned": True, "branch": "master",
+                         "pin_exists": True}
+    assert r["broken"]["ok"] is False and "Authentication failed" in r["broken"]["error"]
+    # an audit row per card, names only
+    from devcake.settings_bundle import _audit_path
+    rows = _audit_path().read_text() if _audit_path().exists() else ""
+    assert "forge_branch_discovered" in rows and "master" in rows
+
+
+def test_discover_branches_answers_inside_the_deadline_with_partial_results(
+        tmp_path, monkeypatch):
+    """A black-holed remote must not hold the bulk probe past the proxy
+    window: finished cards are results, the rest read timed out, and the
+    slow probe is cancelled."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import connections_service as cs
+    fast = RepoInstance(name="fast", url="https://github.com/o/f")
+    slow = RepoInstance(name="slow", url="https://github.com/o/s")
+    cancelled = []
+
+    class Cache:
+        def resolved_branch(self, name):
+            return ""
+
+        async def remote_default_branch(self, name):
+            if name == "slow":
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    cancelled.append(name)
+                    raise
+            return "master"
+
+        async def remote_head(self, name):
+            return "0" * 40
+
+    out = _run(cs.discover_forge_branches(
+        config=AppConfig(repos=[fast, slow]), repo_cache=Cache(),
+        deadline_s=0.3))
+    assert out["results"]["fast"] == {"ok": True, "pinned": False,
+                                      "branch": "master"}
+    assert out["results"]["slow"]["ok"] is False
+    assert "timed out" in out["results"]["slow"]["error"]
+    assert cancelled == ["slow"]

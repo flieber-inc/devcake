@@ -78,8 +78,14 @@ def reset_health_caches() -> None:
 
 
 
-async def _branch_protection(forge_runtime) -> dict:
-    """{repo_name: BranchProtection|None} across every configured repo.
+async def _branch_protection(forge_runtime, *, config=None,
+                             repo_cache=None) -> dict:
+    """{repo_name: BranchProtection|None} across every WORK repo — a card
+    some board lists under `repos`. Reference and memory cards never take a
+    PR, so probing their protection is forge traffic for an advisory nobody
+    can act on (one 404 per card per refresh when the branch is wrong).
+    The branch probed is the resolved one (pin, else the mirror's HEAD);
+    an unresolved blank card is a None row until its first sync.
     Bounded-parallel like ForgeRuntime.refresh_all — sequential, this walk
     stalled the first rich /health call for O(N repos) of probe I/O (same
     defect class as the 2026-08-01 boot incident)."""
@@ -93,6 +99,9 @@ async def _branch_protection(forge_runtime) -> dict:
     try:
         sem = asyncio.Semaphore(PROBE_CONCURRENCY)
         out: dict = {}
+        work_repos = (
+            {n for p in getattr(config, "pmos", []) or [] for n in (p.repos or [])}
+            if config is not None else None)
 
         async def _probe(name: str, f) -> None:
             # internal mission repos (ForgeRuntime.internal) are not operator
@@ -107,10 +116,17 @@ async def _branch_protection(forge_runtime) -> dict:
                 # the unprotected-default-branch advisory would be pure noise
                 if inst is not None and inst.reference_only:
                     return
+                if work_repos is not None and name not in work_repos:
+                    return
+                branch = ((repo_cache.resolved_branch(name)
+                           if repo_cache is not None else "")
+                          or (inst.default_branch if inst else ""))
+                if not branch:
+                    out[name] = None      # unknown until the first sync
+                    return
                 async with sem:
                     async with asyncio.timeout(_PROTECTION_PROBE_TIMEOUT):
-                        prot = await f.default_branch_protection(
-                            inst.default_branch if inst else "main")
+                        prot = await f.default_branch_protection(branch)
                     out[name] = prot.model_dump() if prot else None
             except Exception:  # noqa: BLE001 — probe contract: any per-repo failure (row lookup, timeout, forge) → None (advisory omitted); /health must never 500
                 out[name] = None
@@ -404,7 +420,8 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         "pmo_rate_limited": _budget_alarms(
             budgets, config.poll_interval_seconds),
         "active_runs": len(store.active()),
-        "forge_protection": await _branch_protection(forge_runtime),
+        "forge_protection": await _branch_protection(
+            forge_runtime, config=config, repo_cache=repo_cache),
         "anomalies": _merged("anomalies"),
         "merge_handoffs": _merged("merge_handoffs"),
         "needs_human": _merged("needs_human"),

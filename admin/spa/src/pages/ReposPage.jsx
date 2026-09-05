@@ -12,6 +12,7 @@ import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import InstantZone from "../components/InstantZone.jsx";
 import MoreMenu from "../components/MoreMenu.jsx";
+import { DISCOVER_ALL_BRANCHES_DESC, applyDiscoveredBranches } from "../lib/branches.js";
 import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "../components/ClearSecretsDialog.jsx";
 import TokenCopyModal, { TOKEN_COPY_ENTRY } from "../components/TokenCopyModal.jsx";
 
@@ -218,6 +219,8 @@ export default function ReposPage({ onHealthChange }) {
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
   const [testResult, setTestResult] = useState({});
+  const [discoverResult, setDiscoverResult] = useState({}); // repo name → discover outcome
+  const [bulkDiscover, setBulkDiscover] = useState(null);   // { filled, kept, failed }
   const [applyResult, setApplyResult] = useState({}); // repo name → single/bulk member result
   const [bulkApplyResult, setBulkApplyResult] = useState(null); // { results } | null
   const [clearErr, setClearErr] = useState("");
@@ -520,6 +523,49 @@ export default function ReposPage({ onHealthChange }) {
     });
   };
 
+  // Discover default branch (per card): ask the repository which branch its
+  // HEAD names and write it into the DRAFT's Branch field — the operator
+  // reviews on Save; nothing is written server-side by this button.
+  const discoverBranch = async (name, idx) => {
+    try {
+      const result = await send(
+        "POST", `/connections/forge/${encodeURIComponent(name)}/discover-branch`);
+      setDiscoverResult((prev) => ({ ...prev, [name]: result }));
+      if (result?.ok && result.branch) {
+        setField(`cfg.repos.${idx}.default_branch`, result.branch);
+      }
+    } catch (e) {
+      setDiscoverResult((prev) => ({
+        ...prev, [name]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
+
+  // Section ⋯ → Discover default branches for all repositories: fills blank
+  // Branch fields and replaces pins the repository does not have; a pin the
+  // repository has is KEPT (a deliberate non-default base stays deliberate).
+  const requestDiscoverAllBranches = () => {
+    setConfirm({
+      title: "Discover default branches for all repositories?",
+      body: DISCOVER_ALL_BRANCHES_DESC,
+      confirmLabel: "Discover now",
+      confirmKind: "primary",
+      action: async () => {
+        setConfirm(null);
+        try {
+          const out = await send("POST", "/connections/forge/discover-branches");
+          const results = out?.results || {};
+          const plan = applyDiscoveredBranches(cfg.repos, results);
+          if (plan.changed) setField("cfg.repos", plan.repos);
+          setBulkDiscover(plan.summary);
+          setDiscoverResult((prev) => ({ ...prev, ...results }));
+        } catch (e) {
+          setBulkDiscover({ filled: [], kept: [], failed: [{ name: "*", error: String(e.message || e) }] });
+        }
+      },
+    });
+  };
+
   const testForge = async (name) => {
     const key = `forge:${name}`;
     try {
@@ -554,6 +600,9 @@ export default function ReposPage({ onHealthChange }) {
               { label: "Apply protection to unprotected repos…",
                 desc: BULK_APPLY_PROTECTION_DESC,
                 onClick: requestBulkApplyProtection },
+              { label: "Discover default branches for all repositories…",
+                desc: DISCOVER_ALL_BRANCHES_DESC,
+                onClick: requestDiscoverAllBranches },
               { label: `${TOKEN_COPY_ENTRY.menuLabel}…`,
                 desc: TOKEN_COPY_ENTRY.desc,
                 onClick: () => setTokenCopy(true) },
@@ -729,6 +778,28 @@ export default function ReposPage({ onHealthChange }) {
                   help="HTTPS URL of the repository, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it. Empty = repo stays idle.">
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
+                <Field label="Branch" hint="Empty = the repository's default"
+                  help="The branch Devs branch from and PRs target. Empty = the repository's own default, asked from its HEAD before every dispatch (one extra round trip per sync); an empty repository with no branches yet bootstraps on `main`. A value pins it and is verified at every sync: a pin the repository does not have fails the mirror sync loud and defers this repo's missions until fixed. Discover fills the field with the branch the repository names right now — review on Save.">
+                  <span className="flex items-center gap-2">
+                    <Input value={repo.default_branch || ""}
+                      aria-label={`Repository ${repo.name || idx + 1} branch`}
+                      onChange={(e) => setField(`cfg.repos.${idx}.default_branch`, e.target.value)} />
+                    <Button kind="ghost" disabled={!repoIsSaved(repo.name, idx)}
+                      title={repoIsSaved(repo.name, idx) ? "Ask the repository which branch its HEAD names and fill the field (review on Save)" : "Save the card first — discovery reads saved values"}
+                      onClick={() => discoverBranch(repo.name, idx)}>Discover</Button>
+                  </span>
+                  {discoverResult[repo.name] && (
+                    <span className={`mt-1 block text-xs ${discoverResult[repo.name].ok ? "text-neutral-500 dark:text-neutral-400" : "text-red-600 dark:text-red-400"}`}
+                      data-testid={`discover-branch-result-${repo.name}`}>
+                      {discoverResult[repo.name].ok
+                        ? (discoverResult[repo.name].pinned && discoverResult[repo.name].pin_exists !== false
+                          && (repo.default_branch || "").trim() && (repo.default_branch || "").trim() !== discoverResult[repo.name].branch
+                          ? `pin ${repo.default_branch.trim()} kept — repository default: ${discoverResult[repo.name].branch}`
+                          : `repository default: ${discoverResult[repo.name].branch}${discoverResult[repo.name].pinned && discoverResult[repo.name].pin_exists === false ? " — the previous pin did not exist" : ""}`)
+                        : `✗ ${discoverResult[repo.name].error || "discovery failed"}`}
+                    </span>
+                  )}
+                </Field>
                 <SecretField label="Access token"
                   help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored as plaintext mode 0600 on the app volume — never echoed, never in .env."
                   refKey={connRef("repo", repo.name, "token")} paste
@@ -926,6 +997,63 @@ export default function ReposPage({ onHealthChange }) {
             )}
             <div className="flex justify-end">
               <Button kind="primary" onClick={() => setBulkApplyResult(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {bulkDiscover && (
+        <Modal onClose={() => setBulkDiscover(null)}>
+          <h4 className="mb-2 text-base font-semibold tracking-tight">
+            Discovered default branches
+          </h4>
+          <div className="space-y-3 text-sm" data-testid="discover-branches-summary">
+            {bulkDiscover.filled.length === 0 && bulkDiscover.kept.length === 0
+              && bulkDiscover.failed.length === 0 ? (
+              <p className="text-neutral-600 dark:text-neutral-300">
+                No saved repository cards to ask.
+              </p>
+            ) : null}
+            {bulkDiscover.filled.length > 0 && (
+              <div>
+                <p className="font-medium">Filled into the draft (review on Save):</p>
+                <ul className="mt-1 space-y-1">
+                  {bulkDiscover.filled.map((f) => (
+                    <li key={`f-${f.name}`} className="text-green-700 dark:text-green-400">
+                      <span className="font-mono font-semibold">{f.name}</span>
+                      {" — "}{f.from ? `pin ${f.from} did not exist → ${f.to}` : `blank → ${f.to}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {bulkDiscover.kept.length > 0 && (
+              <div>
+                <p className="font-medium">Pins kept (the repository has them):</p>
+                <ul className="mt-1 space-y-1">
+                  {bulkDiscover.kept.map((k) => (
+                    <li key={`k-${k.name}`} className="text-neutral-600 dark:text-neutral-300">
+                      <span className="font-mono font-semibold">{k.name}</span>
+                      {" — "}{k.pin === k.branch ? `pin ${k.pin} is the repository default` : `pin ${k.pin} kept; repository default is ${k.branch}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {bulkDiscover.failed.length > 0 && (
+              <div>
+                <p className="font-medium">Could not ask:</p>
+                <ul className="mt-1 space-y-1">
+                  {bulkDiscover.failed.map((f) => (
+                    <li key={`x-${f.name}`} className="text-red-600">
+                      <span className="font-mono font-semibold">{f.name}</span>
+                      {" — "}{f.error}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button kind="primary" onClick={() => setBulkDiscover(null)}>Close</Button>
             </div>
           </div>
         </Modal>

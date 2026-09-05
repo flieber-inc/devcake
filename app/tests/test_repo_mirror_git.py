@@ -349,3 +349,125 @@ def test_backed_source_branch_pin_is_honored_and_fails_loud(rig):
     # silently served alpha's main)
     assert run_coro(cache.tree_head("broken")) is None
     assert run_coro(cache.remote_head("broken")) is None
+
+
+# ── real git: the repository's HEAD is the truth (ADR-0024 addendum) ──────────
+
+def _dev_container_on_path():
+    """The provision belt lives in the dev container's package (images/
+    common); host checkout and the app container mount it differently."""
+    import sys
+    from pathlib import Path
+    for p in (Path(__file__).parents[2] / "images" / "common",
+              Path(__file__).parents[1] / "images" / "common"):
+        if p.is_dir():
+            if str(p) not in sys.path:
+                sys.path.insert(0, str(p))
+            return
+    pytest.skip("images/common not mounted")
+
+
+def _clone_from_mirror(cache, name, dest):
+    sh("git", "clone", "-q", f"file://{cache.mirror_path(name)}", str(dest))
+    return dest
+
+
+def test_blank_card_serves_the_remotes_default_branch(tmp_path):
+    """A repository whose default is `trunk` and a blank card: the mirror's
+    HEAD follows the remote's HEAD and a file:// clone has content."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    sh("git", "init", "-q", "-b", "trunk", cwd=origin)
+    (origin / "a.txt").write_text("one\n")
+    sh("git", "add", "-A", cwd=origin)
+    sh("git", "commit", "-qm", "c1", cwd=origin)
+    inst = LocalRepo.model_construct(name="alpha", url=str(origin),
+                                     default_branch="")
+    cache = RepoCache(AppConfig(pmos=[], repos=[]), Forges([inst]),
+                      root=tmp_path / "mirrors")
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok, st.detail
+    head = (cache.mirror_path("alpha") / "HEAD").read_text().strip()
+    assert head == "ref: refs/heads/trunk"
+    assert cache.resolved_branch("alpha") == "trunk"
+    assert cache.has_last_good("alpha")
+    dest = _clone_from_mirror(cache, "alpha", tmp_path / "ws")
+    assert (dest / "a.txt").read_text() == "one\n"
+    assert run_coro(cache.remote_default_branch("alpha")) == "trunk"
+
+
+def test_pin_the_remote_lacks_fails_and_keeps_the_previous_head(rig):
+    """After a good sync on `main`, pinning `nope` fails loud, the mirror's
+    HEAD still names `main`, and a clone still has content."""
+    origin, cache, tmp = rig
+    assert run_coro(cache.sync_one("alpha")).ok
+    inst = cache.forges.instance("alpha")
+    object.__setattr__(inst, "default_branch", "nope")
+    st = run_coro(cache.sync_one("alpha"))
+    assert not st.ok
+    assert "pins 'nope'" in st.detail and "main" in st.detail
+    head = (cache.mirror_path("alpha") / "HEAD").read_text().strip()
+    assert head == "ref: refs/heads/main"
+    assert cache.has_last_good("alpha")          # last-good content survives
+    assert cache.resolved_branch("alpha") == "nope"   # the pin is the answer
+    dest = _clone_from_mirror(cache, "alpha", tmp / "ws2")
+    assert (dest / "a.txt").read_text() == "two\n"
+
+
+def test_pinned_card_on_an_empty_remote_syncs_green(tmp_path):
+    """Zero heads is a legitimate state (a repository awaiting its first
+    commit): the pinned sync is green and the clone is empty by
+    construction — the provision belt must not fire either."""
+    _dev_container_on_path()
+    from devcake_dev.workspace.clone import empty_checkout
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    sh("git", "init", "-q", "-b", "main", cwd=origin)
+    inst = LocalRepo.model_construct(name="alpha", url=str(origin),
+                                     default_branch="main")
+    cache = RepoCache(AppConfig(pmos=[], repos=[]), Forges([inst]),
+                      root=tmp_path / "mirrors")
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok, st.detail
+    assert cache.resolved_branch("alpha") == "main"
+    dest = _clone_from_mirror(cache, "alpha", tmp_path / "ws")
+    assert dest.is_dir() and not (dest / "a.txt").exists()
+    assert empty_checkout(str(cache.mirror_path("alpha")), str(dest)) is False
+
+
+def test_empty_checkout_detects_a_dangling_head_clone(rig):
+    """A mirror with branches whose HEAD names a missing one clones an empty
+    tree with exit 0 — the belt says so; a healthy clone reads False."""
+    _dev_container_on_path()
+    from devcake_dev.workspace.clone import empty_checkout
+    origin, cache, tmp = rig
+    assert run_coro(cache.sync_one("alpha")).ok
+    mirror = cache.mirror_path("alpha")
+    good = _clone_from_mirror(cache, "alpha", tmp / "good")
+    assert empty_checkout(str(mirror), str(good)) is False
+    sh("git", "--git-dir", str(mirror), "symbolic-ref", "HEAD",
+       "refs/heads/nope")
+    bad = tmp / "bad"
+    sh("git", "clone", "-q", f"file://{mirror}", str(bad))
+    assert not (bad / "a.txt").exists()
+    assert empty_checkout(str(mirror), str(bad)) is True
+
+
+def test_blank_card_on_an_empty_remote_bootstraps_main(tmp_path):
+    """Real git: an empty origin advertises no HEAD symref; a blank card's
+    mirror takes `main` and syncs green (the first commit creates it)."""
+    from devcake.domain.repo_mirror import BOOTSTRAP_BRANCH
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    sh("git", "init", "-q", "-b", "trunk", cwd=origin)          # no commits
+    inst = LocalRepo.model_construct(name="alpha", url=str(origin),
+                                     default_branch="")
+    cache = RepoCache(AppConfig(pmos=[], repos=[]), Forges([inst]),
+                      root=tmp_path / "mirrors")
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok, st.detail
+    head = (cache.mirror_path("alpha") / "HEAD").read_text().strip()
+    assert head == f"ref: refs/heads/{BOOTSTRAP_BRANCH}"
+    # the bootstrapped name is what a Dev's first commit creates: served
+    assert cache.resolved_branch("alpha") == BOOTSTRAP_BRANCH
+    assert not cache.has_last_good("alpha")             # nothing to serve stale

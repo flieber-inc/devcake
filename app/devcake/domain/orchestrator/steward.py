@@ -49,6 +49,14 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
         raise RuntimeError("no repository configured — steward runs need the "
                            "forge dialect in their run spec")
     repo, forge = mgr.forges.instance(repo_name), mgr.forges.get(repo_name)
+    if not dispatch.resolved_default_branch(mgr, repo):
+        # a blank home-repo card whose mirror has not resolved the
+        # repository's HEAD: the spec env would carry an empty branch —
+        # skip this cycle like an unusable workspace (never a poisoned poll)
+        log.warning("steward launch skipped — repository %s: default branch "
+                    "unresolved (blank card, mirror not resolved yet)",
+                    repo_name)
+        return None
     # own-instance STEWARD runs only (audit A29, cosmetic): run ids carry the
     # instance prefix + random suffix, so no collision — but a cross-instance
     # count made the human-visible seq misleading

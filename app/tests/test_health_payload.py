@@ -683,3 +683,50 @@ def test_health_payload_carries_the_rate_limit_alarm(monkeypatch):
     got = _payload(fr, monkeypatch)
     assert "rejected 1 request in the last hour" in got["pmo_rate_limited"][b.label]
     assert got["pmo_budget"][b.label]["limited_last_hour"] == 1
+
+
+# ── branch protection probes only work repos, on the resolved branch ────────
+
+def test_branch_protection_probes_work_repos_only_with_the_resolved_branch():
+    """Cards a board lists only as reference (or memory) never take a PR:
+    no probe, no forge traffic, no row. The probed branch is the resolved
+    one; a blank card still unresolved is a None row, not a `main` guess."""
+    from types import SimpleNamespace as NS
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    asked = {}
+
+    class _Prot:
+        def model_dump(self):
+            return {"protected": True}
+
+    class _Forge:
+        def __init__(self, name):
+            self.name = name
+
+        async def default_branch_protection(self, branch):
+            asked[self.name] = branch
+            return _Prot()
+
+    work = RepoInstance(name="work", url="https://github.com/o/w")
+    ref = RepoInstance(name="ref", url="https://github.com/o/ref")
+    pinned = RepoInstance(name="pinned", url="https://github.com/o/p",
+                          default_branch="release")
+    blank = RepoInstance(name="blank", url="https://github.com/o/b")
+    insts = {r.name: r for r in (work, ref, pinned, blank)}
+    fr = NS(forges={n: _Forge(n) for n in insts}, instance=insts.get,
+            internal=set())
+    cfg = AppConfig(pmos=[PMOInstance(name="p", team_key="T",
+                                      repos=["work", "pinned", "blank"],
+                                      reference_repos=["ref"])],
+                    repos=list(insts.values()))
+    cache = NS(resolved_branch=lambda n: {"work": "trunk"}.get(n, ""))
+    health_mod.reset_health_caches()
+    try:
+        out = run_coro(asyncio.wait_for(
+            health_mod._branch_protection(fr, config=cfg, repo_cache=cache),
+            timeout=5))
+    finally:
+        health_mod.reset_health_caches()
+    assert out == {"work": {"protected": True},
+                   "pinned": {"protected": True}, "blank": None}
+    assert asked == {"work": "trunk", "pinned": "release"}

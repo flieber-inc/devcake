@@ -7,6 +7,7 @@ thin forwards that pass the composition root's singletons at call time
 from __future__ import annotations
 
 import asyncio
+
 import logging
 import re
 from contextlib import nullcontext
@@ -561,7 +562,48 @@ async def test_pmo(name: str, *, config, managers):
         return {"ok": False, "error": _probe_client_error(e)}
 
 
-async def test_forge(name: str, *, config, forge_runtime):
+def _branch_probe_error(e: Exception) -> str:
+    """A branch probe's error is git's own (already credential-redacted by
+    the mirror) and is the actionable part — unlike vendor stack traces,
+    it goes to the operator verbatim."""
+    return redact(str(e))[:300] or "branch probe failed"
+
+
+async def _branch_facts(inst, repo_cache) -> dict:
+    """What the connection test says about the card's branch: the pin (or
+    the resolved default), the branch the repository's HEAD names right now,
+    and — for a pinned card — whether the pin exists on the remote. One
+    `ls-remote` for the HEAD symref and, for a pin, one for the ref: a human
+    pressed a button, the round trips are the point. Probe failures become
+    text, never a 500."""
+    pin = (inst.default_branch or "").strip()
+    facts: dict = {"pinned": bool(pin),
+                   "default_branch": pin or (
+                       repo_cache.resolved_branch(inst.name)
+                       if repo_cache is not None else "")}
+    if repo_cache is None:
+        return facts
+    try:
+        facts["repository_default"] = await repo_cache.remote_default_branch(
+            inst.name)
+    except Exception as e:  # noqa: BLE001 — probe contract: text, never a 500
+        facts["repository_default_error"] = _branch_probe_error(e)
+    if pin:
+        facts["pin_exists"] = (await repo_cache.remote_head(inst.name)) is not None
+        if not facts["pin_exists"]:
+            have = facts.get("repository_default") or "unknown"
+            facts["error"] = (
+                f"the card pins {pin!r} but the repository has no such "
+                f"branch (repository default: {have!r}) — blank the Branch "
+                f"to follow the repository's default, or pin one it has")
+    elif not facts["default_branch"]:
+        # blank card, first sync still pending: the remote's answer serves
+        # the probe below and the operator's eye
+        facts["default_branch"] = facts.get("repository_default") or ""
+    return facts
+
+
+async def test_forge(name: str, *, config, forge_runtime, repo_cache=None):
     inst = next((r for r in config.repos if r.name == name), None)
     if inst is None:
         raise HTTPException(404, f"no repo named {name!r}")
@@ -582,6 +624,12 @@ async def test_forge(name: str, *, config, forge_runtime):
         health = await forge_runtime.refresh_health(name)
         if not health["ok"]:
             return _with_error(health)
+        branch = await _branch_facts(inst, repo_cache)
+        if branch.get("error"):
+            # a pin the repository lacks fails the test loud: every sync
+            # of this card fails the same way, and dispatch is gated on it
+            return {"ok": False, "repo_name": name, "forge": inst.forge,
+                    "repo": inst.url, "error": branch["error"], **branch}
         # reference-only: read access is the WHOLE contract — the PR-listing
         # and branch-protection probes need API scopes a read-only PAT may
         # lack, and DevCake never opens PRs here anyway
@@ -590,18 +638,20 @@ async def test_forge(name: str, *, config, forge_runtime):
                     "repo": inst.url, "can_push": False,
                     "reference_only": True,
                     "reviewer_token_configured": False, "probe_pr": None,
-                    "branch_protection": None}
+                    "branch_protection": None, **branch}
         # v4 allows a repo-only (0-pmo) config — probe with the SYS
         # pseudo-instance then (HELLO/OAUTH precedent, never a real branch)
         probe = config.pmos[0].name if config.pmos else "sys"
         pr = await f.get_pr_by_branch(mission_branch(probe, "__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
-        protection = await f.default_branch_protection(inst.default_branch)
+        protection = (await f.default_branch_protection(branch["default_branch"])
+                      if branch["default_branch"] else None)
         return {"ok": True, "repo_name": name, "forge": inst.forge,
                 "repo": inst.url, "can_push": health["can_push"],
                 "reference_only": inst.reference_only,
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
-                "branch_protection": protection.model_dump() if protection else None}
+                "branch_protection": protection.model_dump() if protection else None,
+                **branch}
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": _probe_client_error(e)}
 
@@ -616,6 +666,21 @@ def _work_eligible_repo(inst) -> str | None:
         return ("reference-only repo — apply-protection is for work "
                 "repos with a write token")
     return None
+
+
+def _protection_branch(inst, repo_cache) -> str:
+    """The branch protection is applied to / probed on: the pin, else the
+    branch the mirror resolved; "" while a blank card is unresolved."""
+    pin = (inst.default_branch or "").strip()
+    if pin:
+        return pin
+    return repo_cache.resolved_branch(inst.name) if repo_cache is not None else ""
+
+
+UNRESOLVED_BRANCH = ("default branch unresolved — the card's Branch is blank "
+                     "and the repository's default has not been resolved yet: "
+                     "press Discover default branch (or wait for the first "
+                     "mirror sync), then retry")
 
 
 async def _repo_looks_unprotected(forge, branch: str) -> bool:
@@ -633,7 +698,8 @@ async def _repo_looks_unprotected(forge, branch: str) -> bool:
     return not bool(getattr(prot, "protected", False))
 
 
-async def apply_forge_protection(name: str, *, config, forge_runtime):
+async def apply_forge_protection(name: str, *, config, forge_runtime,
+                                 repo_cache=None):
     """Operator-explicit apply of default-branch protection for one work repo.
 
     Never auto-runs on connect/create. Returns `{ok, repo, outcome, shape}` on
@@ -671,8 +737,14 @@ async def apply_forge_protection(name: str, *, config, forge_runtime):
         audit_event("forge_protection_applied",
                     f"repo={name} error={out['error']}")
         return out
+    branch = _protection_branch(inst, repo_cache)
+    if not branch:
+        out = {"ok": False, "repo": name, "error": UNRESOLVED_BRANCH}
+        audit_event("forge_protection_applied",
+                    f"repo={name} error={out['error']}")
+        return out
     try:
-        result = await f.apply_default_branch_protection(inst.default_branch)
+        result = await f.apply_default_branch_protection(branch)
         reset_health_caches()
         out = {
             "ok": True,
@@ -706,7 +778,8 @@ async def apply_forge_protection(name: str, *, config, forge_runtime):
         return out
 
 
-async def apply_forge_protection_bulk(*, config, forge_runtime):
+async def apply_forge_protection_bulk(*, config, forge_runtime,
+                                      repo_cache=None):
     """Apply protection to every currently-unprotected work repo.
 
     Membership: configured URL, not reference-only, active forge adapter, and
@@ -721,11 +794,98 @@ async def apply_forge_protection_bulk(*, config, forge_runtime):
         f = forge_runtime.get(inst.name)
         if f is None:
             continue
-        if not await _repo_looks_unprotected(f, inst.default_branch):
+        branch = _protection_branch(inst, repo_cache)
+        if not branch:
+            continue          # unresolved blank card: not a member (docs/11)
+        if not await _repo_looks_unprotected(f, branch):
             continue
-        # Reuse the single chokepoint so audit + cache reset stay one path.
+        # Reuse the single chokepoint so audit + cache reset stay one path
+        # (an unresolved blank card refuses there, with the same wording).
         results.append(await apply_forge_protection(
-            inst.name, config=config, forge_runtime=forge_runtime))
+            inst.name, config=config, forge_runtime=forge_runtime,
+            repo_cache=repo_cache))
+    return {"ok": True, "results": results}
+
+
+async def discover_forge_branch(name: str, *, config, repo_cache):
+    """Ask the repository which branch its HEAD names (Discover default
+    branch). Read-only, saved cards only, one `ls-remote`; the SPA writes
+    the answer into the config DRAFT, so there is no write here. Returns
+    `{ok, repo_name, branch, pinned, pin_exists?}` or `{ok:false, error}`;
+    never a 500."""
+    from ..settings_bundle import audit_event
+
+    inst = next((r for r in config.repos if r.name == name), None)
+    if inst is None:
+        raise HTTPException(404, f"no repo named {name!r}")
+    if not inst.configured:
+        return {"ok": False, "repo_name": name,
+                "error": "repository URL is empty — nothing to ask"}
+    out: dict = {"ok": True, "repo_name": name,
+                 "pinned": bool((inst.default_branch or "").strip())}
+    try:
+        out["branch"] = await repo_cache.remote_default_branch(name)
+    except Exception as e:  # noqa: BLE001 — probe contract: text, never a 500
+        out = {"ok": False, "repo_name": name, "error": _branch_probe_error(e)}
+        audit_event("forge_branch_discovered", f"repo={name} error")
+        return out
+    if not out["branch"]:
+        out = {"ok": False, "repo_name": name,
+               "error": "the repository's HEAD names no branch (empty "
+                        "repository or detached HEAD) — pin one on the card"}
+        audit_event("forge_branch_discovered", f"repo={name} error")
+        return out
+    if out["pinned"]:
+        out["pin_exists"] = (await repo_cache.remote_head(name)) is not None
+    audit_event("forge_branch_discovered",
+                f"repo={name} branch={out['branch']}")
+    return out
+
+
+# The bulk probe must answer inside the admin proxy's window (60 s): every
+# card that finished is reported, the rest read "timed out" and the operator
+# presses Discover on those cards individually.
+BULK_DISCOVER_DEADLINE_S = 45
+
+
+async def discover_forge_branches(*, config, repo_cache,
+                                  deadline_s: float = BULK_DISCOVER_DEADLINE_S):
+    """Discover default branches for every saved repo card (section ⋯ menu).
+    Bounded-parallel (a ref listing, wider than the sync's fetch bound),
+    per-card outcomes, one card's failure never aborts the rest, and an
+    overall deadline under the
+    proxy window: finished cards are results, unfinished ones are reported
+    as timed out (their git children are killed on cancellation). The SPA
+    fills blank Branch fields and replaces pins the repository lacks, and
+    keeps pins that exist (reported as such)."""
+    from ..domain.repo_mirror import PROBE_CONCURRENCY
+    sem = asyncio.Semaphore(PROBE_CONCURRENCY)
+    results: dict[str, dict] = {}
+
+    async def _one(inst) -> None:
+        async with sem:
+            try:
+                r = await discover_forge_branch(inst.name, config=config,
+                                                repo_cache=repo_cache)
+            except HTTPException as e:
+                r = {"ok": False, "repo_name": inst.name, "error": str(e.detail)}
+            except Exception as e:  # noqa: BLE001 — per-card contract: text, never a 500
+                r = {"ok": False, "repo_name": inst.name,
+                     "error": _branch_probe_error(e)}
+        results[inst.name] = {k: v for k, v in r.items() if k != "repo_name"}
+
+    cards = [inst for inst in config.repos if inst.configured]
+    tasks = [asyncio.ensure_future(_one(inst)) for inst in cards]
+    if tasks:
+        _done, pending = await asyncio.wait(tasks, timeout=deadline_s)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    for inst in cards:
+        results.setdefault(inst.name, {
+            "ok": False,
+            "error": "timed out — press Discover on this card to retry"})
     return {"ok": True, "results": results}
 
 

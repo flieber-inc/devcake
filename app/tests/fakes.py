@@ -58,7 +58,7 @@ class FakeForgeRuntime:
     def __init__(self, forge=None, inst=None):
         self._forge = forge
         self._inst = inst if inst is not None else RepoInstance(
-            name="main", url="https://github.com/o/r")
+            name="main", url="https://github.com/o/r", default_branch="main")
         self.health: dict = {}
         self.breakers: dict = {}
         self.breaker_fields: dict = {}

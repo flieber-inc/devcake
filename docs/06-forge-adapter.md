@@ -126,7 +126,7 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 | Field | Meaning | Consumed by |
 |---|---|---|
 | `id`, `display_name` | registry key + UI label | registry, admin SPA |
-| `pr_instructions` | PR/MR CLI instructions for the EXECUTE playbook — a template with placeholders `{key}` `{title}` `{default}` `{branch}` (`{branch}` fed by `mission_branch()`, `{default}` by the resolved repo's `default_branch`) | `prompts.execute_prompt(…, pr_instructions=…)` |
+| `pr_instructions` | PR/MR CLI instructions for the EXECUTE playbook — a template with placeholders `{key}` `{title}` `{default}` `{branch}` (`{branch}` fed by `mission_branch()`, `{default}` by the resolved repo's branch — the card's pin, else what the mirror resolved from the repository's HEAD) | `prompts.execute_prompt(…, pr_instructions=…)` |
 | `clone_user` | credential-in-URL user for https clones (`x-access-token` / `oauth2`) | `DEVCAKE_CLONE_USER` in `spec_env`; also `RepoCache`'s injected `clone_user_of` resolver — mirror fetches of **skill sources** read the descriptor directly because a source has no live adapter (ADR-0016 addendum 2) |
 | `git_user_name`, `git_email` | the Dev's git identity (`git_email` is required on the port — every adapter supplies its own) | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` |
 | `pr_noun` | user-facing noun (`"pull request"` / `"merge request"` on GitLab) | SPA + playbook copy |
@@ -154,7 +154,7 @@ SPA cold-start forge ids ride the same pinned mirror as PMO metadata (`admin/spa
 
 - `api_base` (default `None`): explicit API endpoint override — this is what unlocks **GitHub Enterprise** (`https://ghe.corp/api/v3`).
 - **Self-hosted GitLab needs no `api_base`:** the adapter derives its API origin from the repo URL itself (`https://gitlab.corp.example/grp/repo` → API at `https://gitlab.corp.example/api/v4/…`), identical to the old `https://gitlab.com` default for gitlab.com repos. `api_base` remains the explicit override when the API lives elsewhere.
-- `default_branch` (default `"main"`): replaces the previously hardcoded `"main"` everywhere — the EXECUTE sync instructions, `DEVCAKE_DEFAULT_BRANCH`, and the branch-protection check all use `config.repos[i].default_branch` for the resolved repo.
+- `default_branch` (default blank = the repository's own default, resolved from its HEAD at every mirror sync; a value pins it): the EXECUTE sync instructions, `DEVCAKE_DEFAULT_BRANCH`, and the branch-protection check all use the **resolved** branch of the resolved repo (`RepoCache.resolved_branch`), never a hardcoded `main`.
 
 ## 4. The self-approval problem
 

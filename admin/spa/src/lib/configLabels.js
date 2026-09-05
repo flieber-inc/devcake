@@ -189,7 +189,7 @@ export function metaFor(path) {
       name: { label: "Repo name" },
       forge: { label: "Forge" },
       url: { label: "Repository URL" },
-      default_branch: { label: "Default branch" },
+      default_branch: { label: "Branch", format: orEmpty },
       api_base: { label: "API base" },
       auto_merge: {
         label: "Auto-merge", format: onOff,

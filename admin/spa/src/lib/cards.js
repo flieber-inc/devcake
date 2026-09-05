@@ -26,7 +26,7 @@ export const newRepoCard = (name) => ({
   forge: "github",
   url: "",
   api_base: null,
-  default_branch: "main",
+  default_branch: "",
   auto_merge: false,
   auto_resolve_merge_conflicts: true,
   merge_retry_window_minutes: 30,

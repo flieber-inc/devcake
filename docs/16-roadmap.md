@@ -739,6 +739,16 @@ until that run exists, field evidence below stays operator-self-reported.
   gating). Field receipt: a five-child split whose children all landed on
   the default repository.
 
+- **Default branch from the repository's HEAD** (2026-09-05, ADR-0024
+  addendum): `RepoInstance.default_branch` blank by default = inquire
+  HEAD every sync (skill-source path); verify-before-HEAD-move on pins;
+  `has_last_good` = resolving HEAD; `RepoCache.resolved_branch` feeds env,
+  playbook, protection, claims; provision empty-checkout belt; Discover
+  actions (per card + section ⋯); protection probe work repos only. Field
+  receipt: a fleet of reference cards bulk-created with `main` against
+  repositories defaulting to `master` — 95 of 160 mirrors with a dangling
+  HEAD, every reference clone empty, Devs reporting "not mounted".
+
 - **Rate-limit alarm + budget readout** (2026-09-04): `limited_last_hour`
   meter per bucket → `/health.pmo_rate_limited` → critical self-clearing
   admin alert; PMO card readout (`lib/budget.js`); `devcake status` budget

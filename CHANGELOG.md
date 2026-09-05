@@ -16,8 +16,13 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.5 (2026-09-05)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.5).
+
 - **Changed — a repository card's branch is blank by default and means
-  the repository's own default; a wrong pin is loud** (ADR-0024 addendum).
+  the repository's own default; a wrong pin is loud** (#394; ADR-0024 addendum).
   The mirror asks the repository which branch its HEAD names before every
   sync and verifies the branch arrived before moving the mirror's HEAD, on
   pinned cards too: a pin the repository does not have fails that card's

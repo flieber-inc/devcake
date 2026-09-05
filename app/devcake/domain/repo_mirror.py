@@ -222,8 +222,10 @@ class RepoCache:
         """Any ``refs/heads/*`` at all — loose or packed."""
         heads = mirror / "refs" / "heads"
         try:
-            if heads.is_dir() and any(heads.rglob("*")):
-                return any(p.is_file() for p in heads.rglob("*"))
+            # git leaves empty directories behind after pruning nested
+            # branches — only FILES are heads; then fall through to packed
+            if heads.is_dir() and any(p.is_file() for p in heads.rglob("*")):
+                return True
         except OSError:
             return False
         packed = mirror / "packed-refs"

@@ -1062,6 +1062,13 @@ def test_blank_card_on_an_empty_repository_bootstraps_main(tmp_path):
     # (a dispatch on a brand-new repository is the first commit); a
     # never-synced bare-init HEAD still resolves to nothing
     assert cache.resolved_branch("alpha") == BOOTSTRAP_BRANCH
+    p = cache.mirror_path("alpha")
+    # an empty ref directory left by pruning is not a head; packed refs are
+    (p / "refs" / "heads" / "feat").mkdir(parents=True, exist_ok=True)
+    assert cache.resolved_branch("alpha") == BOOTSTRAP_BRANCH   # still zero heads
+    (p / "packed-refs").write_text("a" * 40 + " refs/heads/other\n")
+    assert cache.resolved_branch("alpha") == ""      # a head exists, HEAD dangles
+    (p / "packed-refs").unlink()
     cache.ledger.pop("alpha")
     assert cache.resolved_branch("alpha") == ""
     # a populated repository that advertises no symref still asks for a pin

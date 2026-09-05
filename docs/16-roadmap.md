@@ -741,7 +741,10 @@ until that run exists, field evidence below stays operator-self-reported.
 
 - **Own-write mirror invalidation** (2026-09-05, ADR-0024 addendum item
   7): `RepoCache.invalidate` at finalize (manager verb, any outcome),
-  both app-side merge sites, and the claims conveyor. Field receipt: with
+  the mission-completion chokepoint (every merged pull request, the
+  app's own or found merged), the claims conveyor, and a Clear's claims
+  prune; a write landing during a sync in flight leaves that sync
+  unfresh. Field receipt: with
   the window at zero, every dispatch on a board with 325 reference cards
   re-synced all of them, and a poll cycle stretched to three to five
   minutes; the window was raised to ten minutes once own writes could not

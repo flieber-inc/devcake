@@ -323,6 +323,8 @@ class RepoCache:
         to stamp a fetch that started before it (the fetch may have
         advertised refs from before the write)."""
         physical = self.mirror_name_of(name)
+        if not self.eligible(physical):
+            return        # never synced, never stamped (internal repos)
         self._invalidated_at[physical] = self._monotonic()
         if physical in self._synced_mono:
             self._synced_mono.pop(physical, None)

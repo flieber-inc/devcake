@@ -466,7 +466,7 @@ async def clear_runs():
         store=s.store, executor=s.executor, messaging=s.messaging,
         runlog=s.runlog, internal_forge=s.internal_forge,
         run_manager=s.manager, claims=s.claims, config=s.config,
-        poll_lock=s.poll_rt.lock,
+        poll_lock=s.poll_rt.lock, repo_cache=s.repo_cache,
         dispatch_lock=s.manager.bootstrap.dispatch_lock,
         missions_cache=s.poll_rt.missions_cache,
         managers=s.managers,

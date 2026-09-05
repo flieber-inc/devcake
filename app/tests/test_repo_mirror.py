@@ -1140,3 +1140,109 @@ def test_backed_skill_source_with_a_blank_backing_card_resolves_its_head(tmp_pat
     assert cache.resolved_branch("skills") == "trunk"
     assert cache.resolved_branch("pinned") == "stable"
     assert cache.has_last_good("skills")
+
+
+# ── own-write invalidation (ADR-0024 addendum) ───────────────────────────────
+
+def test_invalidate_drops_freshness_but_keeps_the_ledger_row(tmp_path):
+    """Inside a freshness window a dispatch reuses the last sync — unless
+    DevCake itself changed the repository: `invalidate` makes the next
+    ensure_fresh fetch again while /health's row (last-good) stays."""
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    n = sum(1 for c in calls if "fetch" in c)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n          # window held
+    row = cache.ledger["alpha"]
+    cache.invalidate("alpha")
+    assert cache.ledger["alpha"] is row and row.ok               # row untouched
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n + 1        # resynced
+    cache.invalidate("nope")                                     # unknown: no-op
+    NullRepoCache().invalidate("alpha")
+
+
+def test_invalidate_resolves_a_backed_skill_source_to_its_physical_mirror(tmp_path):
+    from devcake.config import SkillSource
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600)
+    cache.config.skill_sources = [SkillSource(name="skills", url="", backed_by="alpha")]
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    n = sum(1 for c in calls if "fetch" in c)
+    cache.invalidate("skills")                     # the backing card's mirror
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n + 1
+
+
+def _fetches(calls):
+    return sum(1 for c in calls if len(c) > 2 and c[2] == "fetch")
+
+
+def test_own_write_during_a_sync_in_flight_leaves_that_sync_unfresh(tmp_path):
+    """The race the window would otherwise hide: a fetch starts, DevCake
+    writes to the repository while it runs (a Dev's result lands on the
+    ingress consumer, concurrent with the poll cycle), the fetch finishes
+    and stamps. Without the rule the stamp wins and every dispatch inside
+    the window seeds a checkout without the push. With it, a sync that
+    started before the invalidation does not count as fresh: the next
+    gate fetches once more, and only then does the window hold."""
+    state = {"cache": None, "n": 0}
+
+    def script(args):
+        if len(args) > 2 and args[2] == "fetch" and state["cache"] is not None:
+            state["n"] += 1
+            if state["n"] == 2:
+                state["cache"].invalidate("alpha")   # lands mid-fetch
+        return None
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600, script=script)
+    state["cache"] = cache
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    cache.invalidate("alpha")                        # ordinary invalidation
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})   # fetch 2
+    n = _fetches(calls)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})   # resync
+    assert _fetches(calls) == n + 1
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})   # window holds
+    assert _fetches(calls) == n + 1
+    assert "alpha" not in cache._invalidated_at                    # consumed
+
+
+def test_own_write_during_the_first_sync_is_not_lost(tmp_path):
+    """No stamp exists yet during the very first fetch (boot warm-up, a
+    fresh card) — the invalidation must still be recorded."""
+    state = {"cache": None}
+
+    def script(args):
+        if len(args) > 2 and args[2] == "fetch" and state["cache"] is not None:
+            state["cache"].invalidate("alpha")
+            state["cache"] = None                    # only the first fetch
+        return None
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600, script=script)
+    state["cache"] = cache
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    n = _fetches(calls)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert _fetches(calls) == n + 1
+
+
+def test_own_write_rule_keeps_zero_window_coalescing(tmp_path):
+    """`sync_max_age_seconds == 0`: two waiters entering mid-sync still
+    coalesce onto one fetch — the in-flight rule only bites after an
+    invalidation."""
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600)
+    cache.config.repo_mirror.sync_max_age_seconds = 0
+
+    async def both():
+        return await asyncio.gather(cache.ensure_fresh(["alpha"]),
+                                    cache.ensure_fresh(["alpha"]))
+    assert run_coro(both()) == [(True, {}), (True, {})]
+    assert _fetches(calls) == 1
+
+
+def test_invalidation_moment_follows_rename_and_leaves_with_delete(tmp_path):
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    cache.invalidate("alpha")
+    cache.rename_mirror("alpha", "beta")
+    assert "beta" in cache._invalidated_at and "alpha" not in cache._invalidated_at
+    cache.delete_mirror("beta")
+    assert "beta" not in cache._invalidated_at

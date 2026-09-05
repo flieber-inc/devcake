@@ -16,6 +16,21 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — DevCake's own writes invalidate the mirror freshness
+  window.** With `repo_mirror.sync_max_age_seconds` above zero, dispatches
+  reuse a recent mirror sync; now a run finishing on its work repository,
+  a mission completing on a merged pull request (merged by the app or
+  found merged), a claims push to a notebook, or a Clear pruning the
+  claims drops that repository's freshness so the next dispatch resyncs
+  regardless of the window — also when the write lands while that
+  mirror's sync is in flight (that sync does not count as fresh). The
+  window covers passive staleness only, and a Dev's mid-run pulls always
+  go to the real forge.
+- **Fixed — a settings save that waited out a long poll cycle came back
+  as a proxy 504 although the app applied it.** The admin proxy now waits
+  up to five minutes on API calls, so a slow-but-successful write is
+  reported as what it was.
+
 ## v0.5.5 (2026-09-05)
 
 Patch release in the v0.5 "Java Lava" line.

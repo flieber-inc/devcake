@@ -851,14 +851,15 @@ BULK_DISCOVER_DEADLINE_S = 45
 async def discover_forge_branches(*, config, repo_cache,
                                   deadline_s: float = BULK_DISCOVER_DEADLINE_S):
     """Discover default branches for every saved repo card (section ⋯ menu).
-    Bounded-parallel (the mirror sync's bound), per-card outcomes, one
-    card's failure never aborts the rest, and an overall deadline under the
+    Bounded-parallel (a ref listing, wider than the sync's fetch bound),
+    per-card outcomes, one card's failure never aborts the rest, and an
+    overall deadline under the
     proxy window: finished cards are results, unfinished ones are reported
     as timed out (their git children are killed on cancellation). The SPA
     fills blank Branch fields and replaces pins the repository lacks, and
     keeps pins that exist (reported as such)."""
-    from ..domain.repo_mirror import SYNC_CONCURRENCY
-    sem = asyncio.Semaphore(SYNC_CONCURRENCY)
+    from ..domain.repo_mirror import PROBE_CONCURRENCY
+    sem = asyncio.Semaphore(PROBE_CONCURRENCY)
     results: dict[str, dict] = {}
 
     async def _one(inst) -> None:

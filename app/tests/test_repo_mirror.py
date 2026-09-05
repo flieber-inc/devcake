@@ -1058,6 +1058,12 @@ def test_blank_card_on_an_empty_repository_bootstraps_main(tmp_path):
     assert st.ok, st.detail
     assert any("symbolic-ref" in c and c[-1] == f"refs/heads/{BOOTSTRAP_BRANCH}"
                for c in calls)
+    # green sync over zero branches: the resolver serves the bootstrap name
+    # (a dispatch on a brand-new repository is the first commit); a
+    # never-synced bare-init HEAD still resolves to nothing
+    assert cache.resolved_branch("alpha") == BOOTSTRAP_BRANCH
+    cache.ledger.pop("alpha")
+    assert cache.resolved_branch("alpha") == ""
     # a populated repository that advertises no symref still asks for a pin
     def populated(args):
         if args[:2] == ["ls-remote", "--symref"]:

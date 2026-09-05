@@ -9,6 +9,8 @@ needs (GIT_ASKPASS + its token variable, nothing else).
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,20 @@ class GitResult:
     raw_stdout: bytes = b""
 
 
+def _kill_group(proc) -> None:
+    """SIGKILL the child's whole session (git + remote helpers); the child
+    may already be gone when a cancel lands after it exited."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
 async def run_git(args: list[str], *, cwd: Path | None = None,
                   env: dict[str, str] | None = None,
                   timeout: float = GIT_TIMEOUT_SECONDS) -> GitResult:
@@ -52,6 +68,9 @@ async def run_git(args: list[str], *, cwd: Path | None = None,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd is not None else None,
             env={**_BASE_ENV, **(env or {})},
+            # own session: a kill must take git's transport helpers
+            # (git-remote-http holding a black-holed connection) with it
+            start_new_session=True,
         )
     except Exception as e:  # noqa: BLE001 — a missing binary must gate, not crash the app
         return GitResult(127, "", f"git spawn failed: {type(e).__name__}: {e}")
@@ -59,11 +78,11 @@ async def run_git(args: list[str], *, cwd: Path | None = None,
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.CancelledError:
         # a cancelled caller (a bounded bulk probe past its deadline) must
-        # not leave git running: kill, then re-raise the cancellation
-        proc.kill()
+        # not leave git or its helpers running: kill the group, re-raise
+        _kill_group(proc)
         raise
     except TimeoutError:
-        proc.kill()
+        _kill_group(proc)
         # reap; communicate after kill returns promptly
         try:
             await asyncio.wait_for(proc.communicate(), timeout=10)

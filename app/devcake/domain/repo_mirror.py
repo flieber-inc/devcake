@@ -36,7 +36,12 @@ SYNC_CONCURRENCY = 4     # git subprocesses, not HTTP probes — lower than the
 # A remote HEAD/ref probe is one round trip: a human pressed a button (the
 # connection test, Discover) or the sync is about to fetch anyway. Far
 # below the fetch timeout so a black-holed host cannot hold a bulk probe.
-PROBE_TIMEOUT_S = 30
+PROBE_TIMEOUT_S = 20
+# A `ls-remote` is a ref listing, not a fetch: the bulk Discover may ask
+# more repositories at once than the sync fetches, so a large fleet fits
+# inside the admin proxy's window instead of a deterministic tail always
+# reading "timed out".
+PROBE_CONCURRENCY = 12
 # A blank card on an EMPTY repository has no HEAD to inherit: the mirror's
 # HEAD (and so the first push, by the Dev or the claims writer) takes this
 # name — the same literal the claims bootstrap uses.
@@ -212,22 +217,53 @@ class RepoCache:
         mirror = self.mirror_path(self.mirror_name_of(name))
         return self._ref_exists(mirror, self._head_branch(mirror))
 
+    @staticmethod
+    def _has_any_head(mirror: Path) -> bool:
+        """Any ``refs/heads/*`` at all — loose or packed."""
+        heads = mirror / "refs" / "heads"
+        try:
+            if heads.is_dir() and any(heads.rglob("*")):
+                return any(p.is_file() for p in heads.rglob("*"))
+        except OSError:
+            return False
+        packed = mirror / "packed-refs"
+        try:
+            if not packed.is_file():
+                return False
+            for line in packed.read_text(errors="replace").splitlines():
+                parts = line.strip().split()
+                if (len(parts) >= 2 and not line.startswith(("#", "^"))
+                        and parts[1].startswith("refs/heads/")):
+                    return True
+        except OSError:
+            return False
+        return False
+
     def resolved_branch(self, name: str) -> str:
         """The branch a Dev, a PR, a protection probe or a claims push must
         use for this card: the card's pin when it has one, else the branch
         the mirror's HEAD names once a sync resolved it from the remote —
-        never a bare-init HEAD whose target does not exist. "" = unresolved
-        (blank card, no successful sync yet); consumers that need a NAME
-        must defer or say "unknown until the first sync", never render "".
-        Sync and subprocess-free: safe on the request path."""
+        never a bare-init HEAD whose target does not exist. The one HEAD
+        without a target that counts is a bootstrapped EMPTY repository
+        (a green sync over zero branches): its name is what the Dev's first
+        commit creates. "" = unresolved (blank card, no successful sync
+        yet); consumers that need a NAME must defer or say "unknown until
+        the first sync", never render "". Sync and subprocess-free."""
         inst = self.forges.instance(name) or self._skill_source(name)
         pin = ((getattr(inst, "default_branch", "") or "").strip()
                if inst is not None else "")
         if pin:
             return pin
-        mirror = self.mirror_path(self.mirror_name_of(name))
+        physical = self.mirror_name_of(name)
+        mirror = self.mirror_path(physical)
         head = self._head_branch(mirror)
-        return head if self._ref_exists(mirror, head) else ""
+        if self._ref_exists(mirror, head):
+            return head
+        st = self.ledger.get(physical)
+        if (head and st is not None and st.ok
+                and not self._has_any_head(mirror)):
+            return head                      # bootstrapped empty repository
+        return ""
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict],
@@ -408,7 +444,7 @@ class RepoCache:
             # the fetch's, and an operator who wants to skip it pins the
             # discovered branch on the card (Discover default branch).
             r = await self.git(["ls-remote", "--symref", expected_url, "HEAD"],
-                               env=env)
+                               env=env, timeout=PROBE_TIMEOUT_S)
             if r.returncode != 0:
                 # a probe ERROR keeps its own stderr — an auth failure must
                 # latch the breaker, not read as "set Branch on the card"

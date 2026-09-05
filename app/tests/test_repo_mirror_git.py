@@ -468,4 +468,6 @@ def test_blank_card_on_an_empty_remote_bootstraps_main(tmp_path):
     assert st.ok, st.detail
     head = (cache.mirror_path("alpha") / "HEAD").read_text().strip()
     assert head == f"ref: refs/heads/{BOOTSTRAP_BRANCH}"
-    assert cache.resolved_branch("alpha") == ""          # nothing to serve yet
+    # the bootstrapped name is what a Dev's first commit creates: served
+    assert cache.resolved_branch("alpha") == BOOTSTRAP_BRANCH
+    assert not cache.has_last_good("alpha")             # nothing to serve stale

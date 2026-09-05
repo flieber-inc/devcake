@@ -189,9 +189,12 @@ async def harvest(mgr, run: Run, result: dict) -> int:
         if writer is not None and entries:
             from .. import claims as claims_mod
             try:
-                await claims_mod.append_from_harvest(
+                written = await claims_mod.append_from_harvest(
                     writer, mgr.config, run, entries,
                     audit=mgr._audit)
+                for card, n in (written or {}).items():
+                    if n:
+                        mgr.repo_cache.invalidate(card)   # own write
             except Exception:  # noqa: BLE001 — conveyor must never wedge harvest
                 log.exception("claims conveyor failed for %s", run.run_id)
 

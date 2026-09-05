@@ -316,6 +316,7 @@ async def clear_all(
     run_manager=None,
     claims=None,
     config=None,
+    repo_cache=None,
 ) -> dict[str, Any]:
     """Full operator wipe. Best-effort per subsystem; partial failures are
     reported. Order is load-bearing: stop-and-DRAIN first, wipe after — the
@@ -374,6 +375,13 @@ async def clear_all(
         except Exception:  # noqa: BLE001 — wipe continues; claims prune is best-effort
             log.exception("claims prune during clear failed")
             claims_pruned = {"error": "claims prune failed"}
+        if repo_cache is not None:
+            # the prune pushed to those notebooks: the mirrors stay (they are
+            # not run history) but their freshness does not — the first run
+            # after a Clear must not mount the claims it just wiped
+            for card, n in claims_pruned.items():
+                if isinstance(n, int) and n > 0:
+                    repo_cache.invalidate(card)
     log.warning(
         "operator clear-runs: local_runs=%s dagu_deleted=%s oo=%s "
         "activity_repos=%s",
@@ -421,6 +429,7 @@ async def run_clear_runs(
     claims,
     config,
     poll_lock,
+    repo_cache=None,
     dispatch_lock,
     missions_cache,
     managers: dict,
@@ -456,7 +465,7 @@ async def run_clear_runs(
                     store, executor, messaging, runlog,
                     internal_forge=internal_forge,
                     run_manager=run_manager,
-                    claims=claims, config=config)
+                    claims=claims, config=config, repo_cache=repo_cache)
         missions_cache.clear()
         for mgr in managers.values():
             mgr._grace.clear()

@@ -2,7 +2,7 @@
 // picking a source fires a dry_run whose rows drive the target list (no
 // client-side family table to drift); Copy is the only non-dry POST.
 // Values never appear anywhere — field names only.
-import { check, checked, gotoFresh, summary, withPage } from "./harness.mjs";
+import { check, checked, checkedEventually, gotoFresh, summary, withPage } from "./harness.mjs";
 
 const repo = (name, forge, host) => ({
   name, forge,
@@ -163,7 +163,9 @@ await withPage(async (page) => {
     dryPosts.length === 0 && copyPosts.length === 0);
 
   const select = modal.locator('select[aria-label="Token copy source"]');
-  await checked("source options show stored slots; empty cards disabled", async () => {
+  // the slot suffixes and the disabled state arrive with the presence
+  // check, after the modal is already open — read until they have
+  await checkedEventually("source options show stored slots; empty cards disabled", async () => {
     const opts = await select.locator("option").allInnerTexts();
     const alpha = opts.find((t) => t.startsWith("alpha"));
     const gammaDisabled = await select

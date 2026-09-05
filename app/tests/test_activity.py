@@ -145,7 +145,7 @@ def test_cancellation_through_a_phase_finishes_it_and_names_it():
             await t
     asyncio.new_event_loop().run_until_complete(main())
     assert reg.snapshot()["items"] == []
-    assert reg.snapshot()["recent"][0]["error"] == "CancelledError"
+    assert reg.snapshot()["recent"][0]["error"] == "cancelled or timed out"
 
 
 def test_connection_write_phase_waits_then_writes_and_finishes_on_a_raise(monkeypatch):
@@ -236,3 +236,114 @@ def test_odd_floats_never_break_the_payload():
     with reg.phase("pmo.budget.wait", "t/u", wait_s=float("nan"), ratio=float("inf")):
         text = json.dumps(reg.snapshot(), allow_nan=False)
     assert "nan" in text and "inf" in text
+
+
+def test_a_container_is_overdue_only_when_no_child_is_within_its_bound():
+    """A poll cycle's bound is whatever runs inside it: while a
+    later-started dispatch is within ITS bound the cycle is working, not
+    stuck; once the child is overdue too (or there is none) the cycle's
+    own allowance counts."""
+    reg, clock = _registry()
+    cycle = reg.start("poll.cycle", "cycle 1", expect_s=10)
+    clock.tick(25)                                   # past 2 × 10 on its own
+    assert reg.snapshot()["items"][0]["overdue"] is True
+    child = reg.start("mission.dispatch", "T-1 EXECUTE", expect_s=300)
+    items = reg.snapshot()["items"]
+    assert [i["overdue"] for i in items] == [False, False]     # shielded
+    clock.tick(700)                                  # child past 2 × 300
+    items = reg.snapshot()["items"]
+    assert [i["overdue"] for i in items] == [True, True]
+    reg.finish(child)
+    assert reg.snapshot()["items"][0]["overdue"] is True
+    reg.finish(cycle)
+    # a segment inside a cycle is a container too; a leaf never shields a leaf
+    seg = reg.start("poll.instance", "board", expect_s=10)
+    leaf = reg.start("run.finalize", "T-2", expect_s=10)
+    clock.tick(25)
+    wait = reg.start("pmo.budget.wait", "board", expect_s=100)
+    by_kind = {i["kind"]: i["overdue"] for i in reg.snapshot()["items"]}
+    assert by_kind == {"poll.instance": False, "run.finalize": True,
+                       "pmo.budget.wait": False}
+    for p in (wait, leaf, seg):
+        reg.finish(p)
+
+
+def test_a_cancelled_phase_is_labelled_as_such():
+    import asyncio
+    reg, _ = _registry()
+    with pytest.raises(asyncio.CancelledError):
+        with reg.phase("forge.sweep", "all cards"):
+            raise asyncio.CancelledError()
+    assert reg.snapshot()["recent"][0]["error"] == "cancelled or timed out"
+    with pytest.raises(ValueError):
+        with reg.phase("forge.sweep", "all cards"):
+            raise ValueError("x")
+    assert reg.snapshot()["recent"][0]["error"] == "ValueError"
+
+
+def test_config_apply_registers_a_phase_with_and_without_the_cycle_lock(monkeypatch):
+    import asyncio
+    from devcake.api import config_service
+    from devcake.activity import IN_FLIGHT
+    seen = []
+
+    def fake_apply(body, **kw):
+        seen.append([(i["kind"], i["detail"].get("state"))
+                     for i in IN_FLIGHT.snapshot()["items"]
+                     if i["kind"] == "config.apply"])
+        return {"ok": True}
+    monkeypatch.setattr(config_service, "_apply_config_patch", fake_apply)
+    kw = dict(config=None, dev_types=None, managers={}, reload=None)
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch({}, cycle_lock=None, **kw))
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch({}, cycle_lock=asyncio.Lock(), **kw))
+    assert seen == [[("config.apply", "applying")], [("config.apply", "applying")]]
+    assert not [i for i in IN_FLIGHT.snapshot()["items"] if i["kind"] == "config.apply"]
+
+
+def test_clear_runs_registers_a_phase_while_it_holds_the_poll_lock(monkeypatch):
+    import asyncio
+    import devcake.api.clear as clear_mod
+    from devcake.activity import IN_FLIGHT
+    seen = []
+
+    async def fake_clear_all(*a, **kw):
+        seen.append([(i["kind"], i["detail"].get("state"))
+                     for i in IN_FLIGHT.snapshot()["items"]
+                     if i["kind"] == "system.clear_runs"])
+        return {"ok": True}
+    monkeypatch.setattr(clear_mod, "clear_all", fake_clear_all)
+
+    class Bag:
+        def clear(self):
+            pass
+    asyncio.new_event_loop().run_until_complete(clear_mod.run_clear_runs(
+        store=None, executor=None, messaging=None, runlog=None,
+        internal_forge=None, run_manager=None, claims=None, config=None,
+        poll_lock=asyncio.Lock(), dispatch_lock=asyncio.Lock(),
+        missions_cache=Bag(), managers={}, shared_backend_degraded=Bag()))
+    assert seen == [[("system.clear_runs", "clearing")]]
+    assert not [i for i in IN_FLIGHT.snapshot()["items"]
+                if i["kind"] == "system.clear_runs"]
+
+
+def test_activity_endpoint_serves_the_payload_behind_basic_auth(monkeypatch):
+    import base64
+    from fastapi.testclient import TestClient
+    from devcake.api import main as main_mod
+    monkeypatch.setenv("ADMIN_USER", "operator")
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    rt = SimpleNamespace(poll_skips={"board": {"at": "t", "reason": "quota",
+                                               "retry_after_s": 40.0}},
+                         last_poll_at=None)
+    monkeypatch.setattr(main_mod, "svc", lambda: SimpleNamespace(
+        poll_rt=rt, config=SimpleNamespace(poll_interval_seconds=75)))
+    client = TestClient(main_mod.app)
+    assert client.get("/api/v1/activity").status_code == 401
+    token = base64.b64encode(b"operator:correct-horse").decode()
+    r = client.get("/api/v1/activity", headers={"Authorization": f"Basic {token}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["poll_interval_s"] == 75 and "board" in body["poll_skips"]
+    assert set(body) >= {"now", "items", "idle_since", "recent", "last_poll_at"}

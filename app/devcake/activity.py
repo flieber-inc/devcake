@@ -1,4 +1,4 @@
-"""In-flight registry — what the app is doing right now (docs/11 §0).
+"""In-flight registry — what the app is doing right now (docs/11 §0a).
 
 The admin's status bar answers one question the health payload cannot:
 "is it frozen, or waiting?" Health reports state after the fact (last
@@ -14,6 +14,7 @@ no I/O.
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from collections import deque
@@ -23,6 +24,11 @@ from typing import Any
 
 RECENT = 12                 # finished phases kept for "last: … N s ago"
 OVERDUE_FACTOR = 2.0        # elapsed > expect_s × factor ⇒ overdue
+# Containers have no bound of their own — a poll cycle lasts as long as the
+# dispatches, syncs and waits inside it. One is overdue only when its own
+# bound has passed AND no later-started phase is still within its bound:
+# while a child is working, the parent is working.
+CONTAINERS = frozenset({"poll.cycle", "poll.instance"})
 
 
 def _iso(ts: float) -> str:
@@ -95,7 +101,10 @@ class InFlight:
         try:
             yield p
         except BaseException as e:
-            self.finish(p, error=f"{type(e).__name__}")
+            # a budget-killed sweep arrives as a cancellation, not a timeout
+            self.finish(p, error=("cancelled or timed out"
+                                  if isinstance(e, asyncio.CancelledError)
+                                  else type(e).__name__))
             raise
         else:
             self.finish(p)
@@ -103,15 +112,25 @@ class InFlight:
     # ── the surface ──
     def snapshot(self) -> dict:
         now, now_mono = self._clock(), self._mono()
+        ordered = sorted(self._items.values(), key=lambda x: x.started_mono)
+        elapsed = {p.id: max(now_mono - p.started_mono, 0.0) for p in ordered}
+
+        def own_overdue(p: Phase) -> bool:
+            return bool(p.expect_s and elapsed[p.id] > p.expect_s * OVERDUE_FACTOR)
+
+        def shielded(p: Phase) -> bool:
+            return p.kind in CONTAINERS and any(
+                q.started_mono > p.started_mono and q.kind not in CONTAINERS
+                and q.expect_s and not own_overdue(q) for q in ordered)
+
         items = []
-        for p in sorted(self._items.values(), key=lambda x: x.started_mono):
-            elapsed = max(now_mono - p.started_mono, 0.0)
+        for p in ordered:
             items.append({
                 "kind": p.kind, "subject": p.subject,
                 "started_at": _iso(p.started_at),
-                "elapsed_s": round(elapsed, 1),
+                "elapsed_s": round(elapsed[p.id], 1),
                 "expect_s": p.expect_s,
-                "overdue": bool(p.expect_s and elapsed > p.expect_s * OVERDUE_FACTOR),
+                "overdue": own_overdue(p) and not shielded(p),
                 "detail": dict(p.detail),
             })
         idle_since = None

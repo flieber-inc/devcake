@@ -284,7 +284,7 @@ async def liveness():
 @app.get("/api/v1/activity")
 async def activity_now():
     """In-flight phases + transient poll skips for the admin status bar
-    (docs/11 §0). Cheap: no probes, no tracker calls."""
+    (docs/11 §0a). Cheap: no probes, no tracker calls."""
     from .activity import build_activity_payload
     s = svc()
     return build_activity_payload(

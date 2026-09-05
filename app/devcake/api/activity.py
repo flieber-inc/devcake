@@ -1,4 +1,4 @@
-"""`GET /api/v1/activity` — what the app is doing right now (docs/11 §0).
+"""`GET /api/v1/activity` — what the app is doing right now (docs/11 §0a).
 
 A cheap, uncached read: the in-flight registry's snapshot plus the poll
 runtime's transient skips. No probes, no tracker calls — the status bar

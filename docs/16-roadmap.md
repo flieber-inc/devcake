@@ -739,6 +739,14 @@ until that run exists, field evidence below stays operator-self-reported.
   gating). Field receipt: a five-child split whose children all landed on
   the default repository.
 
+- **Own-write mirror invalidation** (2026-09-05, ADR-0024 addendum item
+  7): `RepoCache.invalidate` at finalize (manager verb, any outcome),
+  both app-side merge sites, and the claims conveyor. Field receipt: with
+  the window at zero, every dispatch on a board with 325 reference cards
+  re-synced all of them, and a poll cycle stretched to three to five
+  minutes; the window was raised to ten minutes once own writes could not
+  be served stale.
+
 - **Default branch from the repository's HEAD** (2026-09-05, ADR-0024
   addendum): `RepoInstance.default_branch` blank by default = inquire
   HEAD every sync (skill-source path); verify-before-HEAD-move on pins;

@@ -307,6 +307,19 @@ class RepoCache:
             return mono >= t_entry
         return (self._monotonic() - mono) <= max_age
 
+    def invalidate(self, name: str) -> None:
+        """DevCake itself just changed this repository (a run finished on
+        it, the app merged its PR, the claims writer pushed a notebook):
+        drop its freshness so the next dispatch resyncs regardless of
+        `sync_max_age_seconds`. The window covers PASSIVE staleness only —
+        an own write is known, so it is never served stale (the feed memo's
+        own-write rule, ADR-0003 amendment, applied to mirrors). The ledger
+        row (last-good, health) is untouched; unknown names are a no-op."""
+        physical = self.mirror_name_of(name)
+        if physical in self._synced_mono:
+            self._synced_mono.pop(physical, None)
+            log.debug("mirror %s: freshness dropped after an own write", physical)
+
     async def ensure_fresh(self, names) -> tuple[bool, dict[str, str]]:
         """Sync every named mirror unless already fresh. (all_ok, {name:
         reason}) — reasons only for failures. NEVER raises; the caller's
@@ -789,6 +802,9 @@ class NullRepoCache:
 
     def has_last_good(self, name: str) -> bool:
         return False
+
+    def invalidate(self, name: str) -> None:
+        return None
 
     def resolved_branch(self, name: str) -> str:
         return ""

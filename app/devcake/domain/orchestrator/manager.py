@@ -241,7 +241,14 @@ class MissionManager:
 
     @with_pmo_call("critical")
     async def finalize(self, run: Run, payload: dict):
-        return await finalize.finalize(self, run, payload)
+        try:
+            return await finalize.finalize(self, run, payload)
+        finally:
+            # the Dev may have pushed to its work repository whatever the
+            # outcome — the next dispatch on it resyncs the mirror
+            # (own-write invalidation, docs/07 §5a)
+            if run.repo_ref:
+                self.repo_cache.invalidate(run.repo_ref)
 
     def dev_failure_error(self, run: Run, payload: dict):
         return finalize.dev_failure_error(self, run, payload)

@@ -291,6 +291,7 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         span.set_attribute("devcake.merge.verdict", str(verdict))
         try:
             await forge.merge(pr.number)
+            mgr.repo_cache.invalidate(m.repo)   # own write: the mirror resyncs
         except Exception:  # noqa: BLE001 — a failed merge IS the signal here: a real conflict routes/hands off, anything else is logged transient and next cycle retries
             # AUD-010: trust `verdict is False` as a real conflict only when
             # the forge exposes a genuine mergeable tri-state (GitHub/GitLab).

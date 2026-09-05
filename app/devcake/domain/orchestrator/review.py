@@ -180,6 +180,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 try:
                     async def _merge():
                         await forge.merge(pr.number)
+                        mgr.repo_cache.invalidate(run.repo_ref)   # own write
                     await mgr._checkpoint(run, steps.REVIEW_MERGE, _merge)
                 except Exception as e:  # noqa: BLE001 — every MERGE failure, whatever its type, must enter the re-probe → conflict-route → merge-failed recovery ladder; escaping would strand the mission mid-REVIEW
                     merge_err = e

@@ -1140,3 +1140,34 @@ def test_backed_skill_source_with_a_blank_backing_card_resolves_its_head(tmp_pat
     assert cache.resolved_branch("skills") == "trunk"
     assert cache.resolved_branch("pinned") == "stable"
     assert cache.has_last_good("skills")
+
+
+# ── own-write invalidation (ADR-0024 addendum) ───────────────────────────────
+
+def test_invalidate_drops_freshness_but_keeps_the_ledger_row(tmp_path):
+    """Inside a freshness window a dispatch reuses the last sync — unless
+    DevCake itself changed the repository: `invalidate` makes the next
+    ensure_fresh fetch again while /health's row (last-good) stays."""
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    n = sum(1 for c in calls if "fetch" in c)
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n          # window held
+    row = cache.ledger["alpha"]
+    cache.invalidate("alpha")
+    assert cache.ledger["alpha"] is row and row.ok               # row untouched
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n + 1        # resynced
+    cache.invalidate("nope")                                     # unknown: no-op
+    NullRepoCache().invalidate("alpha")
+
+
+def test_invalidate_resolves_a_backed_skill_source_to_its_physical_mirror(tmp_path):
+    from devcake.config import SkillSource
+    cache, calls, _ = make_cache(tmp_path, [R1], max_age=3600)
+    cache.config.skill_sources = [SkillSource(name="skills", url="", backed_by="alpha")]
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    n = sum(1 for c in calls if "fetch" in c)
+    cache.invalidate("skills")                     # the backing card's mirror
+    assert run_coro(cache.ensure_fresh(["alpha"])) == (True, {})
+    assert sum(1 for c in calls if "fetch" in c) == n + 1

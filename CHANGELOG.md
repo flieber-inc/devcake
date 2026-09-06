@@ -16,6 +16,15 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — grok runs report their cache writes and the CLI's own cost.**
+  The grok token report was written against a CLI that emitted neither;
+  newer CLIs report a cache-creation count under `usage` and a per-model
+  `costUSD` under `modelUsage`, and the mapper ignored both, so the Runs
+  page showed cache writes as not extracted and every grok run as an
+  estimate only. Both are now carried when present: a reported zero of
+  cache writes stays zero (the vendor's number), a missing cost stays
+  absent, never zero.
+
 ## v0.5.6 (2026-09-05)
 
 Patch release in the v0.5 "Java Lava" line.

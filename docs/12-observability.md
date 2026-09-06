@@ -165,12 +165,14 @@ feed report: human-facing in the activity-feed report (INV-5) and
 machine-facing as `run.finalize` span attributes — OpenObserve is the cost
 dashboard.
 
-**`devcake.cost.usd` is a claude-code-only attribute.** It keeps its name over
-the stored v1 key (`cost_usd_native`, `adr/0029`) and is set solely from a
-natively reported figure; neither `codex` 0.147.0 nor `grok` 0.2.112 emits a
-cost field of any kind (`08-harness-templates.md` §5) — no price table invents
-one, and a missing cost is written as **null, never 0**, so a cost query returns
-claude runs only rather than silently averaging in free-looking runs.
+**`devcake.cost.usd` carries only a natively reported figure.** It keeps its
+name over the stored v1 key (`cost_usd_native`, `adr/0029`) and is set solely
+from what the harness itself reports — claude-code's `total_cost_usd`, or the
+per-model `costUSD` a newer grok CLI lists (`08-harness-templates.md` §5);
+`codex` and older grok CLIs emit no cost field of any kind — no price table
+invents one, and a missing cost is written as **null, never 0**, so a cost
+query returns priced runs only rather than silently averaging in free-looking
+runs.
 
 **`devcake.cost.usd_estimated` is the cross-harness spend proxy** (`adr/0021`):
 the app-side rate-card estimate, emitted only when the full token split exists

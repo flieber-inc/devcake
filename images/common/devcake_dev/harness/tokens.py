@@ -114,10 +114,14 @@ def grok_end_report(ev):
     on the failure path too, and a token report must never abort the artifact
     path — the caller falls back, and INV-5 posts "unavailable" at worst.
 
-    NO COST. grok emits no `total_cost_usd` and no cost field of any kind at
-    0.2.112 (measured across all eleven captures), so `cost_usd` stays None. A
-    0.0 here would read as "this run was free" in the feed report and would be
-    aggregated as real spend in `devcake.cost.usd` (docs/12 §4).
+    COST AND CACHE WRITES ARE THE CLI'S. Older CLIs emit no cost field of
+    any kind (measured across all eleven 0.2.112 captures) and no
+    `cache_creation_input_tokens`; newer ones report a per-model `costUSD`
+    under `modelUsage` and the cache-creation count under `usage`. Both are
+    mapped only when present: an absent cost stays None — a 0.0 would read
+    as "this run was free" in the feed report and aggregate as real spend
+    in `devcake.cost.usd` (docs/12 §4) — while a reported count of zero
+    cache writes is the vendor's own number and is kept as 0.
 
     The captured token *values* came from a stub backend; the presence and key
     names of these fields are the CLI's (fixtures README)."""
@@ -130,18 +134,24 @@ def grok_end_report(ev):
     # camelCase (`outputTokens`) and carry no per-model cost to rank by first
     models = sorted(mu, key=lambda k: _dict(mu[k]).get("outputTokens") or 0,
                     reverse=True)
+    # the CLI's own dollar figure, summed over the models it lists; None
+    # (never 0) when no model carries one — see above
+    costs = [_dict(mu[k]).get("costUSD") for k in mu]
+    costs = [c for c in costs if isinstance(c, (int, float))
+             and not isinstance(c, bool)]
     return token_report_v1(
         model=models[0] if models else "grok",
         source="end_event",
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
         cache_read_tokens=usage.get("cache_read_input_tokens"),
+        cache_write_tokens=usage.get("cache_creation_input_tokens"),
         total_tokens=usage.get("total_tokens"),
         # a SUBSET of output_tokens (never priced on top) — first-class in
         # v1; pre-v1 it hid in a regex-parsed `notes` string
         reasoning_tokens=usage.get("reasoning_tokens"),
         num_turns=ev.get("num_turns"),
-        cost_usd_native=None,           # never 0 — see above
+        cost_usd_native=sum(costs) if costs else None,
         raw={"usage": usage, "modelUsage": mu,
              "num_turns": ev.get("num_turns")})
 

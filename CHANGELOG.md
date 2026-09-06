@@ -16,6 +16,12 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — Run now on a scheduled task says why it created nothing.**
+  While intake is paused (globally, or on every board the task would
+  fire on) Run now answers 409 "intake is paused …", and a task whose
+  last ticket is still open answers 409 with that reason, instead of a
+  quiet empty result the operator had to guess at. The pause stays
+  absolute: Run now is not a back door around it.
 - **Fixed — grok runs report their cache writes and the CLI's own cost.**
   The grok token report was written against a CLI that emitted neither;
   newer CLIs report a cache-creation count under `usage` and a per-model

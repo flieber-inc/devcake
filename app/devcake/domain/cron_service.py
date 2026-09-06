@@ -59,6 +59,12 @@ class CronUnconfigured(Exception):
     """Unknown id, or a reserved row aimed at a product PMO."""
 
 
+class CronPaused(Exception):
+    """Intake is paused on every board the job would fire on, so nothing
+    was created. The pause is absolute — Run now is not a back door — and
+    the answer says so instead of an empty list."""
+
+
 class _MemoryCronLedger:
     """In-memory CronStore for tests/default wiring. Production injects
     the file-backed adapter so the outcome ledger survives restarts
@@ -153,6 +159,9 @@ class CronService:
                     self.store.record(
                         row.id, "created" if created else "skipped",
                         fired_at=stamp)
+                except CronPaused as e:
+                    log.info("cron %s skipped — %s", row.id, e)
+                    self.store.record(row.id, "skipped", fired_at=stamp)
                 except (CronBusy, CronUnconfigured):
                     self.store.record(row.id, "skipped", fired_at=stamp)
                 except PMOTransient as e:
@@ -177,12 +186,13 @@ class CronService:
         if job_id == MEMORY_CURATOR_CRON_ID:
             created = await self._fire_memory_curator(row, automatic=automatic)
         else:
-            created = await self._fire_generic(row)
+            created = await self._fire_generic(row, automatic=automatic)
         if not automatic and created:
             self.store.record(row.id, "created")
         return created
 
-    async def _fire_generic(self, row: CronJob) -> list[dict]:
+    async def _fire_generic(self, row: CronJob, *,
+                            automatic: bool = True) -> list[dict]:
         if not row.pmo:
             raise CronUnconfigured(f"cron {row.id} has no target pmo")
         mgr = self.managers.get(row.pmo)
@@ -190,7 +200,15 @@ class CronService:
             raise CronUnconfigured(f"cron {row.id}: no live manager for "
                                    f"pmo {row.pmo!r}")
         if intake_blocks_dispatch(self.config, mgr.instance):
-            return []
+            # the pause is absolute for both paths; a scheduled fire skips
+            # quietly (the ledger records it), Run now is told why
+            if automatic:
+                log.info("cron %s skipped — intake is paused on %s",
+                         row.id, row.pmo)
+                return []
+            raise CronPaused(
+                f"intake is paused on {row.pmo} — no ticket created; resume "
+                f"intake to fire {row.id}")
         async with self._lock(row.id):
             if await self._in_flight(mgr, row.id):
                 raise CronBusy(f"cron {row.id} already in flight on {row.pmo}")
@@ -201,6 +219,8 @@ class CronService:
         M = memory_bound_names(self.config, self.dev_types)
         created: list[dict] = []
         errors = 0
+        paused: list[str] = []      # boards the intake pause held back
+        busy: list[str] = []        # boards whose last ticket is still open
         self.no_board = {m for m in self.no_board if m in M}
         for m in sorted(M):
             boards = [p for p in self.config.pmos if list(p.repos) == [m]]
@@ -218,10 +238,12 @@ class CronService:
                 if mgr is None:
                     continue
                 if intake_blocks_dispatch(self.config, inst):
+                    paused.append(inst.name)
                     continue
                 lock_key = f"{row.id}:{inst.name}"
                 async with self._lock(lock_key):
                     if await self._in_flight(mgr, row.id):
+                        busy.append(inst.name)
                         continue
                     try:
                         created.append(await self._create_ticket(
@@ -233,6 +255,21 @@ class CronService:
         if errors and not created:
             raise RuntimeError(
                 f"memory-curator fire failed on {errors} board(s)")
+        if not created and (paused or busy):
+            # nothing fired: a scheduled fire skips quietly (the ledger
+            # records it), Run now is told WHICH stop held every board —
+            # never an empty list the operator has to guess at
+            if automatic:
+                log.info("cron %s skipped — paused on %s, busy on %s",
+                         row.id, sorted(paused), sorted(busy))
+                return []
+            if paused:
+                raise CronPaused(
+                    f"intake is paused on {', '.join(sorted(paused))} — no "
+                    f"curation ticket created; resume intake to Run now")
+            raise CronBusy(
+                f"a curation ticket is still open on "
+                f"{', '.join(sorted(busy))} — nothing new created")
         return created
 
     async def _claims_depth(self, card: str) -> int:

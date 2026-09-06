@@ -10,7 +10,7 @@ import pytest
 
 from devcake.config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
                             PMOInstance, RepoInstance, memory_curator_seed)
-from devcake.domain.cron_service import (CronBusy, CronService,
+from devcake.domain.cron_service import (CronBusy, CronPaused, CronService,
                                          CronUnconfigured, cron_marker)
 from devcake.domain.model import (LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN,
                                   PRIORITY_RANK, Mission)
@@ -124,8 +124,51 @@ def test_pause_skips_generic():
                 description_template="x", pmo="eng"),
     ])
     svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)})
-    assert run_coro(svc.fire("nightly", automatic=False)) == []
+    # the pause is absolute AND loud: Run now names it instead of an empty list
+    with pytest.raises(CronPaused, match="intake is paused on eng"):
+        run_coro(svc.fire("nightly", automatic=False))
     assert pmo.created == []
+
+
+def test_memory_curator_run_now_names_the_stop_that_held_every_board():
+    from devcake.domain import claims as claims_mod
+    claims_mod.claims_depth["nb"] = 3
+    product = PMOInstance(name="eng", team_key="A", repos=["webapp"],
+                          memory_repos=["nb"])
+    curator = PMOInstance(name="cur", team_key="B", repos=["nb"],
+                          intake_paused=True)
+    pmo = FakePMO()
+    cfg = _cfg(product, curator)
+    svc = CronService(cfg, {"eng": _mgr("eng", FakePMO(), product),
+                            "cur": _mgr("cur", pmo, curator)})
+    with pytest.raises(CronPaused, match="intake is paused on cur"):
+        run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=False))
+    assert pmo.created == []
+    # the global switch reads the same way
+    curator.intake_paused = False
+    cfg.intake_paused = True
+    with pytest.raises(CronPaused, match="intake is paused on cur"):
+        run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=False))
+    # un-paused: a ticket; a second Run now while it is open is busy, not empty
+    cfg.intake_paused = False
+    assert run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=False))[0]["pmo"] == "cur"
+    with pytest.raises(CronBusy, match="still open on cur"):
+        run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=False))
+    assert len(pmo.created) == 1
+
+
+def test_run_now_under_pause_maps_to_409_with_the_reason():
+    from fastapi import HTTPException
+    from devcake.api.cron_service import run_cron
+
+    class Cron:
+        async def fire(self, job_id, *, automatic):
+            raise CronPaused("intake is paused on cur — no curation ticket created")
+
+    with pytest.raises(HTTPException) as ei:
+        run_coro(run_cron(MEMORY_CURATOR_CRON_ID, cron=Cron()))
+    assert ei.value.status_code == 409
+    assert "intake is paused" in ei.value.detail
 
 
 def test_memory_curator_skips_empty_automatic_run_now_does_not():

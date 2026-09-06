@@ -10,6 +10,12 @@ Each Mission Type has a **playbook**: what the Dev receives, what it must do ins
 - **Finalization (app-side, always):** post the step comment (the Dev's last message, `>`-blockquoted) with the `{seq}_{TYPE}.md` full-session transcript attached (ADR-0014) → post token report (§8) → compare-and-transition (`04-orchestrator.md` §4) → forge side effects if any. **Exception:** on REVIEW-approve, the merge precedes the Done transition (§4.1) — Done must never overstate the repository.
 - **Failure:** nonzero exit or invalid `result.json` ⇒ no PMO transition; the Mission's label is untouched and it reschedules (attempt counting per `15-errors-and-retries.md`).
 
+On REVIEW finalization or replay, a live `canceled` ticket or a
+`DEVCAKE-SKIP` label is an external stop even if the ticket still carries
+`DEVCAKE-REVIEW`: publish the artifacts and external-transition notice, but
+do not merge or change its status/labels.
+An approval accepted before cancellation is not revoked (`04` §4).
+
 ## 1. ONBOARD
 
 **Goal:** assess a previously-untouched Mission's complexity and route it.

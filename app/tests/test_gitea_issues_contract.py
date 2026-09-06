@@ -857,3 +857,97 @@ def test_ensure_labels_enables_deps_without_touching_time_tracker():
     assert tracker.get("enable_issue_dependencies") is True
     assert tracker.get("enable_time_tracker") is True
     assert tracker.get("allow_only_contributors_to_track_time") is False
+
+
+# ── the feed-changes witness (docs/05 §9.3) ─────────────────────────────────
+
+def test_feed_changes_since_lists_repository_comments_after_the_moment():
+    calls = []
+
+    def handler(req):
+        calls.append((req.url.path, dict(req.url.params)))
+        if req.url.path.endswith("/issues/comments"):
+            if req.url.params.get("page") == "1":
+                return httpx.Response(200, json=[
+                    {"id": 11, "issue_url": "http://gitea/o/r/issues/7",
+                     "pull_request_url": "",
+                     "created_at": "2026-01-01T00:00:00Z",
+                     "updated_at": "2026-01-01T00:02:00Z"},
+                    {"id": 12, "issue_url": "http://gitea/o/r/issues/8",
+                     "pull_request_url": "http://gitea/o/r/pulls/8",
+                     "created_at": "2026-01-01T00:00:01Z",
+                     "updated_at": "2026-01-01T00:00:01Z"},
+                ])
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"message": "unhandled"})
+
+    pmo = GiteaIssuesAdapter("http://gitea", "tok", "o/r", instance="gitea",
+                             transport=httpx.MockTransport(handler))
+    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    delta = run(pmo.feed_changes_since("o/r", since, limit_pages=3))
+    path, params = calls[0]
+    assert path == "/api/v1/repos/o/r/issues/comments"
+    assert params["since"] == "2026-01-01T00:00:00Z" and params["page"] == "1"
+    assert [(c.pmo_id, c.entry_id) for c in delta.changes] == [("7", "11")]
+    assert delta.newest == datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc)
+    assert delta.truncated is False
+    assert pmo.capabilities().feed_delta is True
+
+
+def test_feed_changes_since_truncates_past_the_page_cap():
+    def full_page(req):
+        page = int(req.url.params.get("page", "1"))
+        return httpx.Response(200, json=[
+            {"id": page * 1000 + i, "issue_url": f"http://gitea/o/r/issues/{i}",
+             "pull_request_url": "", "created_at": "2026-01-01T00:00:00Z",
+             "updated_at": f"2026-01-01T00:{page:02d}:{i:02d}Z"}
+            for i in range(50)])
+
+    pmo = GiteaIssuesAdapter("http://gitea", "tok", "o/r", instance="gitea",
+                             transport=httpx.MockTransport(full_page))
+    delta = run(pmo.feed_changes_since(
+        "o/r", datetime(2026, 1, 1, tzinfo=timezone.utc), limit_pages=2))
+    assert delta.truncated is True and len(delta.changes) == 100
+    assert delta.newest == datetime(2026, 1, 1, 0, 2, 49, tzinfo=timezone.utc)
+
+
+def test_feed_changes_since_survives_a_server_clamped_page_size():
+    """A server that clamps `limit` below the page size answers short pages
+    that are NOT the last page: the walk continues until an empty page (or
+    the header's last page) so the witness never stops early."""
+    def clamped(req):
+        page = int(req.url.params.get("page", "1"))
+        if page > 2:
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[
+            {"id": page * 100 + i, "issue_url": f"http://gitea/o/r/issues/{i}",
+             "pull_request_url": "", "created_at": "2026-01-01T00:00:00Z",
+             "updated_at": f"2026-01-01T00:0{page}:{i:02d}Z"}
+            for i in range(30)])
+
+    pmo = GiteaIssuesAdapter("http://gitea", "tok", "o/r", instance="gitea",
+                             transport=httpx.MockTransport(clamped))
+    delta = run(pmo.feed_changes_since(
+        "o/r", datetime(2026, 1, 1, tzinfo=timezone.utc), limit_pages=5))
+    assert len(delta.changes) == 60 and delta.truncated is False
+    assert delta.newest == datetime(2026, 1, 1, 0, 2, 29, tzinfo=timezone.utc)
+
+
+def test_feed_changes_since_skips_an_unreadable_timestamp():
+    def handler(req):
+        if req.url.params.get("page") == "1":
+            return httpx.Response(200, json=[
+                {"id": 1, "issue_url": "http://gitea/o/r/issues/1",
+                 "pull_request_url": "", "created_at": "not-a-time",
+                 "updated_at": "not-a-time"},
+                {"id": 2, "issue_url": "http://gitea/o/r/issues/2",
+                 "pull_request_url": "", "created_at": "2026-01-01T00:00:00Z",
+                 "updated_at": "2026-01-01T00:00:05Z"}])
+        return httpx.Response(200, json=[])
+
+    pmo = GiteaIssuesAdapter("http://gitea", "tok", "o/r", instance="gitea",
+                             transport=httpx.MockTransport(handler))
+    delta = run(pmo.feed_changes_since(
+        "o/r", datetime(2026, 1, 1, tzinfo=timezone.utc), limit_pages=2))
+    assert [c.entry_id for c in delta.changes] == ["2"]       # never re-dated
+    assert delta.newest == datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)

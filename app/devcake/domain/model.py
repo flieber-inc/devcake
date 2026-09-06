@@ -222,3 +222,23 @@ class Activity(BaseModel):
     documents: list[MissionDocument] = Field(default_factory=list)
     # full-mode hard stop tripped: the builder must render a loud banner
     truncated: bool = False
+
+
+class FeedChange(BaseModel):
+    """One feed entry the vendor reports as created, modified, or removed
+    after a moment — WITHOUT its text. The domain never parses a feed here:
+    the feed-scan memo uses these rows only to decide WHEN a memoized scan
+    must be redone, never WHAT it says (docs/04 §1)."""
+    pmo_id: str
+    entry_id: str
+    created_at: datetime
+    changed_at: datetime      # vendor clock: the newest of created/edited/removed
+
+
+class FeedDelta(BaseModel):
+    """`feed_changes_since` answer: the changed rows, the newest change time
+    seen (the caller's next watermark), and whether the page cap cut the
+    list short — a truncated delta proves nothing about untouched feeds."""
+    changes: list[FeedChange] = Field(default_factory=list)
+    newest: Optional[datetime] = None
+    truncated: bool = False

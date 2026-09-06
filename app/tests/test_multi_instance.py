@@ -730,8 +730,10 @@ def test_reload_keeps_the_feed_memo_unless_the_pmo_card_changed(monkeypatch):
         internal_forge=None, skill_service=None, repo_cache=None,
         receipt_store=None, oidc_tokens=None, claims=None,
         blocker_locator=None, dev_types={})
+    memo.delta_error = "unknown field"        # a latched feed-changes witness
     s.build_managers()                        # same card: the memo survives
     assert mgr.feed_memo is memo and len(memo) == 1
+    assert memo.delta_error is None           # …and the Save re-arms the witness
     cfg.pmos[0] = PMOInstance(name="alpha", team_key="BRAVO", repos=[])
     s.build_managers()                        # another board: a fresh memo
     assert mgr.feed_memo is not memo and len(mgr.feed_memo) == 0

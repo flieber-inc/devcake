@@ -22,6 +22,7 @@ from ...security import redact
 from ..model import LABEL_DISCOVERY, MissionRef
 from ..run import TERMINAL_STATES, Run, utcnow
 from . import board
+from . import feed_memo
 from . import steps
 from .feed import blockquote, post_attachment_comment, unquoted
 from .markers import (DISCOVERY_FIELD_MAX, DISCOVERY_PREVIEW_MAX, defang,
@@ -242,6 +243,7 @@ async def scan_source(mgr, m, *, memo: bool = True) -> SourceState:
             board.bump(mgr, "feed_scan_memo_hits")
             return hit
         gen = fm.generation(m.pmo_id)
+        floor = fm.witnessed(m.pmo_id)     # captured before the await, like gen
     board.bump(mgr, "feed_scan_reads")
     act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
     posted: list[tuple[int, int]] = []
@@ -253,7 +255,8 @@ async def scan_source(mgr, m, *, memo: bool = True) -> SourceState:
     state = SourceState(posted=posted, receipted=receipted,
                         truncated=bool(act.truncated))
     if fm is not None and not state.truncated:
-        fm.put("discovery", m, state, gen)
+        fm.put("discovery", m, state, gen,
+               feed_until=feed_memo.feed_until(act.entries), floor=floor)
     return state
 
 

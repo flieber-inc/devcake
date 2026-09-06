@@ -37,6 +37,15 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   board's deaths no longer pause another board's steward. Boards that had
   raised the poll interval for quota can lower it again (`13-deployment.md`
   upgrade notes).
+- **Changed — labelled feeds are re-read only when they changed.** On
+  Linear and Gitea Issues, one team-wide feed-changes read per poll cycle
+  (ids and times, never text) tells the orchestrator which memoized feed
+  scans are still good, so a mission whose tracker record moved for a
+  label, status, or relation edit no longer costs a feed read; only a feed
+  with a newer entry is re-read, and once. Adds `feed_changes_since` and the
+  `feed_delta` capability to the PMO port; GitHub and GitLab Issues keep
+  today's per-mission reads. Two new `pmo_demand` counters
+  (`feed_delta_reads`, `feed_scan_memo_kept`) show the witness at work.
 
 ## v0.5.8 (2026-09-06)
 

@@ -17,6 +17,7 @@ import httpx
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
+from ...domain.model import FeedDelta
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
@@ -625,6 +626,12 @@ class GitLabIssuesAdapter:
             managed_labels_expected=len(ALL_LABELS),
             detail=f"relations={rel}",
         )
+
+    async def feed_changes_since(self, team_ref: str, since: datetime, *,
+                                 limit_pages: int) -> FeedDelta:
+        # No team-wide feed-changes read is wired (`feed_delta` False): the
+        # poll re-reads per mission (GitLab lists notes per issue only).
+        raise NotImplementedError("gitlab_issues: feed_changes_since")
 
     def capabilities(self) -> PMOCapabilities:
         return PMOCapabilities(

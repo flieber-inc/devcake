@@ -115,7 +115,7 @@ def test_export_audits_with_encrypted_flag(monkeypatch, tmp_path):
 def test_export_from_profile_source(monkeypatch, tmp_path):
     from fastapi import HTTPException
     app_main, *_ = _wire_app(monkeypatch, tmp_path)
-    run_coro(app_main.save_profile({"name": "base"}))
+    run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "base"})))
     out = run_coro(app_main.export_settings(
         {"source": {"profile": "base"}, "sections": ALL,
          "encryption": ENC})).body.decode()

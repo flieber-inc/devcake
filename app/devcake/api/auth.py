@@ -89,6 +89,23 @@ async def enforce_control_plane_auth(request: Request, call_next):
         return JSONResponse({"detail": "missing request intent header"}, status_code=403)
     token = REQUEST_ACTOR.set(request_actor(request))
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        if request.method in MUTATING_METHODS and 200 <= response.status_code < 400:
+            # every admitted change through the control plane leaves one
+            # row — method, route path and status, with the actor — whether
+            # or not the handler keeps a finer audit of its own (ADR-0041);
+            # names only, never values. Written while the actor context is
+            # still set.
+            _audit_control_plane_write(request, response.status_code)
     finally:
         REQUEST_ACTOR.reset(token)
+    return response
+
+
+def _audit_control_plane_write(request: Request, status: int) -> None:
+    try:
+        from ..settings_bundle import audit_event
+        audit_event("control_plane_write",
+                    f"{request.method} {request.scope['path']} {status}")
+    except Exception:  # noqa: BLE001 — an audit row must never fail the request it records
+        pass

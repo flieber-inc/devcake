@@ -77,6 +77,37 @@ def test_render_call_builds_the_request(doc):
         ("put", "/api/v1/config", {}, {"poll_interval_seconds": 30})
     with pytest.raises(ValueError, match="missing path parameter"):
         render_call(tools["run_cron"], {})
+    with pytest.raises(ValueError, match="empty path parameter"):
+        render_call(tools["run_cron"], {"job_id": ""})
+
+
+def test_path_arguments_cannot_change_a_tools_destination(doc):
+    """A path value carrying separators is encoded, never spliced: the
+    credential-upload route (opted out) cannot be reached through the
+    clone tool's name argument, nor any other."""
+    tools = {t.name: t for t in build_tools(doc, read_only=False)}
+    _, path, _, _ = render_call(tools["clone_dev_type"], {"name": "demo/credentials#"})
+    assert path == "/api/v1/dev-types/demo%2Fcredentials%23/clone"
+    _, path, _, _ = render_call(tools["get_run"], {"run_id": "../../secrets?x=1"})
+    assert path == "/api/v1/runs/..%2F..%2Fsecrets%3Fx%3D1"
+    assert "#" not in path and "?" not in path
+
+
+def test_admitted_write_tools_declare_their_fields(doc):
+    """The catalogue teaches an agent what to send: every write tool with
+    a body names its fields, except the settings patch, which is a
+    described free-form document by design."""
+    tools = {t.name: t for t in build_tools(doc, read_only=False)}
+    untyped = sorted(n for n, t in tools.items() if t.body
+                     and not (t.input_schema["properties"]["body"].get("properties")
+                              or t.input_schema["properties"]["body"].get("additionalProperties") not in (None, True)))
+    assert untyped == ["put_config"], untyped
+    assert "description" in tools["put_config"].input_schema["properties"]["body"]
+    tmpl = tools["put_prompt_template"].input_schema["properties"]["body"]
+    assert tmpl["required"] == ["template"] and "template" in tmpl["properties"]
+    skill = tools["create_skill"].input_schema["properties"]["body"]
+    assert {"name", "description", "body", "overwrite"} <= set(skill["properties"])
+    assert "paused" in tools["put_pmo_intake"].input_schema["properties"]["body"]["properties"]
     with pytest.raises(ValueError, match="unknown argument"):
         render_call(tools["health"], {"bogus": 1})
 

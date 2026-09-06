@@ -11,7 +11,9 @@
 DevCake runs a team of coding agents from your task board. Give it a goal;
 it breaks down large work, plans, implements, and reviews. You get pull
 requests, session transcripts, and recorded token usage and costs. You steer
-on the board and decide what gets merged.
+on the board and decide what gets merged. Every run is a clean room that
+starts from the ticket and the recorded artifacts alone, so what an agent
+knew is exactly what the record shows.
 
 **Bring a coding agent.** Use your preferred agent as your setup and operations
 companion: have it configure the host, connect your tools, explain the queue,
@@ -29,7 +31,8 @@ agent to read it explicitly; automatic discovery is optional.
 ## Start with one mission
 
 You need a **dedicated Linux or macOS host**, Docker with Compose and Buildx,
-Python 3.12+, and model credentials. Ask your agent to check the
+Python 3.12+ with [uv](https://docs.astral.sh/uv/) (or pip), and model
+credentials. Ask your agent to check the
 [deployment requirements](docs/13-deployment.md), then, from this checkout:
 
 ```bash
@@ -87,8 +90,8 @@ Mix them by role or team.
 Scheduled Tasks create tickets from a template at an interval: dependency
 reviews, documentation checks, recurring reports, or your own maintenance
 routine. They use the normal mission pipeline. The same settings page holds
-the **Memory Curator** and the **Relations Steward**, which proposes ticket
-dependencies directly. Intake pause applies to scheduled work too.
+the **Memory Curator** and the **Relations Steward**, which adds missing
+ticket dependencies on the board. Intake pause applies to scheduled work too.
 
 **Ask your agent:** “Set up a recurring documentation check with a clear
 deliverable, a suitable interval, and human review.”

@@ -183,9 +183,13 @@ Read [configuration and API](../../docs/11-admin-panel.md),
 
 1. **Establish state.** Run `devcake status --json`; inspect `health_reachable`,
    `health_error`, and PMO budgets, not just process liveness. Fetch
-   `GET /api/v1/health` for full health detail. Match the mission's live board
-   state with its latest run, feed, and PR. Check pauses, staffing/bake waits,
-   dependencies, merge waits, and human handoffs before calling it a failure.
+   `GET /api/v1/health` for full health detail. For "is it frozen or
+   waiting", read `GET /api/v1/activity` (the admin's activity bar): the
+   phases in flight with their durations, boards skipped for a tracker's
+   quota with the retry hint, and a dead poll loop reading as stalled.
+   Match the mission's live board state with its latest run, feed, and PR.
+   Check pauses, staffing/bake waits, dependencies, merge waits, and human
+   handoffs before calling it a failure.
 2. **Locate the cause.** Use Overview/health, Runs/transcript, and bounded
    `docker compose logs --tail=100 app` (or the affected service). Check
    `poll_degraded`, `circuit_breakers`, `dev_backend_degraded`, repository

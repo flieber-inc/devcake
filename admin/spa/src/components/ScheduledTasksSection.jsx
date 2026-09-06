@@ -206,7 +206,7 @@ function CuratorPanel() {
       const n = (r.created || []).length;
       setMsg(n
         ? `✓ ${r.created.map((c) => `${c.pmo}:${c.key}`).join(", ")}`
-        : "✓ no ticket — boards paused or a curation ticket is still in flight");
+        : "✓ no ticket created — nothing to curate");
     } catch (e) {
       setMsg(`✗ ${String(e.message || e)}`);
     }
@@ -374,7 +374,7 @@ export default function ScheduledTasksSection() {
         ...m,
         [id]: n
           ? `✓ ${r.created.map((c) => `${c.pmo}:${c.key}`).join(", ")}`
-          : "✓ no ticket — board paused or the last ticket is still in flight",
+          : "✓ no ticket created — nothing to do",
       }));
     } catch (e) {
       setRunMsg((m) => ({ ...m, [id]: `✗ ${String(e.message || e)}` }));

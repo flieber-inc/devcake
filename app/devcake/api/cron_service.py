@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from ..domain.cron_service import CronBusy, CronUnconfigured
+from ..domain.cron_service import CronBusy, CronPaused, CronUnconfigured
 from ..ports.pmo import PMOTransient
 
 
@@ -19,7 +19,8 @@ async def run_cron(job_id: str, *, cron) -> dict:
         created = await cron.fire(job_id, automatic=False)
     except CronUnconfigured as e:
         raise HTTPException(422, str(e))
-    except CronBusy as e:
+    except (CronBusy, CronPaused) as e:
+        # both are honest stops, not failures: the operator reads why
         raise HTTPException(409, str(e))
     except PMOTransient as e:
         # the tracker was busy or its request budget thin — same 502 family as

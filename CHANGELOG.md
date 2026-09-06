@@ -16,6 +16,18 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Added — `devcake mcp`, an operator MCP server whose tools are the API
+  itself.** A coding agent beside the operator can now read and act on a
+  deployment through the Model Context Protocol: `devcake mcp` speaks MCP
+  over stdio and turns every admin-API operation into a tool, derived at
+  startup from the app's own API description (published under the
+  authenticated prefix at `/api/v1/openapi.json`), so a new route is a
+  new tool with no second coding. `--read-only` keeps GET operations;
+  secret-bearing and wipe routes opt out at their definition; mutations
+  carry the intent header and an actor label the audit rows record. The
+  SDK is an optional extra (`devcake-cli[mcp]`); the base CLI stays
+  dependency-free. Every API route now carries a one-line docstring, which
+  is its tool description.
 - **Changed — the README leads with agent-assisted setup and operations,
   and the operator skill is agent-neutral.** The README opens with a
   prompt for the operator's coding agent and explains fresh context per

@@ -20,6 +20,22 @@ A discreet, collapsible strip under every page's content, outside the sidebar (`
 
 ## 1. REST API contract (`/api/v1`)
 
+The API describes itself: the generated OpenAPI document is served at
+`/api/v1/openapi.json` (a read behind the same basic auth; not a table row
+below because FastAPI serves it, not `main.py`) — operation ids are the route function names, a
+function registered under two routes carries the second route's method as a
+suffix, and every route's one-line docstring is its description. That
+document is the operator MCP server's tool catalogue (`devcake mcp`, ADR-0041):
+one tool per JSON operation, nothing hand-listed. A route that must never be
+a tool carries `openapi_extra={"x-devcake-mcp": "never"}` at its definition
+(the secret-value routes — settings export and import, secret and credential
+writes, the secrets clear and token copy — and the run-history wipe); an
+operation whose request or response is not JSON (the CSV export) is excluded
+by that fact alone. Clients may send `X-DevCake-Actor` (a short label; the MCP
+server sends `mcp`) and the audit rows record it as `actor` — a label for the
+trail, never an identity: every request authenticates the same way.
+
+
 Full control-plane inventory (source of truth: `app/devcake/api/main.py`;
 pin: `test_docs11_rest_table_covers_every_main_route`). Auth posture: §6.
 

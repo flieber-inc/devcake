@@ -358,6 +358,17 @@ Agents and runbooks compose verbs; they do not get a hidden mega-command.
 Sibling acceptance criteria that assumed `setup` would bring the stack up
 are wrong — follow this chain instead (CAKE-178 ratification note).
 
+### Addendum — the `mcp` verb (ADR-0041)
+
+`devcake mcp [--read-only]` is the operator MCP server over stdio. It keeps
+this ADR's rules: a thin verb over the loopback admin API with the checkout's
+credentials (the same client `status` uses, now shared), never a network
+listener, exit codes `0`/`2`/`3` as elsewhere (`3` when the extra is not
+installed or the stack does not answer). Its tool list is not a second
+command surface: it is derived at startup from the app's OpenAPI document,
+so it grows with the API and never with this CLI. The MCP SDK is an optional
+extra (`devcake-cli[mcp]`); Decision 3's zero-dependency base stays.
+
 ## Consequences
 
 - Founder ratification is recorded; sibling CLI implementation issues may

@@ -252,12 +252,28 @@ async def lifespan(app: FastAPI):
             await t
 
 
+def _operation_id(route, _seen: dict[str, int] = {}) -> str:  # noqa: B006 — the registration-order memo IS the point
+    """Operation id = the route function's name (the operator MCP server's
+    tool name, ADR-0041). FastAPI calls this once per route at registration,
+    in file order: a function registered under a second route (a GET/POST
+    pair, a create/update pair) gets that route's method appended so every
+    operation id stays unique — nothing else is renamed."""
+    n = _seen.get(route.name, 0)
+    _seen[route.name] = n + 1
+    return route.name if n == 0 else f"{route.name}_{sorted(route.methods)[0].lower()}"
+
+
 app = FastAPI(
     title="DevCake",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
-    openapi_url=None,
+    # the API describes itself under the authenticated prefix — that
+    # document is the operator MCP server's tool catalogue (ADR-0041):
+    # operation ids are the route function names, descriptions their
+    # docstrings; a route opts out with openapi_extra x-devcake-mcp=never
+    openapi_url="/api/v1/openapi.json",
+    generate_unique_id_function=_operation_id,
 )
 app.middleware("http")(enforce_control_plane_auth)
 FastAPIInstrumentor.instrument_app(app)
@@ -265,6 +281,7 @@ FastAPIInstrumentor.instrument_app(app)
 
 @app.get("/api/v1/health")
 async def health():
+    """Full component health: trackers, forges, mirrors, budgets, breakers, degraded boards, needs-human and blocked reasons."""
     s = svc()
     return await build_health_payload(
         config=s.config, dev_types=s.dev_types, managers=s.managers,
@@ -278,6 +295,7 @@ async def health():
 
 @app.get("/api/v1/health/live")
 async def liveness():
+    """Unauthenticated liveness probe: the app process answers."""
     return {"app": True}
 
 
@@ -309,6 +327,7 @@ async def list_runs(limit: int = 25, offset: int = 0,
                     created_to: str | None = None, sort: str | None = None,
                     dir: str | None = None, group_by: str | None = None,
                     active_only: bool = False):
+    """Run history rows with token and cost scalars; filters by mission, board and dates; sort, group and active-only."""
     from .runs_service import list_runs_response
     s = svc()
     return list_runs_response(s.store, s.config.cost_inputs, limit=limit,
@@ -320,12 +339,13 @@ async def list_runs(limit: int = 25, offset: int = 0,
                               active_only=active_only)
 
 
-@app.get("/api/v1/runs.csv")
+@app.get("/api/v1/runs.csv", responses={200: {"content": {"text/csv": {}}}})
 async def export_runs_csv(mission_key: str | None = None,
                           pmo_ref: str | None = None,
                           created_from: str | None = None,
                           created_to: str | None = None,
                           sort: str | None = None, dir: str | None = None):
+    """The run history as CSV, with the same rows and filters as the JSON listing."""
     from .runs_service import runs_csv_response
     s = svc()
     return runs_csv_response(s.store, s.config.cost_inputs,
@@ -337,6 +357,7 @@ async def export_runs_csv(mission_key: str | None = None,
 
 @app.get("/api/v1/runs/{run_id}")
 async def get_run(run_id: str):
+    """One run's operational fields and token/cost scalars, by run id."""
     from .runs_service import get_run_response
     s = svc()
     return get_run_response(run_id, s.store, s.config.cost_inputs,
@@ -463,7 +484,7 @@ async def stop_runs_route():
     return await stop_all_runs(run_manager=s.manager, run_store=s.store)
 
 
-@app.post("/api/v1/system/clear-runs")
+@app.post("/api/v1/system/clear-runs", openapi_extra={"x-devcake-mcp": "never"})
 async def clear_runs():
     """Operator wipe: local run state + Dagu history + OpenObserve data.
 
@@ -487,12 +508,14 @@ async def clear_runs():
 
 @app.get("/api/v1/config")
 async def get_config():
+    """The general settings: boards, repositories, skill sources, policies and scheduled tasks."""
     data = svc().config.model_dump()
     return data
 
 
 @app.put("/api/v1/config")
 async def put_config(body: dict):
+    """Replace the general settings; validated server-side, plural lists replaced whole, adapters hot-reloaded."""
     s = svc()
     return await apply_config_patch(body, config=s.config, dev_types=s.dev_types,
                                     managers=s.managers,
@@ -514,24 +537,28 @@ async def put_pmo_intake(name: str, body: dict):
 
 @app.get("/api/v1/profiles")
 async def list_profiles():
+    """Saved settings profiles: counts, secret presence, the last-applied breadcrumb and the divergence flag."""
     s = svc()
     return profiles_service.list_profiles_rows(s.config, s.dev_types)
 
 
 @app.get("/api/v1/profiles/{name}")
 async def get_profile(name: str):
+    """One saved profile: metadata, settings sections, a secrets presence map and the apply-preview diff."""
     s = svc()
     return profiles_service.get_profile_payload(name, s.config, s.dev_types)
 
 
 @app.post("/api/v1/profiles")
 async def save_profile(body: dict):
+    """Snapshot the live settings and secret values as a named profile."""
     s = svc()
     return profiles_service.save_profile_body(body, s.config, s.dev_types)
 
 
 @app.post("/api/v1/profiles/{name}/apply")
 async def apply_profile(name: str):
+    """Apply a saved profile: replaces the sections it contains through the configuration chokepoints."""
     s = svc()
     # Same serialization as PUT /config: the world-swap must not replace the
     # config object and adapter graph while a poll cycle sits suspended
@@ -545,18 +572,21 @@ async def apply_profile(name: str):
 
 @app.post("/api/v1/profiles/{name}/rename")
 async def rename_profile(name: str, body: dict):
+    """Rename a saved profile."""
     return profiles_service.rename_profile_body(name, body)
 
 
 @app.delete("/api/v1/profiles/{name}")
 async def delete_profile(name: str):
+    """Delete a saved profile."""
     return profiles_service.delete_profile_body(name)
 
 
 # ── settings transfer (ADR-0013): export/import — bodies in settings_transfer ─
 
-@app.post("/api/v1/settings/export")
+@app.post("/api/v1/settings/export", openapi_extra={"x-devcake-mcp": "never"})
 async def export_settings(body: dict):
+    """Export settings as a passphrase-encrypted bundle: the one sanctioned secret-value egress."""
     s = svc()
     return await settings_transfer.export_settings_body(
         body, config=s.config, dev_types=s.dev_types,
@@ -565,25 +595,29 @@ async def export_settings(body: dict):
 
 @app.get("/api/v1/settings/export/summary")
 async def export_summary():
+    """Section and secret counts for the export dialog, without values."""
     return await settings_transfer.export_summary_body(
         skill_service=svc().skill_service)
 
 
-@app.post("/api/v1/settings/import/preview")
+@app.post("/api/v1/settings/import/preview", openapi_extra={"x-devcake-mcp": "never"})
 async def import_preview(body: dict):
+    """Parse and decrypt a settings bundle and diff it against the current settings, without applying."""
     s = svc()
     return settings_transfer.import_preview_body(body, config=s.config,
                                                  dev_types=s.dev_types)
 
 
-@app.post("/api/v1/settings/import")
+@app.post("/api/v1/settings/import", openapi_extra={"x-devcake-mcp": "never"})
 async def import_settings(body: dict):
+    """Import a settings bundle as a saved profile; nothing is applied."""
     return await settings_transfer.import_settings_body(
         body, skill_service=svc().skill_service)
 
 
-@app.post("/api/v1/settings/import/env")
+@app.post("/api/v1/settings/import/env", openapi_extra={"x-devcake-mcp": "never"})
 async def import_env(body: dict):
+    """Generate a ready-to-place .env from a bundle's bootstrap section."""
     return settings_transfer.import_env_body(body)
 
 
@@ -592,6 +626,7 @@ async def import_env(body: dict):
 
 @app.get("/api/v1/prompt-templates")
 async def get_prompt_templates():
+    """Mission-type playbook templates: built-in text, overrides and per-board overrides."""
     s = svc()
     return await devtypes_service.get_prompt_templates(config=s.config,
                                                        dev_types=s.dev_types)
@@ -599,23 +634,27 @@ async def get_prompt_templates():
 
 @app.put("/api/v1/prompt-templates/{mission_type}/{name}")
 async def put_prompt_template(mission_type: str, name: str, body: dict):
+    """Save one mission-type playbook template override."""
     return await devtypes_service.put_prompt_template(mission_type, name, body)
 
 
 @app.delete("/api/v1/prompt-templates/{mission_type}/{name}")
 async def delete_prompt_template(mission_type: str, name: str):
+    """Delete one mission-type playbook template override, restoring the built-in."""
     return await devtypes_service.delete_prompt_template(mission_type, name,
                                                          config=svc().config)
 
 
 @app.put("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def put_devtype_prompt(dev_type: str, name: str, body: dict):
+    """Save one Dev Type prompt template override."""
     return await devtypes_service.put_devtype_prompt(
         dev_type, name, body, dev_types=svc().dev_types)
 
 
 @app.delete("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def delete_devtype_prompt(dev_type: str, name: str):
+    """Delete one Dev Type prompt template override."""
     s = svc()
     return await devtypes_service.delete_devtype_prompt(
         dev_type, name, config=s.config, dev_types=s.dev_types)
@@ -623,23 +662,27 @@ async def delete_devtype_prompt(dev_type: str, name: str):
 
 @app.get("/api/v1/harnesses")
 async def list_harnesses():
+    """The harness registry: images, credential requirements, OAuth availability, skills dir and house CLI pins."""
     return await devtypes_service.list_harnesses()
 
 
 @app.get("/api/v1/harnesses/{template}/latest-cli")
 @app.post("/api/v1/harnesses/{template}/latest-cli")
 async def latest_cli(template: str):
+    """The latest published CLI version for one harness template."""
     return await devtypes_service.latest_cli_version(
         template, source=svc().version_source)
 
 
 @app.get("/api/v1/dev-types")
 async def list_dev_types():
+    """The Dev Type roster."""
     return await devtypes_service.list_dev_types(dev_types=svc().dev_types)
 
 
 @app.post("/api/v1/dev-types/first-setup")
 async def first_setup_dev_types(body: dict):
+    """Empty-roster wizard: create executor, judge and steward Dev Types with pinned CLIs and global assignments."""
     s = svc()
     return await devtypes_service.first_setup(
         body, config=s.config, dev_types=s.dev_types,
@@ -649,12 +692,14 @@ async def first_setup_dev_types(body: dict):
 @app.post("/api/v1/dev-types")
 @app.put("/api/v1/dev-types/{name}")
 async def upsert_dev_type(body: dict, name: str | None = None):
+    """Create or update a Dev Type."""
     return await devtypes_service.upsert_dev_type(
         body, name, dev_types=svc().dev_types, config=svc().config)
 
 
 @app.post("/api/v1/dev-types/{name}/rename")
 async def rename_dev_type(name: str, body: dict):
+    """Rename a Dev Type, moving its prompts and secrets and rewriting assignments."""
     s = svc()
     return await devtypes_service.rename_dev_type(
         name, body, config=s.config, dev_types=s.dev_types,
@@ -663,6 +708,7 @@ async def rename_dev_type(name: str, body: dict):
 
 @app.post("/api/v1/dev-types/{name}/clone")
 async def clone_dev_type(name: str, body: dict):
+    """Clone a Dev Type under a new name, copying its fields and prompt templates."""
     s = svc()
     return await devtypes_service.clone_dev_type(
         name, body, config=s.config, dev_types=s.dev_types,
@@ -671,13 +717,15 @@ async def clone_dev_type(name: str, body: dict):
 
 @app.delete("/api/v1/dev-types/{name}")
 async def remove_dev_type(name: str):
+    """Delete a Dev Type; refused while assignments or the steward reference it."""
     s = svc()
     return await devtypes_service.remove_dev_type(name, config=s.config,
                                                   dev_types=s.dev_types)
 
 
-@app.post("/api/v1/dev-types/{name}/credentials")
+@app.post("/api/v1/dev-types/{name}/credentials", openapi_extra={"x-devcake-mcp": "never"})
 async def upload_credentials(name: str, body: dict):
+    """Store one credential file for a Dev Type by name and content; clears its auth breaker."""
     s = svc()
     return await devtypes_service.upload_credentials(
         name, body, dev_types=s.dev_types, shared_breakers=s.shared_breakers)
@@ -685,11 +733,13 @@ async def upload_credentials(name: str, body: dict):
 
 @app.get("/api/v1/assignments")
 async def get_assignments():
+    """The global Mission-Type to Dev-Type map."""
     return await devtypes_service.get_assignments(config=svc().config)
 
 
 @app.put("/api/v1/assignments")
 async def put_assignments(body: dict):
+    """Replace the global Mission-Type to Dev-Type map."""
     s = svc()
     return await devtypes_service.put_assignments(body, config=s.config,
                                                   dev_types=s.dev_types)
@@ -698,8 +748,9 @@ async def put_assignments(body: dict):
 # ── GUI-stored secrets (M12, F5) + connection tests — bodies (and the
 # secret-ref/harness-var validators) in connections_service ──────────────────
 
-@app.put("/api/v1/secrets/{scope}/{instance}/{field}")
+@app.put("/api/v1/secrets/{scope}/{instance}/{field}", openapi_extra={"x-devcake-mcp": "never"})
 async def put_secret(scope: str, instance: str, field: str, body: dict):
+    """Store one connection secret (a board key or a repository token) by scope, instance and field."""
     s = svc()
     return await connections_service.put_secret(
         scope, instance, field, body,
@@ -709,6 +760,7 @@ async def put_secret(scope: str, instance: str, field: str, body: dict):
 
 @app.delete("/api/v1/secrets/{scope}/{instance}/{field}")
 async def delete_secret(scope: str, instance: str, field: str):
+    """Delete one connection secret by scope, instance and field."""
     s = svc()
     return await connections_service.delete_secret(
         scope, instance, field,
@@ -716,8 +768,9 @@ async def delete_secret(scope: str, instance: str, field: str):
         cycle_lock=s.poll_rt.lock)
 
 
-@app.put("/api/v1/harness-secrets/{var}")
+@app.put("/api/v1/harness-secrets/{var}", openapi_extra={"x-devcake-mcp": "never"})
 async def put_harness_secret(var: str, body: dict):
+    """Store one harness environment secret by variable name."""
     s = svc()
     return await connections_service.put_harness_secret(
         var, body, dev_types=s.dev_types, shared_breakers=s.shared_breakers)
@@ -725,11 +778,13 @@ async def put_harness_secret(var: str, body: dict):
 
 @app.delete("/api/v1/harness-secrets/{var}")
 async def delete_harness_secret(var: str):
+    """Delete one harness environment secret by variable name."""
     return await connections_service.delete_harness_secret(var)
 
 
 @app.get("/api/v1/secrets-check")
 async def secrets_check(conn: str = "", harness: str = ""):
+    """Presence and updated-at for the named connection secrets; never values."""
     return await connections_service.secrets_check(conn, harness)
 
 
@@ -739,7 +794,7 @@ async def secrets_inventory():
     return await connections_service.secrets_inventory()
 
 
-@app.post("/api/v1/secrets/clear")
+@app.post("/api/v1/secrets/clear", openapi_extra={"x-devcake-mcp": "never"})
 async def clear_secrets(body: dict):
     """Delete operator-selected secrets (harness / connections / credential files)."""
     s = svc()
@@ -751,11 +806,13 @@ async def clear_secrets(body: dict):
 
 @app.get("/api/v1/connections/registry")
 async def connections_registry():
+    """Adapter registry metadata: board systems, forges, secret shape prefixes and expected managed labels."""
     return await connections_service.connections_registry()
 
 
 @app.post("/api/v1/connections/pmo/{name}/test")
 async def test_pmo(name: str):
+    """Live probe of one board connection: authentication and team fetch."""
     s = svc()
     return await connections_service.test_pmo(name, config=s.config,
                                               managers=s.managers)
@@ -763,13 +820,14 @@ async def test_pmo(name: str):
 
 @app.post("/api/v1/connections/forge/{name}/test")
 async def test_forge(name: str):
+    """Live probe of one repository connection: authenticated fetch, push permission and default branch."""
     s = svc()
     return await connections_service.test_forge(name, config=s.config,
                                                 forge_runtime=s.forge_runtime,
                                                 repo_cache=s.repo_cache)
 
 
-@app.post("/api/v1/connections/copy-secrets")
+@app.post("/api/v1/connections/copy-secrets", openapi_extra={"x-devcake-mcp": "never"})
 async def copy_connection_secrets(body: dict):
     """Copy one card's stored tokens onto selected same-family cards
     (values never ride the request or response)."""
@@ -781,6 +839,7 @@ async def copy_connection_secrets(body: dict):
 
 @app.post("/api/v1/connections/forge/apply-protection")
 async def apply_forge_protection_bulk():
+    """Apply default-branch protection to every currently unprotected work repository."""
     s = svc()
     return await connections_service.apply_forge_protection_bulk(
         config=s.config, forge_runtime=s.forge_runtime,
@@ -798,6 +857,7 @@ async def discover_forge_branches():
 
 @app.post("/api/v1/connections/forge/{name}/discover-branch")
 async def discover_forge_branch(name: str):
+    """Discover one saved repository's default branch from its HEAD (read-only)."""
     s = svc()
     return await connections_service.discover_forge_branch(
         name, config=s.config, repo_cache=s.repo_cache)
@@ -805,6 +865,7 @@ async def discover_forge_branch(name: str):
 
 @app.post("/api/v1/connections/forge/{name}/apply-protection")
 async def apply_forge_protection(name: str):
+    """Apply default-branch protection to one work repository."""
     s = svc()
     return await connections_service.apply_forge_protection(
         name, config=s.config, forge_runtime=s.forge_runtime,
@@ -813,6 +874,7 @@ async def apply_forge_protection(name: str):
 
 @app.post("/api/v1/connections/skill/{name}/test")
 async def test_skill_source(name: str):
+    """Read-only connectivity probe of one skill source."""
     s = svc()
     return await connections_service.test_skill_source(
         name, config=s.config, repo_cache=s.repo_cache)
@@ -820,6 +882,7 @@ async def test_skill_source(name: str):
 
 @app.post("/api/v1/harness/prune")
 async def request_harness_prune():
+    """Request pruning of unused Dev images at the next baker pass."""
     return bake_status_mod.request_prune(dev_types=svc().dev_types)
 
 
@@ -828,18 +891,21 @@ async def request_harness_prune():
 
 @app.get("/api/v1/internal-repos")
 async def list_internal_repos():
+    """Operator repositories on the bundled forge."""
     return await internal_repos_service.list_internal_repos(
         internal_forge=svc().internal_forge)
 
 
 @app.post("/api/v1/internal-repos/create")
 async def create_internal_repo(body: dict):
+    """Create an operator repository on the bundled forge."""
     return await internal_repos_service.create_internal_repo(
         body, internal_forge=svc().internal_forge)
 
 
 @app.get("/api/v1/skills")
 async def list_skills():
+    """The skill-store catalog: built-ins, edits and external sources."""
     s = svc()
     return await internal_repos_service.list_skills(
         skill_service=s.skill_service, config=s.config,
@@ -848,30 +914,35 @@ async def list_skills():
 
 @app.get("/api/v1/skills/{name:path}")
 async def get_skill(name: str):
+    """One skill's content, by name."""
     return await internal_repos_service.get_skill(
         name, skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/skills")
 async def create_skill(body: dict):
+    """Create or update a skill in the store."""
     return await internal_repos_service.create_skill(
         body, skill_service=svc().skill_service)
 
 
-@app.post("/api/v1/skills/import")
+@app.post("/api/v1/skills/import", openapi_extra={"x-devcake-mcp": "never"})
 async def import_skill(body: dict):
+    """Import skills from an uploaded archive."""
     return await internal_repos_service.import_skill(
         body, skill_service=svc().skill_service)
 
 
 @app.delete("/api/v1/skills/{name}")
 async def delete_skill_endpoint(name: str):
+    """Delete a skill from the store, restoring a built-in of the same name."""
     return await internal_repos_service.delete_skill_endpoint(
         name, skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/skills/sources/refresh")
 async def refresh_skill_sources():
+    """Refresh every external skill source now."""
     s = svc()
     return await internal_repos_service.refresh_skill_sources(
         repo_cache=s.repo_cache, config=s.config)
@@ -879,6 +950,7 @@ async def refresh_skill_sources():
 
 @app.post("/api/v1/skills/sync")
 async def sync_skills():
+    """Sync the skill store to disk for the Devs."""
     s = svc()
     return await internal_repos_service.sync_skills(
         internal_forge=s.internal_forge, skill_service=s.skill_service,
@@ -887,6 +959,7 @@ async def sync_skills():
 
 @app.delete("/api/v1/internal-repos/{name}")
 async def delete_internal_repo(name: str):
+    """Delete an operator repository on the bundled forge."""
     s = svc()
     return await internal_repos_service.delete_internal_repo(
         name, internal_forge=s.internal_forge, store=s.store,
@@ -895,12 +968,14 @@ async def delete_internal_repo(name: str):
 
 @app.get("/api/v1/cron")
 async def list_crons():
+    """The scheduled-task rows from the live configuration."""
     from . import cron_service as cron_api
     return await cron_api.list_crons(config=svc().config)
 
 
 @app.post("/api/v1/cron/{job_id}/run")
 async def run_cron(job_id: str):
+    """Fire a scheduled task now; 409 with the reason when intake is paused or its last ticket is still open."""
     from . import cron_service as cron_api
     return await cron_api.run_cron(job_id, cron=svc().cron)
 
@@ -946,6 +1021,7 @@ async def oauth_start(name: str):
 
 @app.get("/api/v1/oauth/status/{run_id}")
 async def oauth_status(run_id: str):
+    """Status of a device-code login for a Dev Type."""
     s = svc().oauth_mgr.status(run_id)
     if s is None:
         raise HTTPException(404)
@@ -962,3 +1038,4 @@ async def dispatch_hello(sleep: int = 3, payload_kb: int = 1,
     except DuplicateRun as e:
         raise HTTPException(409, str(e))
     return {"run_id": run.run_id, "state": run.state}
+

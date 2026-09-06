@@ -3,7 +3,9 @@
 import base64
 import binascii
 import os
+import re
 import secrets
+from contextvars import ContextVar
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -11,6 +13,18 @@ from fastapi.responses import JSONResponse
 
 LIVE_PATH = "/api/v1/health/live"
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Who is acting through the control plane, for the audit trail: "admin" for a
+# plain authenticated request (the admin panel, curl), or the short label a
+# client sends in X-DevCake-Actor (the operator MCP server sends "mcp",
+# ADR-0041). Empty outside a request (poll cycle, finalize). Label only —
+# never an identity claim: every request still authenticates the same way.
+REQUEST_ACTOR: ContextVar[str] = ContextVar("devcake_request_actor", default="")
+_ACTOR_RE = re.compile(r"[^a-z0-9._-]")
+
+
+def request_actor(request) -> str:
+    raw = (request.headers.get("x-devcake-actor") or "admin").lower()
+    return (_ACTOR_RE.sub("", raw) or "admin")[:32]
 
 
 def admin_credentials() -> tuple[str, str]:
@@ -73,4 +87,8 @@ async def enforce_control_plane_auth(request: Request, call_next):
         and request.headers.get("x-devcake-request") != "1"
     ):
         return JSONResponse({"detail": "missing request intent header"}, status_code=403)
-    return await call_next(request)
+    token = REQUEST_ACTOR.set(request_actor(request))
+    try:
+        return await call_next(request)
+    finally:
+        REQUEST_ACTOR.reset(token)

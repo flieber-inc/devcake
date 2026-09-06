@@ -24,6 +24,7 @@ Implemented:
   status        Compose + baker readiness snapshot
   doctor        Named preflight checks (+ remedies; --json)
   setup         First-setup / connections / settings-bundle import
+  mcp           Operator MCP server over stdio (--read-only; extra: devcake-cli[mcp])
 
 Not yet implemented (ADR-0038 v1 — sibling issues):
   bake
@@ -47,7 +48,7 @@ Bring up the DevCake stack with discovered DOCKER_GID.
 """
 
 _VERBS = frozenset(
-    {"baker", "up", "down", "status", "doctor", "bake", "setup"}
+    {"baker", "up", "down", "status", "doctor", "bake", "setup", "mcp"}
 )
 
 
@@ -191,6 +192,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             return parsed
         parsed.as_json = as_json
         return setup.run_setup(parsed)
+    if verb == "mcp":
+        if rest and rest[0] in ("-h", "--help"):
+            sys.stdout.write(
+                "usage: devcake mcp [--read-only]\n"
+                "Operator MCP server over stdio: one tool per admin-API operation, "
+                "derived from the app's own API description (ADR-0041). "
+                "--read-only exposes GET operations only. Needs the optional "
+                "extra: uv tool install 'devcake-cli[mcp]'.\n"
+            )
+            return 0
+        read_only = False
+        for opt in rest:
+            if opt == "--read-only":
+                read_only = True
+            else:
+                sys.stderr.write(f"devcake mcp: unknown option {opt!r}\n")
+                return 2
+        from . import mcp_server
+        from .paths import require_checkout_root
+        try:
+            root = require_checkout_root()
+        except FileNotFoundError as exc:
+            sys.stderr.write(f"devcake mcp: {exc}\n")
+            return 3
+        return mcp_server.run_mcp(root, read_only=read_only)
 
     # bake — registered but not yet implemented (sibling issue)
     if rest and rest[0] in ("-h", "--help"):

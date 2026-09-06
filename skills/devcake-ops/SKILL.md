@@ -93,7 +93,7 @@ devcake doctor --json
 ```
 
 Prefer installing the CLI from the checkout so its command surface matches
-the stack. Refresh it with `uv tool install --reinstall .` after updating the tree; a PyPI
+the stack. Refresh it with `uv tool install --reinstall '.[mcp]'` after updating the tree (the plain form drops the extra); a PyPI
 install (`devcake-cli`) must match the chosen release instead. Doctor names
 failed checks and remedies; it never performs sudo/usermod/linger changes.
 Inspect warnings in context: occupied ports may be this stack or another

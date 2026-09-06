@@ -16,13 +16,18 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
-- **Fixed — Run now on a scheduled task says why it created nothing.**
+## v0.5.7 (2026-09-06)
+
+Patch release in the v0.5 "Java Lava" line.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.7).
+
+- **Fixed — Run now on a scheduled task says why it created nothing** (#409).
   While intake is paused (globally, or on every board the task would
   fire on) Run now answers 409 "intake is paused …", and a task whose
   last ticket is still open answers 409 with that reason, instead of a
   quiet empty result the operator had to guess at. The pause stays
   absolute: Run now is not a back door around it.
-- **Fixed — grok runs report their cache writes and the CLI's own cost.**
+- **Fixed — grok runs report their cache writes and the CLI's own cost** (#403).
   The grok token report was written against a CLI that emitted neither;
   newer CLIs report a cache-creation count under `usage` and a per-model
   `costUSD` under `modelUsage`, and the mapper ignored both, so the Runs
@@ -30,6 +35,42 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   estimate only. Both are now carried when present: a reported zero of
   cache writes stays zero (the vendor's number), a missing cost stays
   absent, never zero.
+- **Fixed — a review finishing on a ticket a human stopped no longer
+  overrides the stop** (#400). A REVIEW run that completes on a ticket
+  that was cancelled, or tagged with the skip label, while it ran treats
+  that as an external stop even when the review label is still on the
+  ticket: the report posts, nothing is merged and no status or label is
+  written. A merge the run itself recorded is no longer reported as an
+  out-of-pipeline merge on replay; the tripwire still fires whenever
+  that receipt is missing.
+- **Fixed — a decomposition survives a restart between the board write
+  and its local checkpoint** (#401). Children already created on the
+  board count as a committed split even when the depth limit was lowered
+  before the restart, with the manifest, part and title checks still
+  deciding whether replay is safe; a skip label stops a pending split
+  before any further child or relation is written.
+- **Fixed — the backup and restore helpers work again** (#406). The
+  helper container mounted the payload scripts over `/lib`, hiding the
+  shell's dynamic loader, and BusyBox tar read the archive writer's
+  directory options differently from GNU tar. Payloads now mount at
+  `/devcake-scripts` on a digest-pinned Debian slim image with GNU tar;
+  `DEVCAKE_BACKUP_IMAGE` overrides the helper (the older variable is
+  still accepted; a custom image must carry GNU tar). Disposable CI now
+  runs a real restore drill: refuses wrong-kind and corrupt archives
+  without touching the destination, restores both volumes, compares
+  hashes, modes, ownership and symlinks, boots the restored stack and
+  finishes a new dispatch on it.
+- **Fixed — Save & leave completes the navigation after a retry** (#407).
+  When a save failed, Retry persisted the draft but never left the page;
+  the requested navigation now stays pending while the results dialog
+  offers a retry, a successful retry completes it, and closing the
+  dialog cancels it.
+- **Engineering** — mission dispatch and the steward prepare repository
+  context through one shared function with a typed result (#402), guarded
+  by a focused mypy contract gate on the cache port (#408); a CI matrix
+  installs the built CLI wheel and sdist into clean environments and
+  exercises the installed commands (#405); the token-copy browser check
+  re-reads fetch-decorated options instead of racing them (#399).
 
 ## v0.5.6 (2026-09-05)
 

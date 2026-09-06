@@ -141,7 +141,11 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
     # Neither stop may be overridden by approval, including artifact replay.
     review_stopped = run.mission_type == "REVIEW" and (
         live.status == "canceled" or LABEL_SKIP in live.labels)
-    if review_stopped or feed.stage_of(live) not in expected_stages:
+    # ONBOARD has no stage label, so SKIP alone must stop a split too.
+    # Canceled is not a stop here: decomposition itself cancels its parent,
+    # and that accepted write can precede the local tracking checkpoint.
+    decomposition_stopped = outcome == "decomposed" and LABEL_SKIP in live.labels
+    if review_stopped or decomposition_stopped or feed.stage_of(live) not in expected_stages:
         async def _external():
             await mgr._feed(
                 pmo_id, run.pmo_kind,

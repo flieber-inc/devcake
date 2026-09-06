@@ -595,7 +595,9 @@ def test_paced_probe_keeps_the_last_known_state_instead_of_going_red(monkeypatch
 def test_health_payload_carries_per_instance_demand(monkeypatch):
     fr = _forge_runtime()
     managers = {"a": SimpleNamespace(cycle_stats={"feed_scan_reads": 2,
-                                                  "feed_scan_memo_hits": 5},
+                                                  "feed_scan_memo_hits": 5,
+                                                  "feed_delta_reads": 1,
+                                                  "feed_scan_memo_kept": 3},
                                      anomalies={}, merge_handoffs={},
                                      needs_human={}, cycles=[],
                                      blocked_reasons={})}
@@ -614,7 +616,8 @@ def test_health_payload_carries_per_instance_demand(monkeypatch):
         forge_runtime=fr, shared_breakers={},
         store=SimpleNamespace(active=lambda: []), internal_forge=None,
         poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
-    assert got["pmo_demand"] == {"a": {"feed_scan_reads": 2, "feed_scan_memo_hits": 5}}
+    assert got["pmo_demand"] == {"a": {"feed_scan_reads": 2, "feed_scan_memo_hits": 5,
+                                       "feed_delta_reads": 1, "feed_scan_memo_kept": 3}}
 
 
 # ── ADR-0040 §6 addendum: the loud tier ──────────────────────────────────────

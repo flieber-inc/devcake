@@ -26,6 +26,7 @@ def test_port_declares_expected_surface():
     # the authoritative contract — a port edit must be deliberate (docs/05 §1)
     assert sorted(PORT_METHODS) == sorted([
         "list_missions", "list_all", "get", "get_activity", "children_of",
+        "feed_changes_since",
         "post_feed", "set_status", "cancel_mission", "swap_labels", "create_mission",
         "create_relation", "ensure_labels", "append_description",
         "upload_attachment", "download_asset", "health_probe", "capabilities"])
@@ -203,3 +204,81 @@ def test_get_activity_full_on_project_mirrors_native_feed():
     assert [e.entry_id for e in act.entries] == ["u1"]
     assert act.entries[0].author == "alice (project update)"
     assert any("projectUpdates" in q for q in rec.queries)
+
+
+# ── the feed-changes witness (docs/05 §3 "Feed changes") ────────────────────
+
+def test_feed_changes_since_threads_team_since_and_cursor():
+    """The root comments connection filtered by the issue's team and by
+    updatedAt, archived comments included, cursor threaded, ids and times
+    only; a comment without an issue (a project update's) is skipped; the
+    change time is the newest of edit and archival; `truncated` only past
+    the page cap."""
+    from datetime import datetime, timezone
+
+    from devcake.adapters.linear.adapter import _iso_z
+    queries, variables = [], []
+    pages = [
+        {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+         "nodes": [
+             {"id": "cm-1", "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:00:00.000Z", "archivedAt": None,
+              "issue": {"id": "uuid-i1"}},
+             {"id": "cm-2", "createdAt": "2026-01-01T00:00:01.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z",
+              "archivedAt": "2026-01-01T00:09:00.000Z",
+              "issue": {"id": "uuid-i2"}},
+             {"id": "cm-3", "createdAt": "2026-01-01T00:00:02.000Z",
+              "updatedAt": "2026-01-01T00:00:02.000Z", "archivedAt": None,
+              "issue": None}]},
+        {"pageInfo": {"hasNextPage": False, "endCursor": None},
+         "nodes": [{"id": "cm-4", "createdAt": "2026-01-01T00:00:03.000Z",
+                    "updatedAt": "2026-01-01T00:00:03.000Z",
+                    "archivedAt": None, "issue": {"id": "uuid-i1"}}]},
+    ]
+
+    def handler(req):
+        body = json.loads(req.content)
+        q = body["query"]
+        if "teams(" in q:
+            return httpx.Response(200, json={"data": {
+                "viewer": {"id": "u"},
+                "teams": {"nodes": [{"id": "team-1", "key": "DEV",
+                                     "states": {"nodes": []}}]}}})
+        if "team(id" in q:
+            return httpx.Response(200, json={"data": {"team": {"labels": {
+                "nodes": [], "pageInfo": {"hasNextPage": False,
+                                          "endCursor": None}}}}})
+        queries.append(q)
+        variables.append(body["variables"])
+        return httpx.Response(200, json={
+            "data": {"comments": pages[min(len(queries), len(pages)) - 1]}})
+
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(handler))
+    since = datetime(2026, 1, 1, 0, 0, 0, 123456, tzinfo=timezone.utc)
+    delta = run(pmo.feed_changes_since("DEV", since, limit_pages=5))
+    assert len(queries) == 2
+    q = queries[0]
+    assert "comments(" in q and "includeArchived: true" in q
+    assert "orderBy: updatedAt" in q and "updatedAt: {gt: $since}" in q
+    assert "team: {id: {eq: $teamId}}" in q
+    assert "body" not in q                                   # never the text
+    assert variables[0]["teamId"] == "team-1"
+    assert variables[0]["since"] == "2026-01-01T00:00:00.123Z"
+    assert variables[0]["after"] is None and variables[1]["after"] == "c1"
+    rows = {(c.pmo_id, c.entry_id) for c in delta.changes}
+    assert rows == {("uuid-i1", "cm-1"), ("uuid-i2", "cm-2"), ("uuid-i1", "cm-4")}
+    archived = next(c for c in delta.changes if c.entry_id == "cm-2")
+    assert archived.changed_at == datetime(2026, 1, 1, 0, 9, tzinfo=timezone.utc)
+    assert archived.created_at == datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+    assert delta.newest == archived.changed_at and delta.truncated is False
+    assert _iso_z(datetime(2026, 1, 1, 12, 0, 0, 999999)) == "2026-01-01T12:00:00.999Z"
+    assert pmo.capabilities().feed_delta is True
+
+    # every page continues past the cap: truncated, newest still reported
+    pages[1]["pageInfo"] = {"hasNextPage": True, "endCursor": "c2"}
+    queries.clear()
+    variables.clear()
+    delta = run(pmo.feed_changes_since("DEV", since, limit_pages=2))
+    assert len(queries) == 2 and delta.truncated is True
+    assert delta.newest == archived.changed_at

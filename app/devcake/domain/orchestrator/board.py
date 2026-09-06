@@ -50,12 +50,12 @@ def retire_snapshot(mgr: Any) -> None:
         mgr.snapshot = None
 
 
-def bump(mgr: Any, key: str) -> None:
+def bump(mgr: Any, key: str, n: int = 1) -> None:
     """Per-cycle demand counter (reset by `poll_instance`; surfaced on
     /health `pmo_demand` and the `poll.instance` span)."""
     stats = getattr(mgr, "cycle_stats", None)
     if stats is not None:
-        stats[key] = stats.get(key, 0) + 1
+        stats[key] = stats.get(key, 0) + n
 
 
 async def board_missions(mgr: Any, *, max_age: timedelta) -> list[Mission]:

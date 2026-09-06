@@ -9,14 +9,15 @@ import logging
 import mimetypes
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
-                             Mission, MissionDocument, MissionRef,
-                             NormalizedStatus, Priority, canonicalize_labels)
+                             FeedChange, FeedDelta, Mission, MissionDocument,
+                             MissionRef, NormalizedStatus, Priority,
+                             canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 from .._toolkit import label_write_lock
 from ..budget import (RateSignal, bind_principal, budget_for, header_float,
@@ -117,6 +118,22 @@ MAX_RELATION_PAGES = 10  # 10 × 50 = 500 relations fail-loud ceiling (ADR-0012)
 # hasNextPage is set.
 LABELS_PAGE = 50
 MAX_LABEL_PAGES = 5  # 5 × 50 = 250 labels fail-loud ceiling
+
+# feed_changes_since page size (root comments connection, ids and times
+# only — a few points per node against the ~10k per-query complexity cap)
+FEED_DELTA_PAGE = 100
+
+
+def _iso_z(ts: datetime) -> str:
+    """Linear's DateTime wire form: UTC, millisecond precision, `Z`."""
+    ts = (ts.astimezone(timezone.utc) if ts.tzinfo
+          else ts.replace(tzinfo=timezone.utc))
+    return ts.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts.microsecond // 1000:03d}Z"
+
+
+def _ts(value: str) -> datetime:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
 
 # get_activity cursor-walk safety ceiling (docs/05 §3): 10 pages × 100 =
 # 1,000 comments — a fail-loud valve (~50× DevCake's post-hygiene comment
@@ -263,6 +280,49 @@ class LinearAdapter:
         """Non-terminal Projects + Issues of the ONE configured team (docs/05 §1)."""
         missions = await self.list_all(team_ref)
         return [m for m in missions if m.status not in ("done", "canceled")]
+
+    async def feed_changes_since(self, team_ref: str, since: datetime, *,
+                                 limit_pages: int) -> FeedDelta:
+        """The team's comments created, edited, or archived after `since` —
+        ids and times only (docs/05 §3 "Feed changes"). The root `comments`
+        connection filtered by the issue's team and the comment's updatedAt,
+        archived comments included so a deletion is a change too; comments
+        on project updates carry no issue and are skipped."""
+        team = await self._team(team_ref)
+        changes: list[FeedChange] = []
+        newest: datetime | None = None
+        after: str | None = None
+        truncated = False
+        for _ in range(max(1, limit_pages)):
+            data = await self._gql(
+                """query($teamId: ID!, $since: DateTimeOrDuration!, $after: String) {
+                     comments(first: %d, after: $after, includeArchived: true,
+                              orderBy: updatedAt,
+                              filter: {issue: {team: {id: {eq: $teamId}}},
+                                       updatedAt: {gt: $since}}) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { id createdAt updatedAt archivedAt issue { id } }
+                     } }""" % FEED_DELTA_PAGE,
+                {"teamId": team["id"], "since": _iso_z(since), "after": after})
+            conn = data["comments"]
+            for n in conn.get("nodes") or []:
+                issue_id = (n.get("issue") or {}).get("id")
+                if not issue_id:
+                    continue
+                created = _ts(n["createdAt"])
+                changed = _ts(n.get("updatedAt") or n["createdAt"])
+                if n.get("archivedAt"):
+                    changed = max(changed, _ts(n["archivedAt"]))
+                changes.append(FeedChange(pmo_id=issue_id, entry_id=str(n["id"]),
+                                          created_at=created, changed_at=changed))
+                newest = changed if newest is None else max(newest, changed)
+            info = conn.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                break
+            after = info.get("endCursor")
+        else:
+            truncated = True
+        return FeedDelta(changes=changes, newest=newest, truncated=truncated)
 
     async def _paginate(self, query: str, root: str, variables: dict) -> list[dict]:
         """Cursor-paginate a top-level connection. The scheduling gate and the
@@ -1138,7 +1198,8 @@ class LinearAdapter:
                                # over dozens of missions it never lagged the
                                # newest comment), so the feed memo needs no
                                # safety rescan here
-                               updated_at_tracks_comments=True)
+                               updated_at_tracks_comments=True,
+                               feed_delta=True)   # root comments(filter:) read
 
     # ── normalization ────────────────────────────────────────────────────────
 

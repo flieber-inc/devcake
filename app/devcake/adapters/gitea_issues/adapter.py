@@ -17,8 +17,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
-                             Mission, MissionRef, NormalizedStatus,
-                             canonicalize_labels)
+                             FeedChange, FeedDelta, Mission, MissionRef,
+                             NormalizedStatus, canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 from .._toolkit import gitea_internal_tracker_enable_deps, label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
@@ -53,6 +53,8 @@ class GiteaIssuesHTTPError(RuntimeError):
 MAX_COMMENT_PAGES = 10
 MAX_COMMENT_PAGES_FULL = 100
 COMMENTS_PAGE = 50
+# the issue index at the end of a repository-wide comment's `issue_url`
+_ISSUE_INDEX_RE = re.compile(r"/issues/(\d+)/?$")
 ISSUES_PAGE = 50
 MAX_ISSUE_PAGES = 40  # 2000 issues fail-loud
 LABELS_PAGE = 50
@@ -822,6 +824,61 @@ class GiteaIssuesAdapter:
         except Exception as e:  # noqa: BLE001 — probe must never raise to admin UI
             return PMOHealth(ok=False, detail=str(e))
 
+    async def feed_changes_since(self, team_ref: str, since: datetime, *,
+                                 limit_pages: int) -> FeedDelta:
+        """Repository-wide issue comments changed after `since` — ids and
+        times only (docs/05 §9.3). Pull-request comments are skipped; the
+        mission is the issue index in the comment's `issue_url`. A removed
+        comment is not listed (accepted: the next own write or reload
+        rescans)."""
+        from .._toolkit import last_page_from_headers
+        stamp = (since.astimezone(timezone.utc) if since.tzinfo
+                 else since.replace(tzinfo=timezone.utc)
+                 ).isoformat(timespec="seconds").replace("+00:00", "Z")
+        # walk until an empty page or the header's last page — never "a
+        # short page": the server may clamp `limit` below COMMENTS_PAGE, and
+        # a witness that stopped early would keep scans it should have
+        # dropped (a wrong answer, which the witness must never give)
+        raw: list[dict] = []
+        truncated = False
+        for page in range(1, max(1, limit_pages) + 1):
+            resp = await self._req(
+                "GET", self._repo_path("/issues/comments"),
+                params={"since": stamp, "page": page, "limit": COMMENTS_PAGE},
+                as_response=True)
+            items = resp.json() if resp.content else []
+            if not items:
+                break
+            raw.extend(items)
+            last = last_page_from_headers(resp.headers, page_size=COMMENTS_PAGE)
+            if last is not None and page >= last:
+                break
+        else:
+            truncated = True      # every page was full and none was the last
+        changes: list[FeedChange] = []
+        newest: datetime | None = None
+        for c in raw:
+            if c.get("pull_request_url"):
+                continue
+            hit = _ISSUE_INDEX_RE.search(c.get("issue_url") or "")
+            created = self._stamp(c.get("created_at"))
+            changed = self._stamp(c.get("updated_at") or c.get("created_at"))
+            if not hit or c.get("id") is None or created is None or changed is None:
+                continue          # an unreadable row is skipped, never re-dated
+            changes.append(FeedChange(pmo_id=hit.group(1), entry_id=str(c["id"]),
+                                      created_at=created, changed_at=changed))
+            newest = changed if newest is None else max(newest, changed)
+        return FeedDelta(changes=changes, newest=newest, truncated=truncated)
+
+    @staticmethod
+    def _stamp(value: str | None) -> datetime | None:
+        """The vendor's timestamp or None — never this process's clock (the
+        witness's watermark rides these values)."""
+        try:
+            return datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
     def capabilities(self) -> PMOCapabilities:
         return PMOCapabilities(
             projects_supported=False,
@@ -831,4 +888,5 @@ class GiteaIssuesAdapter:
             relations_supported=True,
             attachments_supported=True,
             global_ids=False,  # issue numbers collide across Gitea instances
+            feed_delta=True,   # repository-wide issues/comments?since= listing
         )

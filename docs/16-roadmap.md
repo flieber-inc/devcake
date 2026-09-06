@@ -800,6 +800,14 @@ until that run exists, field evidence below stays operator-self-reported.
   zero merge attempts and its hand-off comment was itself refused twice,
   and three co-dying steward runs on one board had paused every board's
   discovery drain for two days. Docs 03/04/05/06/11/13/15.
+- **One feed-changes read per cycle** (2026-09-06, ADR-0033 addendum): on
+  a vendor that can list a team's feed changes since a moment
+  (`feed_delta`; `feed_changes_since`, Linear and Gitea Issues), the poll
+  reads the team's changed entries once per cycle — ids and times, never
+  text — and keeps the memoized scans of missions whose `updated_at` moved
+  for a label, status, or relation edit; only a feed with a newer entry
+  is re-read. GitHub and GitLab Issues keep per-mission reads. Docs
+  04/05/11.
 
 ### Field evidence (receipted)
 

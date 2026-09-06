@@ -186,18 +186,259 @@ def test_manager_memo_follows_the_adapter(tmp_path):
 
 
 class FeedPMO:
-    def __init__(self, truncated=False):
+    def __init__(self, truncated=False, entries=None):
         self.reads = 0
         self.truncated = truncated
+        self.entries = list(entries or [])
 
     async def get_activity(self, ref, full=False):
         self.reads += 1
-        return SimpleNamespace(entries=[], truncated=self.truncated)
+        return SimpleNamespace(entries=list(self.entries),
+                               truncated=self.truncated)
 
 
-def _scan_mgr(truncated=False):
-    return SimpleNamespace(pmo=FeedPMO(truncated), feed_memo=FeedScanMemo(),
-                           cycle_stats={})
+def _scan_mgr(truncated=False, entries=None):
+    return SimpleNamespace(pmo=FeedPMO(truncated, entries),
+                           feed_memo=FeedScanMemo(), cycle_stats={})
+
+
+# ── the feed-changes witness ─────────────────────────────────────────────────
+
+def _delta(*rows, truncated=False):
+    from devcake.domain.model import FeedChange, FeedDelta
+    changes = [FeedChange(pmo_id=p, entry_id=e, created_at=t, changed_at=t)
+               for p, e, t in rows]
+    return FeedDelta(changes=changes,
+                     newest=max((c.changed_at for c in changes), default=None),
+                     truncated=truncated)
+
+
+def test_reconcile_keeps_a_scan_whose_mission_changed_but_feed_did_not():
+    """A label, status, or relation edit moves `updated_at`; the witness
+    shows no feed row newer than the scan, so the scan is re-stamped."""
+    memo = FeedScanMemo(max_age=None)
+    m = issue("s1")
+    t0 = now()
+    memo.put("discovery", m, "scan", memo.generation(m.pmo_id), feed_until=t0)
+    m.updated_at = t0 + timedelta(minutes=1)              # a label edit
+    assert memo.get("discovery", m) is None
+    assert memo.reconcile([m], _delta()) == 1
+    assert memo.get("discovery", m) == "scan"
+
+
+def test_reconcile_never_refreshes_the_safety_rescan():
+    """A vendor that keeps the safety rescan keeps it: the witness cannot
+    list what the vendor never reports (a removed comment), so the scan's
+    age is not refreshed by a complete witness."""
+    clock = Clock()
+    memo = FeedScanMemo(clock=clock, max_age=timedelta(minutes=5))
+    m = issue("s1")
+    memo.put("discovery", m, "scan", memo.generation(m.pmo_id), feed_until=now())
+    clock.t += timedelta(minutes=6)
+    memo.reconcile([m], _delta())
+    assert memo.get("discovery", m) is None
+
+
+def test_witness_floor_stops_an_edit_from_popping_the_scan_every_cycle():
+    """An edit (or a removal) carries a change time no entry's creation time
+    reaches; the witness reports it again on every overlap re-delivery. The
+    change time becomes the mission's floor, so the rescan after the pop
+    records a `feed_until` the re-delivery no longer exceeds."""
+    memo = FeedScanMemo(max_age=None)
+    m = issue("s1")
+    t0 = now()
+    edit = t0 + timedelta(minutes=1)
+    memo.put("discovery", m, "scan", memo.generation(m.pmo_id), feed_until=t0)
+    memo.reconcile([m], _delta(("s1", "c1", edit)))       # the edit: popped
+    assert memo.get("discovery", m) is None
+    floor = memo.witnessed(m.pmo_id)                       # captured before the rescan
+    assert floor == edit
+    memo.put("discovery", m, "rescan", memo.generation(m.pmo_id),
+             feed_until=t0, floor=floor)                    # creation times unchanged
+    for _ in range(3):                                     # overlap re-deliveries
+        memo.reconcile([m], _delta(("s1", "c1", edit)))
+        assert memo.get("discovery", m) == "rescan"
+    memo.reconcile([m], _delta(("s1", "c1", edit + timedelta(seconds=1))))
+    assert memo.get("discovery", m) is None                # a second edit: once more
+
+
+def test_reconcile_drops_a_scan_when_the_feed_changed_after_it():
+    memo = FeedScanMemo(max_age=None)
+    m = issue("s1")
+    t0 = now()
+    memo.put("discovery", m, "scan", memo.generation(m.pmo_id), feed_until=t0)
+    # an overlap re-delivery of a row the scan already folded: harmless
+    memo.reconcile([m], _delta(("s1", "c1", t0 - timedelta(seconds=30))))
+    assert memo.get("discovery", m) == "scan"
+    # a row newer than the scan (a comment, an edit, a removal): stale
+    memo.reconcile([m], _delta(("s1", "c2", t0 + timedelta(seconds=1))))
+    assert memo.get("discovery", m) is None and len(memo) == 0
+
+
+def test_reconcile_truncated_witness_drops_everything_and_still_advances():
+    memo = FeedScanMemo(max_age=None)
+    m1, m2 = issue("s1"), issue("s2")
+    t0 = now()
+    for m in (m1, m2):
+        memo.put("discovery", m, "scan", memo.generation(m.pmo_id),
+                 feed_until=t0)
+    delta = _delta(("s1", "c9", t0 + timedelta(minutes=1)), truncated=True)
+    memo.advance(delta)
+    assert memo.reconcile([m1, m2], delta) == 0 and len(memo) == 0
+    assert memo.watermark == t0 + timedelta(minutes=1)
+
+
+def test_reconcile_skips_never_scanned_and_post_own_write_entries():
+    memo = FeedScanMemo(max_age=None)
+    m = issue("s1")
+    t0 = now()
+    assert memo.reconcile([m], _delta()) == 0                # nothing memoized
+    memo.put("discovery", m, "scan", memo.generation(m.pmo_id), feed_until=t0)
+    memo.forget(m.pmo_id)                                    # our own write
+    m.updated_at = t0 + timedelta(minutes=1)
+    assert memo.reconcile([m], _delta()) == 0
+    assert memo.get("discovery", m) is None
+
+
+def test_watermark_anchors_and_advances_on_vendor_timestamps_only():
+    memo = FeedScanMemo(max_age=None)
+    t0 = now()
+    memo.anchor(t0)
+    memo.anchor(t0 + timedelta(hours=1))                     # first anchor wins
+    assert memo.watermark == t0
+    memo.anchor(t0 + timedelta(hours=1), follow=True)        # nothing memoized: follow
+    memo.anchor(t0, follow=True)                             # never backwards
+    assert memo.watermark == t0 + timedelta(hours=1)
+    memo.watermark = t0
+    memo.advance(_delta(("s1", "c1", t0 + timedelta(minutes=2))))
+    memo.advance(_delta(("s1", "c0", t0 - timedelta(minutes=2))))   # never back
+    memo.advance(_delta())                                   # empty: unchanged
+    assert memo.watermark == t0 + timedelta(minutes=2)
+    memo.clear()
+    assert memo.watermark is None and memo.delta_error is None
+
+
+def test_scans_record_the_newest_entry_time():
+    t = now() - timedelta(minutes=3)
+    mgr = _scan_mgr(entries=[SimpleNamespace(ts=t - timedelta(minutes=1), body=""),
+                             SimpleNamespace(ts=t, body="")])
+    m = issue("s1")
+    run_coro(discovery.scan_source(mgr, m))
+    assert mgr.feed_memo._entries[("discovery", "s1")].feed_until == t
+
+
+def _witness_board(tmp_path, *, feed_delta=True):
+    """A labelled mission on a manager whose fake PMO answers the witness;
+    the first sweep pays the full read and memoizes it."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE", LABEL_DISCOVERY})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    mgr.instance.discovery_routing = True
+    fake.feed_delta = feed_delta
+    fake.activity_entries = [_entry("e1", "hello", ts=m.updated_at)]
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert fake.get_activity_calls == 1 and getattr(fake, "feed_delta_calls", 0) == 0
+    mgr.cycle_stats = {}
+    return m, mgr, fake
+
+
+def test_sweeps_pay_no_feed_read_for_a_changed_mission_the_witness_left_untouched(tmp_path):
+    m, mgr, fake = _witness_board(tmp_path)
+    anchored = mgr.feed_memo.watermark
+    m.updated_at = m.updated_at + timedelta(minutes=1)     # a label edit
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert fake.feed_delta_calls == 1
+    assert fake.feed_delta_since == anchored - sweeps.FEED_DELTA_OVERLAP
+    assert fake.get_activity_calls == 1                     # no feed read
+    assert mgr.cycle_stats == {"feed_delta_reads": 1, "feed_scan_memo_kept": 1,
+                               "feed_scan_memo_hits": 1}
+
+
+def test_sweeps_read_a_feed_the_witness_reports_changed(tmp_path):
+    from devcake.domain.model import FeedChange
+    m, mgr, fake = _witness_board(tmp_path)
+    later = m.updated_at + timedelta(minutes=1)
+    fake.feed_changes = [FeedChange(pmo_id=m.pmo_id, entry_id="e2",
+                                    created_at=later, changed_at=later)]
+    m.updated_at = later
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert fake.get_activity_calls == 2                     # the feed changed
+    assert mgr.feed_memo.watermark == later
+
+
+def test_sweeps_read_an_edited_feed_once_not_every_cycle(tmp_path):
+    """The livelock the witness must not have: an edit is re-delivered on
+    every overlap read, and the rescan's entries keep their creation
+    times; the floor makes the second and later deliveries a memo hit."""
+    from devcake.domain.model import FeedChange
+    m, mgr, fake = _witness_board(tmp_path)
+    edit = m.updated_at + timedelta(minutes=1)
+    fake.feed_changes = [FeedChange(pmo_id=m.pmo_id, entry_id="e1",
+                                    created_at=m.updated_at, changed_at=edit)]
+    reads = []
+    for _ in range(4):                                      # quiet board, same row
+        before = fake.get_activity_calls
+        run_coro(sweeps.sweeps(mgr, [m]))
+        reads.append(fake.get_activity_calls - before)
+    assert reads == [1, 0, 0, 0]
+
+
+def test_sweeps_truncated_witness_rereads_and_advances(tmp_path):
+    m, mgr, fake = _witness_board(tmp_path)
+    fake.feed_delta_truncated = True
+    later = m.updated_at + timedelta(minutes=1)
+    from devcake.domain.model import FeedChange
+    fake.feed_changes = [FeedChange(pmo_id="someone-else", entry_id="x",
+                                    created_at=later, changed_at=later)]
+    run_coro(sweeps.sweeps(mgr, [m]))                       # mission unchanged
+    assert fake.get_activity_calls == 2                     # dropped all: re-read
+    assert mgr.feed_memo.watermark == later                 # and advanced
+
+
+def test_witness_watermark_follows_the_board_while_nothing_is_memoized(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})   # no label
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.feed_delta = True
+    run_coro(sweeps.sweeps(mgr, [m]))
+    first = mgr.feed_memo.watermark
+    m.updated_at = m.updated_at + timedelta(hours=3)          # an idle stretch
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert getattr(fake, "feed_delta_calls", 0) == 0          # nothing to witness
+    assert mgr.feed_memo.watermark == m.updated_at > first
+
+
+def test_sweeps_fall_back_to_per_mission_reads_when_the_witness_is_refused(tmp_path):
+    from devcake.ports.pmo import PMOBudgetExceeded
+    m, mgr, fake = _witness_board(tmp_path)
+    anchored = mgr.feed_memo.watermark
+    fake.feed_delta_exc = PMOBudgetExceeded("reserved for critical calls")
+    m.updated_at = m.updated_at + timedelta(minutes=1)
+    run_coro(sweeps.sweeps(mgr, [m]))                       # nothing escapes
+    assert fake.feed_delta_calls == 1 and fake.get_activity_calls == 2
+    assert mgr.feed_memo.watermark == anchored and mgr.feed_memo.delta_error is None
+
+
+def test_sweeps_skip_the_witness_without_the_capability(tmp_path):
+    m, mgr, fake = _witness_board(tmp_path, feed_delta=False)
+    m.updated_at = m.updated_at + timedelta(minutes=1)
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert getattr(fake, "feed_delta_calls", 0) == 0
+    assert fake.get_activity_calls == 2                     # today's rule
+
+
+def test_a_permanent_witness_error_latches_off_until_a_save(tmp_path):
+    m, mgr, fake = _witness_board(tmp_path)
+    fake.feed_delta_exc = RuntimeError("unknown field")
+    m.updated_at = m.updated_at + timedelta(minutes=1)
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert fake.feed_delta_calls == 1 and mgr.feed_memo.delta_error
+    m.updated_at = m.updated_at + timedelta(minutes=1)
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert fake.feed_delta_calls == 1                       # latched
+    mgr.feed_memo.delta_error = None                         # what a Save does
+    fake.feed_delta_exc = None
+    m.updated_at = m.updated_at + timedelta(minutes=1)
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert fake.feed_delta_calls == 2
 
 
 def test_scan_source_reuses_an_untruncated_scan_within_the_cycle_window():

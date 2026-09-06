@@ -41,7 +41,23 @@ class FakePMO:
             relations_supported=getattr(self, "relations_supported", True),
             attachments_supported=getattr(self, "attachments_supported", True),
             comment_max_chars=getattr(self, "comment_max_chars", None),
+            feed_delta=getattr(self, "feed_delta", False),
         )
+
+    async def feed_changes_since(self, team_ref, since, *, limit_pages):
+        """The feed-changes witness: rows from `feed_changes` (FeedChange),
+        `feed_delta_exc` raised when set, `feed_delta_truncated` echoed."""
+        from devcake.domain.model import FeedDelta
+        self.feed_delta_calls = getattr(self, "feed_delta_calls", 0) + 1
+        self.feed_delta_since = since
+        exc = getattr(self, "feed_delta_exc", None)
+        if exc:
+            raise exc
+        changes = list(getattr(self, "feed_changes", []))
+        return FeedDelta(
+            changes=changes,
+            newest=max((c.changed_at for c in changes), default=None),
+            truncated=getattr(self, "feed_delta_truncated", False))
 
     def __init__(self, mission):
         self.mission = mission

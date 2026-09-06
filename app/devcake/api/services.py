@@ -156,6 +156,10 @@ class Services:
                     # full rescan of every labeled mission is the one cost a
                     # metered tracker feels most (ADR-0033 memo addendum).
                     mgr.feed_memo = FeedScanMemo.for_pmo(p)
+                else:
+                    # a Save re-arms a latched feed-changes witness (worst
+                    # case: one more failed read, logged once)
+                    mgr.feed_memo.delta_error = None
                 mgr.cycle_stats = {}
                 mgr.instance, mgr.instance_name = inst, name
                 mgr.internal_forge = self.internal_forge

@@ -12,7 +12,10 @@ from typing import Iterator, Literal, Optional, Protocol
 
 from pydantic import BaseModel
 
-from ..domain.model import Activity, Mission, MissionRef, NormalizedStatus
+from datetime import datetime
+
+from ..domain.model import (Activity, FeedDelta, Mission, MissionRef,
+                            NormalizedStatus)
 
 
 class PMOTransient(Exception):
@@ -135,6 +138,11 @@ class PMOCapabilities(BaseModel):
     # comment; False keeps the feed memo's periodic safety rescan (docs/04
     # §1). Conservative default — an adapter declares True with evidence.
     updated_at_tracks_comments: bool = False
+    # A team-wide "feed entries created, modified, or removed since a
+    # moment" read exists (`feed_changes_since`). The poll cycle spends ONE
+    # such read per cycle to keep the memoized feed scans of missions that
+    # changed for reasons other than their feed (docs/04 §1).
+    feed_delta: bool = False
 
 
 class PMOPort(Protocol):
@@ -180,6 +188,16 @@ class PMOPort(Protocol):
     async def get_activity(self, ref: MissionRef,
                            full: bool = False) -> Activity: ...
     async def children_of(self, ref: MissionRef) -> list[Mission]: ...
+    async def feed_changes_since(self, team_ref: str, since: datetime, *,
+                                 limit_pages: int) -> FeedDelta:
+        """Every feed entry of the team's missions created, modified, or
+        removed strictly after `since` (the vendor's clock), as
+        (mission, entry, created, changed) rows — never the text. `newest`
+        is the largest change time seen; `truncated` when pages remained
+        past `limit_pages`. Meaningful only when `capabilities().feed_delta`
+        is True; raises NotImplementedError otherwise (same rule as project
+        refs on issue-only vendors)."""
+        ...
 
     # ── writes ───────────────────────────────────────────────────────────────
     async def post_feed(self, ref: MissionRef, markdown: str) -> None:

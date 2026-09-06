@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -12,12 +13,66 @@ from ...ports.pmo import PMOTransient
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
-from . import board, completion, discovery, dispatch, feed, freshness
+from . import (board, completion, discovery, dispatch, feed, feed_memo,
+               freshness)
 from .markers import (MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
                       MERGE_SETTLE_MARKER)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
+
+# feed-changes witness (docs/04 §1): the read asks for changes after the
+# watermark minus this overlap (replica lag), and walks at most this many
+# pages — past the cap the witness proves nothing and the memo is dropped
+FEED_DELTA_OVERLAP = timedelta(seconds=60)
+FEED_DELTA_MAX_PAGES = 10
+
+
+def _feed_delta_supported(mgr) -> bool:
+    try:
+        return bool(mgr.pmo.capabilities().feed_delta)
+    except Exception:  # noqa: BLE001 — no self-description means no witness, never a failed sweep
+        return False
+
+
+async def _reconcile_feed_memo(mgr, missions: list[Mission]) -> None:
+    """One team-wide feed-changes read stands in for the per-mission
+    re-reads (docs/04 §1, ADR-0033 addendum): the memoized scans of
+    missions whose `updated_at` moved for a label, status, or relation
+    edit are kept when the witness shows their feed untouched, and dropped
+    when it changed. A refused read (the request budget) changes nothing —
+    the per-mission arms fall back exactly as before; a permanent failure
+    latches the witness off until the next settings Save or restart."""
+    memo = getattr(mgr, "feed_memo", None)
+    if memo is None or not missions or not _feed_delta_supported(mgr) \
+            or memo.delta_error:
+        return
+    newest = max((aware(m.updated_at) for m in missions
+                  if getattr(m, "updated_at", None)), default=None)
+    if len(memo) == 0:
+        # nothing memoized: nothing to witness, and nothing that could be
+        # missed — the watermark follows the board so the first witness
+        # after an idle stretch does not have to cover the whole gap
+        memo.anchor(newest, follow=True)
+        return
+    memo.anchor(newest)
+    if memo.watermark is None:
+        return
+    board.bump(mgr, "feed_delta_reads")
+    try:
+        delta = await mgr.pmo.feed_changes_since(
+            mgr.instance.team_key, memo.watermark - FEED_DELTA_OVERLAP,
+            limit_pages=FEED_DELTA_MAX_PAGES)
+    except PMOTransient as e:
+        log.warning("feed changes deferred for %s: %s", mgr.instance_name, e)
+        return
+    except Exception as e:  # noqa: BLE001 — a schema mismatch must not traceback every cycle; latched, visible in the log once
+        log.exception("feed changes read failed for %s — witness off until "
+                      "the next settings Save or restart", mgr.instance_name)
+        memo.delta_error = f"{type(e).__name__}: {e}"[:200]
+        return
+    memo.advance(delta)
+    board.bump(mgr, "feed_scan_memo_kept", memo.reconcile(missions, delta))
 
 
 async def sweeps(mgr, missions: list[Mission]) -> None:
@@ -52,6 +107,7 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     memo = getattr(mgr, "feed_memo", None)
     if memo is not None:
         memo.retain(m.pmo_id for m in missions)
+    await _reconcile_feed_memo(mgr, missions)
     # sequential by design; a per-mission await may include an adapter's
     # short transient-retry sleeps (≤ ~6 s, docs/06 §5) — expected, not a
     # hang, and non-blocking for the event loop
@@ -200,6 +256,7 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         retry_ts, handoff_ts, settle_ts = stamps
     else:
         gen = memo.generation(m.pmo_id) if memo is not None else 0
+        floor = memo.witnessed(m.pmo_id) if memo is not None else None
         board.bump(mgr, "feed_scan_reads")
         act = await mgr.pmo.get_activity(m.ref)
         retry_ts = handoff_ts = settle_ts = None
@@ -213,7 +270,8 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             if MERGE_SETTLE_MARKER in body:
                 settle_ts = max(settle_ts, ts) if settle_ts else ts
         if memo is not None and not getattr(act, "truncated", False):
-            memo.put("merge", m, (retry_ts, handoff_ts, settle_ts), gen)
+            memo.put("merge", m, (retry_ts, handoff_ts, settle_ts), gen,
+                     feed_until=feed_memo.feed_until(act.entries), floor=floor)
 
     # Settle is active when its marker is the newest merge-state marker.
     settle_active = bool(

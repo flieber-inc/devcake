@@ -39,6 +39,12 @@ class PMOPort(Protocol):
         # (project-fidelity fix; enrichment is fail-open — the brief alone
         # still dispatches)
     async def children_of(self, ref: MissionRef) -> list[Mission]: ...
+    async def feed_changes_since(self, team_ref: str, since: datetime, *,
+                                 limit_pages: int) -> FeedDelta: ...
+        # every feed entry of the team's missions created, modified, or removed
+        # after `since` (vendor clock) — (mission, entry, created, changed) rows,
+        # never the text; `newest` = the next watermark; `truncated` past the
+        # page cap; raises NotImplementedError unless capabilities().feed_delta
 
     # ── writes ──
     async def post_feed(self, ref: MissionRef, markdown: str) -> None: ...
@@ -104,6 +110,18 @@ class PMOCapabilities(BaseModel):
     comment_max_chars: int | None = None  # GitHub Issues: 65536; None = no extra cap
     global_ids: bool = False          # pmo_ids unique across the vendor environment (Linear UUIDs: True; forge-issue numbers: False)
     updated_at_tracks_comments: bool = False  # the item's updated_at moves when a comment is posted (Linear: True); False keeps the feed memo's safety rescan (04 §1)
+    feed_delta: bool = False          # a team-wide feed-changes read exists (Linear, Gitea Issues: True); one read per cycle keeps memoized scans (04 §1)
+
+class FeedChange(BaseModel):          # one changed feed entry — never its text
+    pmo_id: str
+    entry_id: str
+    created_at: datetime
+    changed_at: datetime              # vendor clock: newest of created/edited/removed
+
+class FeedDelta(BaseModel):
+    changes: list[FeedChange]
+    newest: datetime | None           # max changed_at seen (the caller's next watermark)
+    truncated: bool                   # page cap hit: the list is incomplete
 ```
 
 `/health` and `POST /api/v1/connections/pmo/{name}/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.
@@ -173,6 +191,8 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 **`get_activity` pagination:** on issue refs, `get_activity` cursor-walks the full comment thread (`comments(first: 100, orderBy: createdAt, after: $cursor)`), per the read-robustness rule above — a single-page read was **verified lossy live on 2026-07-12** (DEV-50: 108 comments, 8 silently dropped). The ordering is pinned explicitly (verified: newest-first), so pages arrive newest-to-oldest and the safety ceiling of **10 pages / 1,000 comments** — a fail-loud valve at ~50× DevCake's post-hygiene comment rate, not a design limit — always keeps the newest comments, where the merge-state and conflict-resolve markers live (`03-mission-lifecycle.md` §4.1). Hitting the ceiling logs a truncation WARNING, never silent. Below it, `ACTIVITY.md` (`07-dev-runtime.md` §2), `_derive_seq`, and all marker counting see the complete thread. On project refs, SHALLOW `get_activity` returns the mission with `entries=[]` — Linear projects have no issue-style comments API (verified M2/M5), and no production caller rides the shallow project path (marker scans are issue-only). FULL mode on a project ref mirrors the project-native feed instead — see §5.
 
+**Feed changes (`feed_changes_since`):** the root `comments` connection filtered by the issue's team and by the comment's `updatedAt` (`{gt: since}`), `includeArchived: true` so an archived comment is listed when the archival moved its `updatedAt` (the filter has no archival field), ordered by `updatedAt`, 100 per page up to the caller's page cap (`truncated` past it); nodes carry `id createdAt updatedAt archivedAt issue { id }` and nothing else — the domain uses the rows only to decide *when* a memoized feed scan must be redone (`04-orchestrator.md` §1). A comment without an issue (a project update's) is skipped; `changed_at` is the newest of `updatedAt` and `archivedAt`; `since` is sent as UTC milliseconds with `Z`.
+
 ## 4. Feed posts, transcripts, and attachments
 
 - `post_feed(ref, markdown)` → issue: `commentCreate(input: {issueId, body})`; project: `projectUpdateCreate(input: {projectId, body})` — Linear's project-native feed. Body is Markdown either way.
@@ -226,6 +246,8 @@ Two batteries. Every future `PMOPort` implementation reuses both shapes: the off
 - **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`; `get_activity` on a project returns `entries=[]` **in shallow mode** without ever querying comments, while full mode routes to the documents/updates enrichment (project-fidelity fix); attachment `name` resolution (named markdown link vs bare URL).
 - **`health_probe` counting** — managed labels counted by `ALL_LABELS` intersection: a `DEVCAKE-CUSTOM-EXTRA` label must NOT count; `managed_labels_expected == len(ALL_LABELS)`.
 - **Transient typing** — a 429 surfaces as `PMOTransient` from the port (routine class; a critical-class caller is retried once after the vendor's wait — `test_pmo_budget_signals.py`).
+
+- **Feed-changes mapping** — `feed_changes_since` threads the team id, the `since` moment (millisecond `Z` form) and the cursor; a node without an issue is skipped; `changed_at` takes the archival time over the edit time; `newest` is the largest change time; `truncated` only past the page cap. The forge-issue batteries pin the same for Gitea's repository-wide listing (pull-request comments skipped, the issue index taken from `issue_url`) and pin `feed_delta` False plus a raising port method on GitHub and GitLab.
 
 **Live (`scripts/contract_tests_pmo.py` — acceptance gate for every `PMOPort`):** runs inside the app container:
 
@@ -296,6 +318,7 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 - **Board side effects of `ensure_labels`:** the call best-effort **GET → merge → PATCH**es the repo so `internal_tracker.enable_issue_dependencies` becomes `True` (off by default on new repos; required for `blocked_by` / `create_relation`). Gitea’s `internal_tracker` apply is a **full three-field replace** of plain `bool`s (`enable_time_tracker`, `allow_only_contributors_to_track_time`, `enable_issue_dependencies`) — JSON-omitted keys become `false`. DevCake therefore preserves the GET’d time-tracker flags (or Gitea’s new-repo defaults when absent) while forcing dependencies on. PATCH/GET failures are logged and the ensure continues; `create_relation` may still fail until deps are on.
 - **Labels:** repo labels; `PUT …/issues/{index}/labels` replaces the full set (`native_label_swap_atomic=True`; read-modify-write, serialized per mission by `label_write_lock` — §2). Managed set ensured uppercase. Vendor-cased managed names (`Devcake-Plan`) are mapped onto `ALL_LABELS` by `canonicalize_labels` so `derive()`/`swap_labels` see them.
 - **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified). Gitea pages oldest-first; `paginate_rest_newest` keeps the newest pages at the ceiling (same newest-first survival as Linear).
+- **Feed changes:** `GET …/issues/comments?since=<RFC 3339>` lists the repository's issue comments changed after the moment, walked until an empty page or the header's last page (a server may clamp `limit`; a short page is not the last page) up to the caller's cap (`truncated` past it); pull-request comments are skipped, an unreadable timestamp skips its row, and the mission is the issue index at the end of the comment's `issue_url` (`feed_delta=True`). A removed comment is not listed — the feed memo's safety rescan, which this vendor keeps, catches it.
 - **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
 ### 9.4 The default board (ADR-0030) — and manual setup for external Gitea
@@ -330,6 +353,8 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 ### 9.6 GitHub / GitLab Issues — launch-supported forge-issue adapters
 
 GitHub Issues and GitLab Issues ship as **launch-supported** forge-issue adapters (same profile: issue-only, label stages, open→backlog, markdown comments, dependency/links). Registry `PMOSystemInfo.experimental=False`; `operator_note` still surfaces vendor API gaps (GitHub attachments; GitLab Premium/EE blocked-by links). Live `scripts/contract_tests_pmo.py` batteries remain useful ops proof but are not a blocker for the admin `experimental` flag. Shared cancel footer lives in `adapters/forge_issue.py` (not a second Issues Port).
+
+Neither declares `feed_delta`: `feed_changes_since` raises and the poll keeps its per-mission feed reads. GitHub exposes a repository-wide `issues/comments?since=` listing that could implement it; GitLab lists notes per issue only.
 
 ### 9.7 GitLab Issues (`gitlab_issues`)
 

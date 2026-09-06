@@ -316,3 +316,14 @@ def test_mixed_case_managed_label_normalizes_and_can_be_swapped():
     assert "DEVCAKE-PLAN" not in names
     assert "DEVCAKE-EXECUTE" in names
     assert "DEVCAKE" in names
+
+
+def test_declares_no_feed_delta():
+    """No team-wide feed-changes read is wired: the capability is off and
+    the port method raises, so the poll keeps its per-mission reads."""
+    from datetime import datetime, timezone
+    pmo = make_pmo()
+    assert pmo.capabilities().feed_delta is False
+    with pytest.raises(NotImplementedError):
+        run(pmo.feed_changes_since(
+            "o/r", datetime(2026, 1, 1, tzinfo=timezone.utc), limit_pages=1))

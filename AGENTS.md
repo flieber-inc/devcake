@@ -3,6 +3,10 @@
 Instructions for coding agents (Claude, Cursor, Grok, Codex, etc.) working in this repo.
 These rules are **mandatory** unless the user explicitly overrides them for a task.
 
+For setting up or operating a deployment, read the agent-neutral
+[`skills/devcake-ops/SKILL.md`](skills/devcake-ops/SKILL.md). It explains the
+product, configuration, diagnostics, and recovery workflow for an operator's helper.
+
 ## Security / product claims
 
 The **product security contract** is [`docs/14-security.md`](docs/14-security.md).

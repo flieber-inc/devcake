@@ -4,7 +4,7 @@ Also the docs/03 §4.1 merge-failure branches (conflict rework, deferred retry)
 against a FakeForge, and the docs/05 §4 attachment policy."""
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -2206,10 +2206,11 @@ def test_sweep_merges_behind_branch_without_rework(tmp_path):
 
 
 def test_sweep_window_expiry_hands_off_once(tmp_path):
-    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    # mergeability still computing past the window: that is the hand-off
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
     run_coro(sweeps.merge_sweep(mgr, m))
-    assert forge.merges == []                          # no merge attempt past expiry
+    assert forge.merges == []                          # nothing to attempt yet
     handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
     assert len(handoffs) == 1 and "DEVCAKE-MERGE" in m.labels
     # the hand-off marker closes the window: later sweeps skip this mission
@@ -2219,6 +2220,110 @@ def test_sweep_window_expiry_hands_off_once(tmp_path):
     run_coro(sweeps.merge_sweep(mgr, m))
     assert len([c for c in fake.comments
                 if "`devcake:merge-handoff`" in c]) == 1
+
+
+def _aged_marker(fake, minutes):
+    """A retry marker posted `minutes` ago (default window: 30)."""
+    fake.activity_entries = [ActivityEntry(
+        ts=datetime.now(timezone.utc) - timedelta(minutes=minutes),
+        author="devcake", kind="comment",
+        body="⏳ deferred `devcake:merge-retry`\n\n`devcake:v1`")]
+
+
+def test_expired_window_still_makes_one_attempt_and_merges(tmp_path):
+    """A window that ran out while the merge was possible must still merge:
+    every cycle inside it may have been refused by the request budget, so
+    exhaustion is decided by an admitted attempt, never by the clock alone."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    _aged_marker(fake, 31)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == [8] and m.status == "done"
+    assert not any("`devcake:merge-handoff`" in c for c in fake.comments)
+
+
+def test_expired_window_with_verdict_none_hands_off_once(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
+    _aged_marker(fake, 31)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == []
+    assert sum("Still unmergeable" in c for c in fake.comments) == 1
+    assert m.pmo_id in mgr._merge_window_closed
+    assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
+    calls = fake.get_activity_calls
+    run_coro(sweeps.merge_sweep(mgr, m))              # closed: no repeat, no read
+    assert sum("Still unmergeable" in c for c in fake.comments) == 1
+    assert fake.get_activity_calls == calls
+
+
+def test_expired_window_with_real_conflict_routes_to_execute(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(
+        tmp_path, mergeable_result=False,
+        merge_exc=ForgeError("405: conflicts", status=405))
+    _aged_marker(fake, 31)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == [8]
+    assert "DEVCAKE-EXECUTE" in m.labels and "DEVCAKE-MERGE" not in m.labels
+    assert not any("Still unmergeable" in c for c in fake.comments)
+
+
+def test_expired_window_non_conflict_merge_failure_hands_off(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(
+        tmp_path, mergeable_result=True,
+        merge_exc=ForgeError("405: required checks pending", status=405))
+    _aged_marker(fake, 31)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == [8]                          # the attempt was made
+    assert sum("Still unmergeable" in c for c in fake.comments) == 1
+    assert "DEVCAKE-MERGE" in m.labels and m.pmo_id in mgr._merge_window_closed
+
+
+def test_sweep_write_backs_declare_the_critical_class(tmp_path):
+    """ADR-0040 §3: the sweep runs inside the poll's routine context; its
+    write-backs (a completion, a hand-off) declare critical at the write
+    site so a starved key refuses the poll's reads but never an outcome."""
+    from devcake.ports.pmo import pmo_call, pmo_call_ctx
+    seen = []
+
+    def record(fake, name):
+        orig = getattr(fake, name)
+
+        async def wrapped(*a, **k):
+            ctx = pmo_call_ctx.get()
+            seen.append((name, ctx.call_class if ctx else None))
+            return await orig(*a, **k)
+        setattr(fake, name, wrapped)
+
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    for name in ("set_status", "swap_labels", "post_feed", "get_activity"):
+        record(fake, name)
+    with pmo_call("routine"):                           # the poll's context
+        run_coro(sweeps.merge_sweep(mgr, m))
+    assert m.status == "done"
+    assert all(cls == "routine" for name, cls in seen if name == "get_activity")
+    writes = {cls for name, cls in seen if name != "get_activity"}
+    assert writes == {"critical"}
+
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
+    _aged_marker(fake, 31)
+    seen.clear()
+    record(fake, "post_feed")
+    with pmo_call("routine"):
+        run_coro(sweeps.merge_sweep(mgr, m))
+    assert seen == [("post_feed", "critical")]           # the hand-off
+
+    # inside an already-critical context (finalize) no nested declaration
+    # is opened: the outer context — and its cumulative wait budget — holds
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    budgets = []
+    orig_set_status = fake.set_status
+
+    async def rec_budget(*a, **k):
+        budgets.append(pmo_call_ctx.get().wait_budget_s)
+        return await orig_set_status(*a, **k)
+    fake.set_status = rec_budget
+    with pmo_call("critical"):                          # finalize's context
+        run_coro(sweeps.merge_sweep(mgr, m))
+    assert m.status == "done" and budgets == [None]     # the outer budget
 
 
 def test_sweep_boolean_forge_conflict_hands_off_not_execute(tmp_path):
@@ -2330,9 +2435,10 @@ def test_active_retry_window_suppresses_banner(tmp_path):
 
 
 def test_expired_window_banners_and_skips_future_feed_reads(tmp_path):
-    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
     run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == []
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert m.pmo_id in mgr._merge_window_closed
     calls = fake.get_activity_calls

@@ -154,6 +154,37 @@ def test_memo_discards_a_scan_that_started_before_our_own_write():
     assert memo.get("discovery", m) is None and len(memo) == 0
 
 
+def test_memo_without_max_age_never_rescans_on_age_alone():
+    """A vendor whose `updated_at` moves on every comment needs no safety
+    rescan: the changed mission already misses the memo."""
+    clock = Clock()
+    memo = FeedScanMemo(clock=clock, max_age=None)
+    m = issue("s1")
+    memo.put("discovery", m, "scan-1", memo.generation(m.pmo_id))
+    clock.t += timedelta(hours=6)                        # age alone: still good
+    assert memo.get("discovery", m) == "scan-1"
+    m.updated_at = now() + timedelta(seconds=1)          # the mission changed
+    assert memo.get("discovery", m) is None
+
+
+def test_memo_for_pmo_reads_the_capability():
+    from devcake.domain.orchestrator.feed_memo import MAX_AGE
+    from fakes import fake_pmo_capabilities
+    tracks = SimpleNamespace(capabilities=lambda: fake_pmo_capabilities(
+        updated_at_tracks_comments=True))
+    rescans = SimpleNamespace(capabilities=lambda: fake_pmo_capabilities(
+        updated_at_tracks_comments=False))
+    assert FeedScanMemo.for_pmo(tracks).max_age is None
+    assert FeedScanMemo.for_pmo(rescans).max_age == MAX_AGE
+    # no self-description at all (a bare fake): the conservative rescan
+    assert FeedScanMemo.for_pmo(object()).max_age == MAX_AGE
+
+
+def test_manager_memo_follows_the_adapter(tmp_path):
+    mgr, fake, store = make_mgr(tmp_path, issue("s1"))   # Linear-shaped fake
+    assert mgr.feed_memo.max_age is None
+
+
 class FeedPMO:
     def __init__(self, truncated=False):
         self.reads = 0

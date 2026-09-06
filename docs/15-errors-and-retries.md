@@ -176,7 +176,7 @@ The label has one other, routine source: per-board **plan approval** (`03-missio
 
 **Loop guardrail (warnings only):** repeats on the same (mission, stage) escalate the baton-pass comment from the 2nd hand-off on ("Hand-off #N … add `DEVCAKE-SKIP` to stop DevCake"); DevCake never auto-parks — the human always decides. The prompts require evidence (quote the exact error) before any hand-off.
 
-**Steward degradation:** 3 consecutive dead STEWARD runs ⇒ the periodic service backs off (`steward_degraded` in `/health` + the admin card); "Run now" remains available and a successful run clears it. Store-derived — restart-safe, no counters to reset.
+**Steward degradation:** 3 consecutive dead STEWARD runs on an instance ⇒ that instance's periodic service and discovery drain pause for three steward intervals (`steward.interval_minutes`) from the newest death, then admit one run: its death re-arms the pause, its success clears the condition (`steward_degraded` in `/health` + the admin card while paused); "Run now" remains available throughout. Store-derived and scoped by the run's instance — restart-safe, no counters to reset, and one board's deaths never pause another's.
 
 **`out_of_pipeline_merge` (anomaly, not an error):** a mission's PR found merged while the mission is still mid-pipeline (EXECUTE/REVIEW). Detection tripwire only (docs/14 §2 zone C): comment + audit + health banner — **does not prevent or reverse the merge**. A human may have merged early, or a Dev with a write token may have merged if branch protection allowed it (`auto_merge` off only stops the **app**).
 

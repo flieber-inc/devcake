@@ -786,6 +786,20 @@ until that run exists, field evidence below stays operator-self-reported.
   of one board re-parking on an approval loop the brief had invented,
   and one harness limitation routed to dozens of siblings three times
   in one half hour.
+- **Board-size demand, second pass** (2026-09-06): the feed memo's safety
+  rescan is a vendor capability (`updated_at_tracks_comments`, Linear on),
+  so a labelled feed is re-read only when its mission changed or DevCake
+  wrote to it, and a Save keeps the memo unless the PMO card changed; the
+  deferred-merge window makes one admitted attempt after it elapses before
+  handing off; the sweeps' write-backs declare the critical class at the
+  write site (ADR-0040 §3); steward degradation is a three-interval
+  back-off scoped per instance, not a latch. Field receipt that prompted
+  it: on a board with a few hundred labelled missions the sweeps attempted
+  well over a hundred feed reads per cycle against a shared tracker
+  credential, the budget refused about half, a merge window expired with
+  zero merge attempts and its hand-off comment was itself refused twice,
+  and three co-dying steward runs on one board had paused every board's
+  discovery drain for two days. Docs 03/04/05/06/11/13/15.
 
 ### Field evidence (receipted)
 

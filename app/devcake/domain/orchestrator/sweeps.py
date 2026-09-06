@@ -135,13 +135,16 @@ async def merge_sweep(mgr, m: Mission) -> None:
                 # cancel FIRST (same commit-point rule as complete_merged):
                 # stripping MERGE before cancel lands hides the mission from
                 # the next sweep if cancel raises.
-                await mgr.pmo.cancel_mission(m.ref)
-                await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE},
-                                          add=set())
-                await mgr._feed(
-                    m.pmo_id, "issue",
-                    f"🚫 PR {state.url} was closed without merging — mission "
-                    f"canceled (merge sweep).")
+                # a write-back (ADR-0040 §3): critical class, so a starved
+                # key never leaves a closed PR's mission parked
+                with completion.write_back_class():
+                    await mgr.pmo.cancel_mission(m.ref)
+                    await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE},
+                                              add=set())
+                    await mgr._feed(
+                        m.pmo_id, "issue",
+                        f"🚫 PR {state.url} was closed without merging — "
+                        f"mission canceled (merge sweep).")
                 mgr._audit(m.pmo_id, "merge_sweep_canceled", state.url)
     else:
         # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
@@ -160,7 +163,9 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
     the latest merge-state marker in the feed, keep watching the PR each
     sweep cycle — merge when it becomes ready, route to EXECUTE if a
     conflict emerges, and hand off to a human once
-    merge_retry_window_minutes elapse. Elapsed time is measured from the
+    merge_retry_window_minutes elapse AND one further admitted attempt has
+    not merged (a cycle whose reads the request budget refused never
+    spends the window). Elapsed time is measured from the
     marker entry's PMO timestamp (no local clocks), so the window is
     live-tunable and restart-safe. The label stays DEVCAKE-MERGE
     throughout: a manual human merge mid-window is caught by the
@@ -186,7 +191,8 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         return
     # the merge-state stamps are memoized per mission (ADR-0033 addendum):
     # they change only through our own feed writes (which invalidate the
-    # memo) or a human edit (caught by the memo's safety rescan)
+    # memo) or a human's comment (a changed `updated_at`, or the memo's
+    # safety rescan on a vendor whose `updated_at` does not track comments)
     memo = getattr(mgr, "feed_memo", None)
     stamps = memo.get("merge", m) if memo is not None else None
     if stamps is not None:
@@ -261,26 +267,24 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         mgr._merge_window_closed.add(m.pmo_id)
         mgr._rearm_satisfied.add(m.pmo_id)   # AUD-005: nothing more to (re)arm
         return  # no active retry window (auto_merge-OFF parks land here)
-    if not settle_active and (utcnow() - retry_ts).total_seconds() / 60 > window:
-        with tracer.start_as_current_span("sweep.merge_retry") as span:
-            span.set_attribute("devcake.mission.key", m.key)
-            span.set_attribute("devcake.outcome", "window_exhausted")
-            span.set_status(Status(StatusCode.ERROR,
-                                   f"unmergeable after {window} min"))
-            await mgr._feed(
-                m.pmo_id, "issue",
-                f"⚠️ Still unmergeable after {window} min — awaiting human "
-                f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
-            mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
-            mgr._merge_window_closed.add(m.pmo_id)
-        mgr._rearm_satisfied.add(m.pmo_id)   # AUD-005: window ran its course
-        return
-    # window ACTIVE: DevCake is still driving the merge — no human action
-    # needed, so the sweep's banner entry comes back off
+    # the window has elapsed once the marker is older than the bound; the
+    # sweep still makes ONE admitted attempt below — a cycle whose feed read
+    # was refused or skipped must not turn a mergeable PR into a hand-off —
+    # and hands off only if that attempt does not merge
+    elapsed = (not settle_active
+               and (utcnow() - retry_ts).total_seconds() / 60 > window)
+    # window ACTIVE (or its closing attempt): DevCake is still driving the
+    # merge — no human action needed, so the sweep's banner entry comes off
     mgr.merge_handoffs.pop(m.pmo_id, None)
     mgr._rearm_satisfied.add(m.pmo_id)       # AUD-005: window already driving
     verdict = await forge.mergeable(pr.number)
     if verdict is None:
+        if elapsed:
+            # still computing past the window: that is the hand-off case
+            with tracer.start_as_current_span("sweep.merge_retry") as span:
+                span.set_attribute("devcake.mission.key", m.key)
+                _mark_window_exhausted(span, window)
+                await _hand_off_exhausted(mgr, m, pr_url, window)
         return  # still computing / CI running — next cycle re-reads
     # a False verdict can be a non-blocking "behind" (strict up-to-date
     # rules are what make it fail) — one plain merge attempt is far
@@ -304,16 +308,22 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                 if not await completion.route_conflict_to_execute(
                         mgr, m.pmo_id, m.key, pr_url, LABEL_MERGE, inst):
                     span.set_attribute("devcake.outcome", "conflict_handoff")
-                    await mgr._feed(
-                        m.pmo_id, "issue",
-                        f"⚠️ Merge conflict on {pr_url} and auto-resolve is "
-                        f"unavailable (toggle off or attempts exhausted) — "
-                        f"awaiting human merge (`DEVCAKE-MERGE`). "
-                        f"{MERGE_HANDOFF_MARKER}")
+                    with completion.write_back_class():
+                        await mgr._feed(
+                            m.pmo_id, "issue",
+                            f"⚠️ Merge conflict on {pr_url} and auto-resolve "
+                            f"is unavailable (toggle off or attempts "
+                            f"exhausted) — awaiting human merge "
+                            f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
                     mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
                     mgr._merge_window_closed.add(m.pmo_id)
                     mgr.merge_handoffs[m.pmo_id] = (
                         f"{m.key}: awaiting human merge — {pr_url}")
+            elif elapsed:
+                # the closing attempt did not merge and it was no conflict:
+                # the window ran its course
+                _mark_window_exhausted(span, window)
+                await _hand_off_exhausted(mgr, m, pr_url, window)
             else:
                 # state may have moved under us; next cycle re-reads
                 span.set_attribute("devcake.outcome", "merge_failed_transient")
@@ -326,6 +336,29 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         await completion.complete_merged(
             mgr, completion.MergedCause.DEFERRED_RETRY_MERGE,
             ref=m.ref, mission_key=m.key, pr=pr, pr_url=pr_url, mission=m)
+
+
+def _mark_window_exhausted(span, window: int) -> None:
+    span.set_attribute("devcake.outcome", "window_exhausted")
+    span.set_status(Status(StatusCode.ERROR,
+                           f"unmergeable after {window} min"))
+
+
+async def _hand_off_exhausted(mgr, m: Mission, pr_url: str,
+                              window: int) -> None:
+    """The window's closing act, posted once: the marker outlived
+    merge_retry_window_minutes and the attempt just made did not merge. A
+    write-back (ADR-0040 §3), so it rides the critical class — the reserve
+    exists so a hand-off is never refused on a starved key. The banner is
+    set first: it is true whether or not the post lands this cycle."""
+    mgr.merge_handoffs[m.pmo_id] = f"{m.key}: awaiting human merge — {pr_url}"
+    with completion.write_back_class():
+        await mgr._feed(
+            m.pmo_id, "issue",
+            f"⚠️ Still unmergeable after {window} min — awaiting human "
+            f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+    mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
+    mgr._merge_window_closed.add(m.pmo_id)
 
 
 async def tracking_sweep(mgr, m: Mission) -> None:
@@ -359,8 +392,12 @@ async def tracking_sweep(mgr, m: Mission) -> None:
             # status FIRST (same commit-point as complete_merged): a failed
             # status leaves TRACKING so the next cycle still selects; a failed
             # swap after Done is leftover hygiene on a terminal project.
-            await mgr.pmo.set_status(m.ref, "done")
-            await mgr.pmo.swap_labels(m.ref, remove={LABEL_TRACKING}, add=set())
+            # a write-back (ADR-0040 §3): critical class, never refused at
+            # the reserve while the poll's own reads are
+            with completion.write_back_class():
+                await mgr.pmo.set_status(m.ref, "done")
+                await mgr.pmo.swap_labels(m.ref, remove={LABEL_TRACKING},
+                                          add=set())
             mgr._audit(m.pmo_id, "tracking_sweep_completed",
                         f"{len(children)} children")
         log.info("project %s auto-completed (%d children done)", m.key, len(children))

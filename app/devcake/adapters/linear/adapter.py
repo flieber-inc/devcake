@@ -1132,7 +1132,13 @@ class LinearAdapter:
                                attachment_max_bytes=50 * 1024 * 1024,
                                native_label_swap_atomic=True,
                                relations_supported=True,
-                               global_ids=True)   # Linear pmo_ids are UUIDs
+                               global_ids=True,   # Linear pmo_ids are UUIDs
+                               # an issue's updatedAt moves with every comment
+                               # posted on it (verified live on a field host:
+                               # over dozens of missions it never lagged the
+                               # newest comment), so the feed memo needs no
+                               # safety rescan here
+                               updated_at_tracks_comments=True)
 
     # ── normalization ────────────────────────────────────────────────────────
 

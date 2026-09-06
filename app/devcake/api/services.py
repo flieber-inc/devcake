@@ -43,6 +43,7 @@ from ..domain.blocker_locator import BlockerLocator
 from ..domain.model import ALL_LABELS
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import FinalizerRouter, StewardService, MissionManager
+from ..domain.orchestrator.feed_memo import FeedScanMemo
 from ..domain.forge_runtime import ForgeRuntime
 from ..domain.repo_mirror import RepoCache
 from ..domain.workspaces import WorkspaceStore
@@ -123,6 +124,12 @@ class Services:
             if row.get("instance") == old:
                 row["instance"] = new
 
+    @staticmethod
+    def _pmo_identity(inst) -> tuple:
+        """What makes a PMO card the same board on the same vendor — the
+        memoized feed scans survive a reload only while this holds."""
+        return (inst.system, inst.team_key, inst.api_base)
+
     def build_managers(self) -> None:
         """(Re)build the manager set IN PLACE to match config.pmos: existing
         managers keep their advisory state (grace, anomalies, merge windows)
@@ -138,10 +145,17 @@ class Services:
             p = make_pmo(inst)
             if name in self.managers:
                 mgr = self.managers[name]
+                prev = mgr.instance
                 mgr.pmo, mgr.forges, mgr.config = p, self.forge_runtime, self.config
                 mgr.labels_ready = False   # repoint may change team_key (F3 latch)
                 mgr.snapshot = None        # team_key may change: no stale board
-                mgr.feed_memo.clear()
+                if self._pmo_identity(prev) != self._pmo_identity(inst):
+                    # the board or the vendor changed: memoized feed scans of
+                    # the old board mean nothing. An unchanged card keeps
+                    # them — a Save elsewhere cannot change a feed, and a
+                    # full rescan of every labeled mission is the one cost a
+                    # metered tracker feels most (ADR-0033 memo addendum).
+                    mgr.feed_memo = FeedScanMemo.for_pmo(p)
                 mgr.cycle_stats = {}
                 mgr.instance, mgr.instance_name = inst, name
                 mgr.internal_forge = self.internal_forge

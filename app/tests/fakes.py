@@ -269,9 +269,11 @@ def make_mission_manager(
 
 def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
                           attachments_supported=True,
-                          comment_max_chars=None):
+                          comment_max_chars=None,
+                          updated_at_tracks_comments=True):
     """Shared capability row for the test fakes. Default is Linear-shaped
-    (global ids ON, so peer-resolution tests exercise the allowed path);
+    (global ids ON, so peer-resolution tests exercise the allowed path;
+    `updated_at` tracks comments, so the feed memo has no safety rescan);
     colliding-id scenarios pass global_ids=False — the capability replaced
     GLOBAL_ID_SYSTEMS in the 2026-08 cleanups."""
     from devcake.ports.pmo import PMOCapabilities
@@ -281,7 +283,8 @@ def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
         native_label_swap_atomic=True, relations_supported=relations_supported,
         attachments_supported=attachments_supported,
         comment_max_chars=comment_max_chars,
-        global_ids=global_ids)
+        global_ids=global_ids,
+        updated_at_tracks_comments=updated_at_tracks_comments)
 
 
 # ── ADR-0028: the test-side service graph ────────────────────────────────────

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -17,12 +18,18 @@ from ..config import AppConfig, DevType, intake_blocks_dispatch
 from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from ..harness import missing_referenced_secret_env
 from .model import Mission
-from .run import Run
+from .run import Run, aware, utcnow
 
 if TYPE_CHECKING:
     from .orchestrator import MissionManager
 
 log = logging.getLogger("devcake.missions")
+
+# Three dead STEWARD runs in a row pause this instance's periodic service and
+# its discovery drain for this many steward intervals from the newest death;
+# then one run is admitted — its death re-arms the pause, its success clears
+# it. A pause with no horizon was a latch that only Run now could open.
+DEGRADED_BACKOFF_INTERVALS = 3
 tracer = trace.get_tracer("devcake")
 
 
@@ -65,15 +72,28 @@ class StewardService:
                    for r in self.mgr.runs.store.active())
 
     def degraded(self) -> str | None:
-        """The 3 most recent STEWARD runs all dead ⇒ the periodic service backs
-        off (docs/15). Run now stays available; a success clears the condition."""
+        """This instance's 3 most recent STEWARD runs all dead ⇒ the periodic
+        service and the discovery drain back off (docs/15) for
+        DEGRADED_BACKOFF_INTERVALS steward intervals from the newest death,
+        then admit one run: its death re-arms the pause from its own
+        timestamp, its success clears the condition. Run now stays available
+        throughout. Scoped to this instance's runs (the manager's one
+        locality rule, legacy records included): the run store is shared
+        across instances, and another board's deaths are not this board's
+        weather."""
         recent = sorted((r for r in self.mgr.runs.store.all()
-                         if r.mission_type == "STEWARD"),
+                         if r.mission_type == "STEWARD"
+                         and self.mgr._run_is_ours(r)),
                         key=lambda r: r.created_at, reverse=True)[:3]
-        if len(recent) == 3 and all(r.state in ("failed", "timed_out", "orphaned")
-                                    for r in recent):
-            return recent[0].error or "3 consecutive steward failures"
-        return None
+        if len(recent) < 3 or not all(r.state in ("failed", "timed_out", "orphaned")
+                                      for r in recent):
+            return None
+        newest = recent[0]
+        horizon = timedelta(minutes=DEGRADED_BACKOFF_INTERVALS
+                            * self.config.steward.interval_minutes)
+        if utcnow() - aware(newest.ended_at or newest.created_at) >= horizon:
+            return None      # back-off served — one probe run is admitted
+        return newest.error or "3 consecutive steward failures"
 
     async def maybe_dispatch(self, missions: list[Mission]) -> None:
         """The interval path, called once per poll cycle (never while paused).

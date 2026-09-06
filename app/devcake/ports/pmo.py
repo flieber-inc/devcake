@@ -130,6 +130,11 @@ class PMOCapabilities(BaseModel):
     # here so the blocker locator branches on a CAPABILITY, not a vendor
     # name (2026-08 evaluation F10 — adding a PMO no longer edits domain).
     global_ids: bool = False
+    # The item's `updated_at` moves when a comment is posted on it, so a
+    # memoized feed scan keyed on `updated_at` already sees a human's
+    # comment; False keeps the feed memo's periodic safety rescan (docs/04
+    # §1). Conservative default — an adapter declares True with evidence.
+    updated_at_tracks_comments: bool = False
 
 
 class PMOPort(Protocol):

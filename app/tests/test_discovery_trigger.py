@@ -5,6 +5,7 @@ import asyncio
 
 from devcake.config import AppConfig, DevType
 from devcake.domain.model import Activity, ActivityEntry
+from devcake.domain.repo_mirror import NullRepoCache
 from devcake.domain.orchestrator import discovery
 from devcake.domain.orchestrator.markers import discovery_marker
 from devcake.domain.steward_service import StewardService
@@ -204,11 +205,18 @@ def test_discovery_forwards_context_stale_and_omit(tmp_path):
         calls.append(1)
         return object()
 
-    async def gate(dt, repo, extra=()):
-        return True, {}, {"mem-notebook"}, {"skillcard"}
+    class Cache(NullRepoCache):
+        async def ensure_fresh(self, names):
+            return False, {"mem-notebook": "fetch down", "skillcard": "fetch down"}
+
+        def has_last_good(self, name):
+            return name == "mem-notebook"
+
+    svc.config.context_sourcing_strict = False
+    svc.dev_types["steward"].skills = ["mem-notebook/context", "skillcard/tdd"]
 
     mgr.dispatch_steward_discovery = fake_dispatch
-    svc._context_gate = gate
+    mgr.repo_cache = Cache()
     mgr._discoveries_pending.add("src")
     run_coro(svc.maybe_dispatch_discovery(missions))
     assert calls == [1]
@@ -286,7 +294,7 @@ def test_gate_filters_mirror_ineligible_family_repos(tmp_path, monkeypatch):
             mgr, fam, exclude=frozenset({"home"}))]
     asked: list[list[str]] = []
 
-    class Cache:
+    class Cache(NullRepoCache):
         def eligible(self, name):
             return name == "home"             # only the steward's card
         async def ensure_fresh(self, names):
@@ -318,7 +326,7 @@ def test_gate_combines_eligible_filter_and_skill_card_union(tmp_path,
     svc.dev_types["steward"].skills = ["skillcard/tdd"]   # external skill
     asked: list[list[str]] = []
 
-    class Cache:
+    class Cache(NullRepoCache):
         def eligible(self, name):
             return name == "home"             # only the steward's card
         async def ensure_fresh(self, names):
@@ -343,7 +351,7 @@ def test_context_gate_backed_skill_card_downgrades_in_open_mode(tmp_path):
     dt = svc.dev_types["steward"]
     dt.skills = ["shelf/tdd"]
 
-    class Cache:
+    class Cache(NullRepoCache):
         def mirror_name_of(self, name):
             return "work" if name == "shelf" else name
 
@@ -356,9 +364,18 @@ def test_context_gate_backed_skill_card_downgrades_in_open_mode(tmp_path):
             return name == "work"
 
     mgr.repo_cache = Cache()
-    ok, why, stale, omit = run_coro(svc._context_gate(dt, "home"))
-    assert ok and not why
-    assert stale == {"work"} and omit == set()
+    seen = []
+
+    async def dispatch(dt_, fam, pending, **kw):
+        seen.append(kw)
+        return object()
+
+    mgr.dispatch_steward_discovery = dispatch
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert len(seen) == 1
+    assert seen[0]["context_stale"] == {"work"}
+    assert seen[0]["context_omit"] == set()
 
 
 def test_sweep_holds_batches_whose_run_is_still_finalizing(tmp_path):

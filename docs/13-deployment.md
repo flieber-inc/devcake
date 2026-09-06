@@ -350,6 +350,17 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ## 8. Runbook
 
+**Restore proof in CI:** `scripts/ci_backup_restore.sh` runs after the ordinary
+runtime checks on a disposable GitHub-hosted runner. It stops app/Gitea for
+quiet backups, invokes both shipped backup/restore script pairs, rejects
+wrong-kind and corrupt archives without changing the destination, and restores
+into fresh volumes. Content hashes, permissions, ownership, and symlink targets
+must match before boot. The restored stack must become healthy, expose the
+previous completed run, finish a new hello dispatch, and pass forge/PMO
+contracts. Temporary archives contain only that CI stack's synthetic data and
+are deleted rather than uploaded. The drill refuses local/self-hosted execution;
+it does not prove an operator's own backups are current or restorable.
+
 > **Host CLI:** [ADR-0038](adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md)
 > (**accepted**). Phase 1c (CAKE-178) ships **`devcake setup`** on the
 > installable `devcake-cli` package (`cli/` → import `devcake_cli`;

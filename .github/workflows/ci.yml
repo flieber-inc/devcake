@@ -213,6 +213,13 @@ jobs:
           export ADMIN_PASSWORD="${ADMIN_PASSWORD:-Ci-admin-Pass1!}"
           npm run check:ui --prefix admin/spa
 
+      - name: Backup/restore drill on fresh volumes
+        env:
+          ADMIN_USER: admin
+          ADMIN_PASSWORD: Ci-admin-Pass1!
+          DEVCAKE_BASE_URL: http://127.0.0.1:8080
+        run: bash scripts/ci_backup_restore.sh
+
       - name: Teardown compose stack
         if: always()
         run: |

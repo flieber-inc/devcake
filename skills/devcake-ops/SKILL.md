@@ -87,7 +87,7 @@ Read [deployment](../../docs/13-deployment.md) for the host type, especially
 with Compose and Buildx, Python 3.12+, and this repository checkout.
 
 ```bash
-uv tool install .
+uv tool install '.[mcp]'   # the MCP extra lets an agent hold DevCake's tools
 devcake --help
 devcake doctor --json
 ```
@@ -218,6 +218,15 @@ progression; intake pause stops new dispatch while in-flight work and
 finalization continue. Neither is an emergency kill. Read the
 [operations tutorial](../../docs/tutorials/02-operating-devcake.md) and
 [error/retry contract](../../docs/15-errors-and-retries.md) for the specific case.
+
+**Prefer the MCP tools when they are available.** If the operator's agent
+configuration includes `devcake mcp` (`--read-only` for inspection, plain
+for changes), every admin-API operation is a tool with the same contract as
+[docs/11](../../docs/11-admin-panel.md): read state with the read tools,
+change it with the write tools, and expect a 409 with the reason when the
+app refuses. Secret values never cross those tools by design; use presence
+checks and connection tests. Every change made through them is audited as
+actor `mcp`. Without MCP, build the requests by hand as follows.
 
 For API work, read the relevant route in
 [docs/11](../../docs/11-admin-panel.md) before constructing requests. The

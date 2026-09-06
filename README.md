@@ -107,6 +107,16 @@ deliverable, a suitable interval, and human review.”
 Ask your agent to use the [operator skill](skills/devcake-ops/SKILL.md) and
 [daily operations tutorial](docs/tutorials/02-operating-devcake.md) for these tasks.
 
+**Give your agent the tools directly.** Install the CLI with its MCP extra
+(`uv tool install '.[mcp]'`) and add `devcake mcp --read-only` to your
+agent's MCP configuration; drop the flag for a read-write connection. Every
+admin operation becomes a tool, described by the API itself, so the tool
+list grows with DevCake. Secret values never cross it, and every change an
+agent makes is audited as such.
+
+**Ask your agent:** “Connect to DevCake over MCP, read health and activity,
+and tell me what is waiting on me.”
+
 **You own the host and the trust.** Ticket authors and repository contributors
 can influence agents holding your credentials. Docker access is
 root-equivalent; containers are not an injection-proof sandbox. Keep control

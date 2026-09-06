@@ -27,7 +27,9 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   carry the intent header and an actor label the audit rows record. The
   SDK is an optional extra (`devcake-cli[mcp]`); the base CLI stays
   dependency-free. Every API route now carries a one-line docstring, which
-  is its tool description.
+  is its tool description. The README and the operator skill tell an
+  operator how to hand the tools to their agent. Ships as `devcake-cli`
+  0.1.3.
 - **Changed — the README leads with agent-assisted setup and operations,
   and the operator skill is agent-neutral.** The README opens with a
   prompt for the operator's coding agent and explains fresh context per

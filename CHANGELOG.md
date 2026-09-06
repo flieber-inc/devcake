@@ -16,8 +16,13 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.8 (2026-09-06)
+
+Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.3.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.8).
+
 - **Added — `devcake mcp`, an operator MCP server whose tools are the API
-  itself.** A coding agent beside the operator can now read and act on a
+  itself** (#413, #415; ADR-0041 in #412). A coding agent beside the operator can now read and act on a
   deployment through the Model Context Protocol: `devcake mcp` speaks MCP
   over stdio and turns every admin-API operation into a tool, derived at
   startup from the app's own API description (published under the
@@ -31,7 +36,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   operator how to hand the tools to their agent. Ships as `devcake-cli`
   0.1.3.
 - **Changed — the README leads with agent-assisted setup and operations,
-  and the operator skill is agent-neutral.** The README opens with a
+  and the operator skill is agent-neutral** (#411). The README opens with a
   prompt for the operator's coding agent and explains fresh context per
   run, work, reference and memory repositories, skills, staffing and
   scheduled work in a third of its former length. The operator skill

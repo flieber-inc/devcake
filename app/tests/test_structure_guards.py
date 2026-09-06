@@ -253,7 +253,7 @@ def _skeleton(path: str) -> str:
 def _main_route_skeletons() -> set[tuple[str, str]]:
     out: set[tuple[str, str]] = set()
     for m in re.finditer(
-        r'@app\.(get|post|put|patch|delete)\("([^"]+)"\)', MAIN.read_text()
+        r'@app\.(get|post|put|patch|delete)\("([^"]+)"[^\n]*\)', MAIN.read_text()
     ):
         out.add((m.group(1).upper(), _skeleton(m.group(2))))
     return out
@@ -657,3 +657,25 @@ def test_discovery_label_never_joins_scheduling():
         "DEVCAKE-DISCOVERY is a sweep gate only (ADR-0033 founder ruling): "
         "a new consumer needs its own documented ruling and an allowlist "
         "entry, never a quiet read: " + "; ".join(offenders))
+
+
+# ── ADR-0041: the API describes itself; the MCP catalogue is derived ─────────
+
+def test_every_main_route_carries_a_docstring():
+    """A route's docstring is its tool description for the operator MCP
+    server; a route without one would be an undescribed tool."""
+    text = MAIN.read_text()
+    bare = re.findall(
+        r'@app\.(?:get|post|put|patch|delete)\("([^"]+)"[^\n]*\)\n(?:@[^\n]*\n)*'
+        r'(?:async )?def \w+\([^)]*\)[^:]*:\n(?!\s+""")', text)
+    assert not bare, f"routes without a docstring: {sorted(set(bare))}"
+
+
+def test_mcp_catalogue_names_no_route():
+    """The catalogue is derived from the OpenAPI document; a route literal
+    in the CLI's MCP modules would be a second catalogue (ADR-0041)."""
+    cli = next((p for p in (MAIN.parents[3] / "cli", Path("/srv/cli")) if p.is_dir()), None)
+    assert cli is not None
+    for mod in sorted((cli / "devcake_cli").glob("mcp*.py")):
+        literals = re.findall(r'"(/api/v1/[^"]*)"', mod.read_text())
+        assert literals in ([], ["/api/v1/openapi.json"]), f"{mod.name} names routes: {literals}"

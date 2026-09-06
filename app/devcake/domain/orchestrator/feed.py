@@ -238,6 +238,17 @@ def coalesced_step_files(entries) -> list[tuple[str, str, object]]:
     return out
 
 
+def _request_actor() -> str:
+    """The control-plane actor label for this audit row ("" outside a
+    request). Read lazily: the domain must not import the API package at
+    import time."""
+    try:
+        from ...api.auth import REQUEST_ACTOR
+    except Exception:  # noqa: BLE001 — an audit row must never fail on a label
+        return ""
+    return REQUEST_ACTOR.get()
+
+
 def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
     # Belt-and-braces: detail should be names/counts only, but exception
     # fragments (e.g. activity_repo_push_failed) can embed secret shapes —
@@ -248,7 +259,8 @@ def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
     with open(markers.AUDIT_PATH, "a") as f:
         f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
                             "instance": getattr(mgr, "instance_name", ""),
-                            "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
+                            "pmo_id": pmo_id, "action": action, "detail": detail,
+                            "actor": _request_actor()}) + "\n")
     mgr._grace_next.add(pmo_id)
     # mirror every audit action as a span so OO alerts can fire on them
     # (`devcake_needs_human` was a file-only record no alert could ever see).

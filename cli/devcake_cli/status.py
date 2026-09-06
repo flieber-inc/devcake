@@ -15,8 +15,9 @@ from .doctor import check_baker_liveness
 from .paths import require_checkout_root
 from .setup import _basic_auth_header, _load_admin_auth
 
-# the admin proxy is pinned to loopback in docker-compose.yml (docs/14)
-ADMIN_URL = "http://127.0.0.1:8080"
+# the admin proxy is pinned to loopback in docker-compose.yml (docs/14);
+# one address for every verb (admin_api)
+from .admin_api import ADMIN_URL  # noqa: E402
 # a cold /health runs its tracker and forge probes first (up to ~5 s each)
 HEALTH_TIMEOUT_S = 10.0
 

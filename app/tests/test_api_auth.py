@@ -11,6 +11,43 @@ def _basic(user: str, password: str) -> str:
     return f"Basic {token}"
 
 
+def test_every_admitted_mutation_writes_a_control_plane_audit_row(monkeypatch, tmp_path):
+    """ADR-0041: whether or not a handler audits, an admitted POST/PUT/DELETE
+    leaves one row with method, path, status and the actor label; reads
+    and refused requests leave none."""
+    import json
+    monkeypatch.setenv("ADMIN_USER", "operator")
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    app = FastAPI()
+    app.middleware("http")(enforce_control_plane_auth)
+
+    @app.get("/api/v1/thing")
+    async def read_thing():
+        return {"ok": True}
+
+    @app.put("/api/v1/thing/{name}")
+    async def write_thing(name: str):
+        if name == "refused":
+            from fastapi import HTTPException
+            raise HTTPException(409, "no")
+        return {"ok": True}
+
+    client = TestClient(app)
+    auth = {"Authorization": _basic("operator", "correct-horse")}
+    intent = {**auth, "X-DevCake-Request": "1"}
+    assert client.get("/api/v1/thing", headers=auth).status_code == 200
+    assert client.put("/api/v1/thing/a", headers=auth).status_code == 403       # no intent: refused
+    assert client.put("/api/v1/thing/refused", headers=intent).status_code == 409
+    assert client.put("/api/v1/thing/a", headers=intent).status_code == 200
+    assert client.put("/api/v1/thing/b", headers={**intent, "X-DevCake-Actor": "mcp"}).status_code == 200
+    rows = [json.loads(l) for l in (tmp_path / "state" / "events.jsonl").read_text().splitlines()]
+    assert [(r["action"], r["detail"], r["actor"]) for r in rows] == [
+        ("control_plane_write", "PUT /api/v1/thing/a 200", "admin"),
+        ("control_plane_write", "PUT /api/v1/thing/b 200", "mcp"),
+    ]
+
+
 def test_control_plane_auth_and_request_intent(monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "operator")
     monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")

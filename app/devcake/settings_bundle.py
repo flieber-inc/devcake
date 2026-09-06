@@ -108,6 +108,16 @@ def _audit_path() -> Path:
     return Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "events.jsonl"
 
 
+def _request_actor() -> str:
+    """The control-plane actor label ("" outside a request); read lazily so
+    this module keeps no import-time dependency on the API package."""
+    try:
+        from .api.auth import REQUEST_ACTOR
+    except Exception:  # noqa: BLE001 — an audit row must never fail on a label
+        return ""
+    return REQUEST_ACTOR.get()
+
+
 def audit_event(action: str, detail: str = "") -> None:
     """Settings-change audit record on the existing events.jsonl stream —
     same shape as the mission audit (feed._audit) so readers need one parser.
@@ -117,7 +127,8 @@ def audit_event(action: str, detail: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps({"ts": _utcnow(), "instance": "", "pmo_id": "",
-                            "action": action, "detail": redact(detail)}) + "\n")
+                            "action": action, "detail": redact(detail),
+                            "actor": _request_actor()}) + "\n")
     with tracer.start_as_current_span("audit.event") as span:
         span.set_attribute("devcake.audit.action", action)
         span.set_attribute("devcake.audit.detail", redact(detail)[:500])

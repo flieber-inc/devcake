@@ -70,10 +70,11 @@ class ReviewForge(FakeForge):
 
 
 class PendingArtifacts(NullMessaging):
-    def __init__(self) -> None:
-        self.pending = {RUN_ID}
-        self.users = {RUN_ID}
-        self.reply_streams = {RUN_ID}
+    def __init__(self, run_id: str = RUN_ID, payload: dict | None = None) -> None:
+        self.pending = {run_id}
+        self.users = {run_id}
+        self.reply_streams = {run_id}
+        self.payload = PAYLOAD if payload is None else payload
 
     async def unresolved_run_ids(self) -> set[str]:
         return set(self.pending)
@@ -81,7 +82,7 @@ class PendingArtifacts(NullMessaging):
     async def reclaim_pending(self, handler, verify_auth) -> None:
         for run_id in tuple(self.pending):
             assert verify_auth(run_id, AUTH)
-            await handler(run_id, "run.artifacts", PAYLOAD)
+            await handler(run_id, "run.artifacts", self.payload)
             self.pending.remove(run_id)  # ack only after successful handling
 
     async def delete_run_user(self, run_id: str) -> None:

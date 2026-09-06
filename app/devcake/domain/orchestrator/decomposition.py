@@ -35,12 +35,25 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     live = await mgr.pmo.get(MissionRef(pmo_id, run.pmo_kind))
     # depth is PMO state — the mission's own label + marker (ADR-0012);
     # unknown (label without a readable marker) counts as at-limit, fail-safe.
-    # Replay-stable: once any child checkpoint exists the decision was taken
+    # Replay-stable: once any child exists the decision was taken
     # under the limit of that moment — a config change mid-resume must finish
     # the wiring, not strand live children behind a SKIP park.
     limit = mgr.config.max_decomposition_depth
     committed = any(s.startswith(steps.DECOMP_CHILD_PREFIX)
                     for s in run.finalized_steps)
+    existing_missions = None
+    if not committed and at_decomposition_limit(live, limit):
+        # A PMO write can succeed before its local checkpoint is saved.
+        # Board provenance is evidence of commitment too; the full manifest
+        # and title checks below still decide whether replay is safe.
+        existing_missions = await mgr.pmo.list_all(mgr.instance.team_key)
+        for mission in existing_missions:
+            if LABEL_CREATED not in mission.labels:
+                continue
+            marker = decomposition_marker(mission.description)
+            if marker and marker.group(1) == pmo_id:
+                committed = True
+                break
     if not committed and at_decomposition_limit(live, limit):
         depth = decomposition_depth(live)
         async def _depth_limit():
@@ -130,7 +143,9 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     existing: dict[int, str] = {}
     existing_keys: dict[int, str] = {}
     conflicts: list[str] = []
-    for mission in await mgr.pmo.list_all(mgr.instance.team_key):
+    if existing_missions is None:
+        existing_missions = await mgr.pmo.list_all(mgr.instance.team_key)
+    for mission in existing_missions:
         if LABEL_CREATED not in mission.labels:
             continue
         marker = decomposition_marker(mission.description)

@@ -192,7 +192,9 @@ def compare_and_transition(run, intended: Transition):
     # halts further mutation.
     review_stopped = run.mission_type == "REVIEW" and (
         live.status == "canceled" or "DEVCAKE-SKIP" in live.labels)
-    if review_stopped \
+    decomposition_stopped = intended.outcome == "decomposed" and (
+        "DEVCAKE-SKIP" in live.labels)
+    if review_stopped or decomposition_stopped \
             or stage_label(live) not in expected_stages(run):
         # A human (or another actor) changed state mid-run.
         pmo.post_feed(run.mission_ref,
@@ -215,6 +217,19 @@ stop even if the tracker keeps the REVIEW label. After an approval-time crash,
 either stop prevents the resumed run from merging or changing the ticket's
 status/labels; an approval already accepted by the forge is not revoked. Artifacts remain
 available and the run finishes with an external-transition verdict.
+
+Decomposition also stops on `DEVCAKE-SKIP`, even though ONBOARD has no stage
+label. A changed stage or SKIP between deliveries leaves existing children
+and relations intact and prevents further decomposition writes. A canceled
+parent alone cannot identify a human stop: issue decomposition itself cancels
+the parent, and recovery must accept that write even when its checkpoint was
+lost. Use SKIP to stop a pending split explicitly.
+
+`tests/test_decomposition_restart.py` reconstructs the app and run-file store
+around accepted child writes, failed sibling/inherited edges, and both sides
+of parent cancellation. It checks the board graph and scheduler gates,
+repeated failure/recovery, plan-approval labels, depth-policy changes,
+provenance conflicts, human label changes, and completed artifact replay.
 
 When the run has durably recorded its merge, replay does not report that
 merge as out-of-pipeline. Without that receipt, the existing detection still

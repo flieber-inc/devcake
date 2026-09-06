@@ -112,7 +112,7 @@ def test_grok_end_event_report_is_v1_with_provenance():
     r = _report_for("grok_healthy")
     assert r["source"] == "end_event"
     assert r["reasoning_tokens"] == 0          # first-class, not a notes regex
-    assert r["cost_usd_native"] is None        # grok reports no cost — never 0
+    assert r["cost_usd_native"] is None        # this capture reports no cost — never 0
     assert r["raw"]["usage"]["input_tokens"] == r["input_tokens"]
 
 

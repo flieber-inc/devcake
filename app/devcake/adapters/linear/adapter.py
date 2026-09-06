@@ -1134,8 +1134,10 @@ class LinearAdapter:
                                relations_supported=True,
                                global_ids=True,   # Linear pmo_ids are UUIDs
                                # an issue's updatedAt moves with every comment
-                               # posted on it (verified live), so the feed
-                               # memo needs no safety rescan here
+                               # posted on it (verified live on a field host:
+                               # over dozens of missions it never lagged the
+                               # newest comment), so the feed memo needs no
+                               # safety rescan here
                                updated_at_tracks_comments=True)
 
     # ── normalization ────────────────────────────────────────────────────────

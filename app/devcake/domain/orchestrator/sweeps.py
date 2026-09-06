@@ -8,7 +8,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ...ports.forge import legacy_branch, mission_branch
-from ...ports.pmo import PMOTransient, pmo_call
+from ...ports.pmo import PMOTransient
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
@@ -137,8 +137,7 @@ async def merge_sweep(mgr, m: Mission) -> None:
                 # the next sweep if cancel raises.
                 # a write-back (ADR-0040 §3): critical class, so a starved
                 # key never leaves a closed PR's mission parked
-                with pmo_call("critical",
-                              wait_budget_s=completion.WRITE_BACK_WAIT_S):
+                with completion.write_back_class():
                     await mgr.pmo.cancel_mission(m.ref)
                     await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE},
                                               add=set())
@@ -309,8 +308,7 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                 if not await completion.route_conflict_to_execute(
                         mgr, m.pmo_id, m.key, pr_url, LABEL_MERGE, inst):
                     span.set_attribute("devcake.outcome", "conflict_handoff")
-                    with pmo_call("critical",
-                                  wait_budget_s=completion.WRITE_BACK_WAIT_S):
+                    with completion.write_back_class():
                         await mgr._feed(
                             m.pmo_id, "issue",
                             f"⚠️ Merge conflict on {pr_url} and auto-resolve "
@@ -351,15 +349,16 @@ async def _hand_off_exhausted(mgr, m: Mission, pr_url: str,
     """The window's closing act, posted once: the marker outlived
     merge_retry_window_minutes and the attempt just made did not merge. A
     write-back (ADR-0040 §3), so it rides the critical class — the reserve
-    exists so a hand-off is never refused on a starved key."""
-    with pmo_call("critical", wait_budget_s=completion.WRITE_BACK_WAIT_S):
+    exists so a hand-off is never refused on a starved key. The banner is
+    set first: it is true whether or not the post lands this cycle."""
+    mgr.merge_handoffs[m.pmo_id] = f"{m.key}: awaiting human merge — {pr_url}"
+    with completion.write_back_class():
         await mgr._feed(
             m.pmo_id, "issue",
             f"⚠️ Still unmergeable after {window} min — awaiting human "
             f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
     mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
     mgr._merge_window_closed.add(m.pmo_id)
-    mgr.merge_handoffs[m.pmo_id] = f"{m.key}: awaiting human merge — {pr_url}"
 
 
 async def tracking_sweep(mgr, m: Mission) -> None:
@@ -395,8 +394,7 @@ async def tracking_sweep(mgr, m: Mission) -> None:
             # swap after Done is leftover hygiene on a terminal project.
             # a write-back (ADR-0040 §3): critical class, never refused at
             # the reserve while the poll's own reads are
-            with pmo_call("critical",
-                          wait_budget_s=completion.WRITE_BACK_WAIT_S):
+            with completion.write_back_class():
                 await mgr.pmo.set_status(m.ref, "done")
                 await mgr.pmo.swap_labels(m.ref, remove={LABEL_TRACKING},
                                           add=set())

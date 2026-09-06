@@ -30,13 +30,14 @@ a chokepoint living in either would cycle).
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
 
 from opentelemetry import trace
 
 from ...ports.forge import mission_branch
-from ...ports.pmo import pmo_call
+from ...ports.pmo import pmo_call, pmo_call_ctx
 from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
@@ -49,6 +50,18 @@ from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
 # declare the critical class themselves, with this bounded wait for quota,
 # so a starved key refuses the poll's reads but never a mission's outcome.
 WRITE_BACK_WAIT_S = 20.0
+
+
+def write_back_class():
+    """The call-class context for a write-back. Inside a context that is
+    already critical (finalize: the governor's default wait budget, one
+    cumulative deadline for the whole finalize) nothing is opened — a nested
+    declaration would fork the ledger and shrink that budget. From a routine
+    context (the sweeps) it declares critical with the bounded wait."""
+    ctx = pmo_call_ctx.get()
+    if ctx is not None and ctx.call_class == "critical":
+        return nullcontext()
+    return pmo_call("critical", wait_budget_s=WRITE_BACK_WAIT_S)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -124,13 +137,16 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
                             spec.feed.format(pr_url=pr_url))
             mgr._audit(ref.pmo_id, spec.audit_action, pr_url)
 
+        # the disclosure pre-step stays in the caller's own context: a
+        # full-history read that is best-effort by doctrine must not spend
+        # the write-back's wait budget
+        if spec.disclose_before and mission is not None:
+            await freshness.disclose_unread_at_close(mgr, mission)
         # a completion is a write-back (ADR-0040 §3): critical class, so the
         # sweep paths — inside the poll's routine context — may spend the
         # reserve instead of being refused on a starved key; the finalize
-        # path is already critical (the inner declaration wins, same class)
-        with pmo_call("critical", wait_budget_s=WRITE_BACK_WAIT_S):
-            if spec.disclose_before and mission is not None:
-                await freshness.disclose_unread_at_close(mgr, mission)
+        # path is already critical and keeps its own budget (no nesting)
+        with write_back_class():
             if run is not None:
                 await mgr._checkpoint(run, steps.REVIEW_DONE, _core)
             else:
@@ -188,7 +204,7 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
         # directive overrides its normal implement-the-mission job (🧩 is
         # reserved for this directive — 🔀 already means "PR opened").
         # a write-back (ADR-0040 §3): critical class from the sweep too
-        with pmo_call("critical", wait_budget_s=WRITE_BACK_WAIT_S):
+        with write_back_class():
             await mgr._feed(
                 pmo_id, "issue",
                 f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "

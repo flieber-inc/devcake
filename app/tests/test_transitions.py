@@ -2299,10 +2299,9 @@ def test_sweep_write_backs_declare_the_critical_class(tmp_path):
     with pmo_call("routine"):                           # the poll's context
         run_coro(sweeps.merge_sweep(mgr, m))
     assert m.status == "done"
-    classes = {name: cls for name, cls in seen}
-    assert classes["get_activity"] == "routine"          # reads stay routine
-    assert (classes["set_status"], classes["swap_labels"],
-            classes["post_feed"]) == ("critical",) * 3
+    assert all(cls == "routine" for name, cls in seen if name == "get_activity")
+    writes = {cls for name, cls in seen if name != "get_activity"}
+    assert writes == {"critical"}
 
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     _aged_marker(fake, 31)
@@ -2311,6 +2310,20 @@ def test_sweep_write_backs_declare_the_critical_class(tmp_path):
     with pmo_call("routine"):
         run_coro(sweeps.merge_sweep(mgr, m))
     assert seen == [("post_feed", "critical")]           # the hand-off
+
+    # inside an already-critical context (finalize) no nested declaration
+    # is opened: the outer context — and its cumulative wait budget — holds
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    budgets = []
+    orig_set_status = fake.set_status
+
+    async def rec_budget(*a, **k):
+        budgets.append(pmo_call_ctx.get().wait_budget_s)
+        return await orig_set_status(*a, **k)
+    fake.set_status = rec_budget
+    with pmo_call("critical"):                          # finalize's context
+        run_coro(sweeps.merge_sweep(mgr, m))
+    assert m.status == "done" and budgets == [None]     # the outer budget
 
 
 def test_sweep_boolean_forge_conflict_hands_off_not_execute(tmp_path):

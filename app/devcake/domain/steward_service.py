@@ -77,11 +77,13 @@ class StewardService:
         DEGRADED_BACKOFF_INTERVALS steward intervals from the newest death,
         then admit one run: its death re-arms the pause from its own
         timestamp, its success clears the condition. Run now stays available
-        throughout. Scoped by `pmo_ref`: the run store is shared across
-        instances, and another board's deaths are not this board's weather."""
+        throughout. Scoped to this instance's runs (the manager's one
+        locality rule, legacy records included): the run store is shared
+        across instances, and another board's deaths are not this board's
+        weather."""
         recent = sorted((r for r in self.mgr.runs.store.all()
                          if r.mission_type == "STEWARD"
-                         and r.pmo_ref == self.mgr.instance_name),
+                         and self.mgr._run_is_ours(r)),
                         key=lambda r: r.created_at, reverse=True)[:3]
         if len(recent) < 3 or not all(r.state in ("failed", "timed_out", "orphaned")
                                       for r in recent):

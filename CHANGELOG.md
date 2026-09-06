@@ -23,10 +23,10 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   only when the mission changed or DevCake wrote to it, so the discovery
   and merge sweeps no longer re-read every labelled feed every few
   minutes; a settings Save keeps the memo unless the PMO card itself
-  changed. The deferred-merge window always makes one more admitted
-  attempt after it elapses and hands off only if that attempt does not
-  merge, so cycles whose reads the request budget refused can no longer
-  spend the window with zero attempts; the sweeps' write-backs (a merged
+  changed. The deferred-merge window always makes one more admitted probe
+  after it elapses (and the merge itself when the forge says ready) and
+  hands off only if that did not merge, so cycles whose reads the request
+  budget refused can no longer spend the window with zero attempts; the sweeps' write-backs (a merged
   completion, a closed-PR cancellation, a conflict route, a hand-off, a
   tracking completion) now run as critical-class calls, so the budget's
   reserve covers a mission's outcome while the poll's own reads are being

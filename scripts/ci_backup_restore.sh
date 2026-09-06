@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 : "${RUNNER_TEMP:?}" "${GITHUB_RUN_ID:?}" "${GITHUB_RUN_ATTEMPT:?}"
 : "${ADMIN_USER:?}" "${ADMIN_PASSWORD:?}"
 [[ "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+-[0-9]+$ ]]
-ALPINE_IMAGE="alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
+BACKUP_IMAGE="debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
 DRILL_DIR="$(mktemp -d "$RUNNER_TEMP/devcake-restore.XXXXXX")"
 chmod 700 "$DRILL_DIR"
 RESTORED_DATA="devcake-ci-restored-data-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -44,7 +44,7 @@ PY
 )
 docker compose stop app gitea
 snapshot() {
-  docker run --rm -v "$1:/src:ro" "$ALPINE_IMAGE" sh -ec \
+  docker run --rm -v "$1:/src:ro" "$BACKUP_IMAGE" sh -ec \
     'cd /src; find . -type f -exec sha256sum {} \; | sort; find . -exec stat -c "%a %u %g %N" {} \; | sort' > "$2"
 }
 snapshot devcake_devcake_data "$DRILL_DIR/data.before"
@@ -64,7 +64,7 @@ for kind in data gitea; do
   else
     volume="$RESTORED_GITEA"; wrong=data
   fi
-  docker run --rm -v "$volume:/dst" "$ALPINE_IMAGE" sh -ec \
+  docker run --rm -v "$volume:/dst" "$BACKUP_IMAGE" sh -ec \
     'echo synthetic-keep-me > /dst/sentinel; chmod 600 /dst/sentinel'
   snapshot "$volume" "$DRILL_DIR/target.before"
   for archive in "$DRILL_DIR/$wrong.tar.gz" "$DRILL_DIR/corrupt.tar.gz"; do

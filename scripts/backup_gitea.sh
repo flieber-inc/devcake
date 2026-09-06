@@ -17,7 +17,9 @@ cd "$(dirname "$0")/.."
 
 # Digest-pinned (2026-08-12 audit OPS-M1): this container
 # runs as root with RW on the output dir — check_image_pins.py enforces.
-ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
+# GNU tar is required: BusyBox treats multiple -C options globally.
+# DEVCAKE_ALPINE_IMAGE remains a legacy override; custom images need GNU tar.
+BACKUP_IMAGE="${DEVCAKE_BACKUP_IMAGE:-${DEVCAKE_ALPINE_IMAGE:-debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171}}"
 
 VOLUME="${GITEA_VOLUME:-devcake_gitea_data}"
 if [[ $# -gt 0 ]]; then
@@ -54,5 +56,5 @@ docker run --rm \
   -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" -e KIND=gitea \
   -v "$VOLUME":/src:ro -v "$OUT_DIR":/out \
   -v "$(pwd)/scripts/lib":/devcake-scripts:ro \
-  "$ALPINE_IMAGE" sh /devcake-scripts/backup_payload.sh
+  "$BACKUP_IMAGE" sh /devcake-scripts/backup_payload.sh
 echo "wrote $OUT_DIR/$OUT_BASE (verified readable) — contains repo content AND Gitea's credential DB; store like a password export"

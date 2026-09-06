@@ -361,6 +361,13 @@ contracts. Temporary archives contain only that CI stack's synthetic data and
 are deleted rather than uploaded. The drill refuses local/self-hosted execution;
 it does not prove an operator's own backups are current or restorable.
 
+Backup/restore helpers use digest-pinned Debian slim with **GNU tar**, whose
+per-member `-C` behavior the kind-marker-first archive requires. Payload scripts
+mount at `/devcake-scripts`, preserving the container's system libraries.
+`DEVCAKE_BACKUP_IMAGE` can override the helper; the legacy
+`DEVCAKE_ALPINE_IMAGE` variable is still accepted, but an override must provide
+GNU tar. BusyBox tar is incompatible with this archive-writing command.
+
 > **Host CLI:** [ADR-0038](adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md)
 > (**accepted**). Phase 1c (CAKE-178) ships **`devcake setup`** on the
 > installable `devcake-cli` package (`cli/` → import `devcake_cli`;

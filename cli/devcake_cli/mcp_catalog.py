@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 NEVER_MARKER = "x-devcake-mcp"
 JSON = "application/json"
@@ -128,7 +129,13 @@ def render_call(tool: ToolSpec, arguments: dict | None) -> tuple[str, str, dict,
     for name in tool.path_params:
         if name not in args:
             raise ValueError(f"missing path parameter {name!r}")
-        path = path.replace("{" + name + "}", str(args.pop(name)))
+        value = str(args.pop(name))
+        if not value:
+            raise ValueError(f"empty path parameter {name!r}")
+        # percent-encode everything, separators included: a value cannot
+        # add segments, start a query or drop a fragment — the tool's
+        # destination is fixed by its template
+        path = path.replace("{" + name + "}", quote(value, safe=""))
     query = {name: args.pop(name) for name in tool.query_params if name in args}
     body = args.pop(BODY_KEY, None) if tool.body else None
     if args:

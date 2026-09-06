@@ -71,6 +71,13 @@ description is the catalogue.
   agent carries **one marker at its definition**
   (`openapi_extra={"x-devcake-mcp": "never"}`). That marker is the only
   per-route knob in the design, and it lives where the route lives.
+- A tool's destination is fixed by its template: every path argument is
+  percent-encoded whole, separators included, so a value can never add a
+  segment, open a query or drop a fragment and land on another route — an
+  excluded route stays excluded whatever an agent passes.
+- Every admitted mutation declares its request body as a typed model at the
+  route, so the derived tool names the fields an agent must send; the one
+  free-form body (the settings patch) is described as such.
 - A structure test guards the chokepoint from both sides: every API route
   must carry a docstring (so every tool is described), and no module may
   hold a second list of tools. Adding a route without a docstring fails the
@@ -80,10 +87,14 @@ description is the catalogue.
 
 `devcake mcp --read-only` exposes the GET operations only. The default
 exposes every operation that is not opted out; each mutation goes out with
-the intent header and an actor header (`X-DevCake-Actor: mcp`) that the
-app's audit chokepoint records, so a change made through an agent is
-distinguishable from one made in the admin panel. The read-only flavour is
-a filter over the same derived catalogue, not a second one.
+the intent header and an actor header (`X-DevCake-Actor: mcp`). The auth
+middleware — the one chokepoint every client passes — records that label in
+a request context and writes one `control_plane_write` audit row for every
+admitted mutation (method, route path, status, actor), whether or not the
+handler keeps a finer audit of its own; so every change made through an
+agent is on record and distinguishable from one made in the admin panel.
+The read-only flavour is a filter over the same derived catalogue, not a
+second one.
 
 ### 4 — What never crosses
 

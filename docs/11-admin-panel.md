@@ -33,7 +33,11 @@ writes, the secrets clear and token copy — and the run-history wipe); an
 operation whose request or response is not JSON (the CSV export) is excluded
 by that fact alone. Clients may send `X-DevCake-Actor` (a short label; the MCP
 server sends `mcp`) and the audit rows record it as `actor` — a label for the
-trail, never an identity: every request authenticates the same way.
+trail, never an identity: every request authenticates the same way. Every
+admitted mutation (a 2xx or 3xx answer to a POST, PUT, PATCH or DELETE) writes
+one `control_plane_write` row to the audit stream — method, route path and
+status, with the actor — at the auth middleware, so a change is on record
+whether or not its handler keeps a finer audit of its own.
 
 
 Full control-plane inventory (source of truth: `app/devcake/api/main.py`;

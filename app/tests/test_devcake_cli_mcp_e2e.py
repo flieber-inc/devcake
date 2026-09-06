@@ -107,6 +107,9 @@ async def _session(stub_url: str, root: Path, *args: str):
             cron = None
             if "run_cron" in {t.name for t in tools}:
                 cron = await session.call_tool("run_cron", {"job_id": "memory-curator"})
+                # a hostile path value is encoded on the wire, never spliced
+                await session.call_tool("clone_dev_type",
+                                        {"name": "demo/credentials#", "body": {"new_name": "x"}})
             return tools, health, cron
 
 
@@ -123,6 +126,9 @@ def test_read_write_server_lists_derived_tools_and_calls_through(stub, checkout)
     assert all(s["actor"] == "mcp" for s in calls)
     post = next(s for s in calls if s["method"] == "POST")
     assert post["intent"] == "1"
+    hostile = next(s for s in calls if "clone" in s["path"])
+    assert hostile["path"] == "/api/v1/dev-types/demo%2Fcredentials%23/clone"
+    assert not any(s["path"].endswith("/credentials") for s in calls)
 
 
 def test_read_only_server_exposes_get_only(stub, checkout):

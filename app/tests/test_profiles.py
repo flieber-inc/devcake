@@ -215,12 +215,12 @@ def test_endpoint_flow_save_list_get_apply_rename_delete(monkeypatch, tmp_path):
     from fastapi import HTTPException
     sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
 
-    out = run_coro(app_main.save_profile({"name": "base"}))
+    out = run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "base"})))
     assert out["saved"] and out["warnings"] == []
     with pytest.raises(HTTPException) as e:
-        run_coro(app_main.save_profile({"name": "base"}))
+        run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "base"})))
     assert e.value.status_code == 409
-    run_coro(app_main.save_profile({"name": "base", "overwrite": True}))
+    run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "base", "overwrite": True})))
 
     rows = run_coro(app_main.list_profiles())["profiles"]
     assert [r["name"] for r in rows] == ["base"]
@@ -239,7 +239,7 @@ def test_endpoint_flow_save_list_get_apply_rename_delete(monkeypatch, tmp_path):
     rows = run_coro(app_main.list_profiles())["profiles"]
     assert rows[0]["last_applied_at"] and rows[0]["diverged"] is False
 
-    out = run_coro(app_main.rename_profile("base", {"new_name": "renamed"}))
+    out = run_coro(app_main.rename_profile("base", app_main._NameBody(**{"new_name": "renamed"})))
     assert out["name"] == "renamed"
     out = run_coro(app_main.delete_profile("renamed"))
     assert out["deleted"] == "renamed"
@@ -257,7 +257,7 @@ def test_profile_apply_waits_for_in_flight_poll_cycle(monkeypatch, tmp_path):
     """The world-swap shares the poll-cycle lock — same contract as PUT
     /config (a suspended cycle must never resume against swapped adapters)."""
     sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
-    run_coro(app_main.save_profile({"name": "base"}))
+    run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "base"})))
     app_main.services.config.poll_interval_seconds = 77   # drift before apply
 
     async def scenario():
@@ -279,7 +279,7 @@ def test_profile_apply_waits_for_in_flight_poll_cycle(monkeypatch, tmp_path):
 def test_apply_blocked_while_runs_active(monkeypatch, tmp_path):
     from fastapi import HTTPException
     sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
-    run_coro(app_main.save_profile({"name": "base"}))
+    run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "base"})))
     app_main.services.store = SimpleNamespace(
         active=lambda: [SimpleNamespace(state="running")])
     with pytest.raises(HTTPException) as e:
@@ -288,14 +288,14 @@ def test_apply_blocked_while_runs_active(monkeypatch, tmp_path):
     assert "run(s) active" in e.value.detail
     # save/list/get stay available while runs are active
     assert run_coro(app_main.get_profile("base"))["name"] == "base"
-    run_coro(app_main.save_profile({"name": "second"}))
+    run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "second"})))
 
 
 def test_save_warns_on_configured_instance_without_secret(monkeypatch, tmp_path):
     sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
     app_main.services.config.pmos = [config_mod.PMOInstance(
         name="linear", team_key="ENG", repos=["main"])]
-    out = run_coro(app_main.save_profile({"name": "gappy"}))
+    out = run_coro(app_main.save_profile(app_main._ProfileSaveBody(**{"name": "gappy"})))
     assert any("no stored API key" in w for w in out["warnings"])
 
 

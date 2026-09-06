@@ -415,7 +415,7 @@ def test_rename_dev_type_moves_templates_and_refs(monkeypatch, tmp_path):
     d = tmp_path / "config" / "devtype_prompt_templates" / "olddev"
     d.mkdir(parents=True)
     (d / "Development.yaml").write_text("name: Development\ntemplate: I am old.\n")
-    out = run_coro(app_main.rename_dev_type("olddev", {"new_name": "newdev"}))
+    out = run_coro(app_main.rename_dev_type("olddev", app_main._NameBody(**{"new_name": "newdev"})))
     assert out["renamed"] and "newdev" in app_main.services.dev_types
     assert "olddev" not in app_main.services.dev_types
     assert app_main.services.config.assignments["EXECUTE"].dev_type == "newdev"

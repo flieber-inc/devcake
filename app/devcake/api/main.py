@@ -17,14 +17,16 @@ paths (and tests driving the lifespan directly) may still read it.
 """
 
 import asyncio
+from typing import Annotated
 import contextlib
 import logging
 import os
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Body, FastAPI, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
+from ..config import Assignment, DevType
 from ..ports.executor import DuplicateRun
 from ..ports.pmo import PMOTransient
 from .. import secrets as secrets_store
@@ -384,6 +386,53 @@ class _CreateAttachment(BaseModel):
     content_b64: str
 
 
+# ── Request bodies (ADR-0041): every admitted mutation declares its shape here,
+# so the API's own description — and the operator MCP tools derived from it —
+# names the fields an agent must send. `extra="allow"` keeps the services'
+# tolerance for keys the admin panel sends beyond the contract.
+
+class _TolerantBody(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class _IntakeBody(_TolerantBody):
+    paused: bool = Field(description="True pauses this board's intake; False resumes it.")
+
+
+class _NameBody(_TolerantBody):
+    new_name: str = Field(description="The new name.")
+
+
+class _ProfileSaveBody(_TolerantBody):
+    name: str = Field(description="Profile name.")
+    overwrite: bool = Field(False, description="Replace an existing profile of that name.")
+
+
+class _TemplateBody(_TolerantBody):
+    template: str = Field(description="The full template text; the machine-facing contract is appended by the app.")
+
+
+class _FirstSetupBody(_TolerantBody):
+    roles: dict[str, dict] = Field(description="Role → {harness_template, model, cli_version}; roles: executor, judge, steward.")
+
+
+class _DevTypeBody(DevType):
+    """A Dev Type record (docs/02); `name` comes from the path on update."""
+    model_config = ConfigDict(extra="allow")
+    name: str = Field("", description="Dev Type name; taken from the path on PUT.")
+
+
+class _RepoCreateBody(_TolerantBody):
+    name: str = Field(description="Repository name on the bundled forge.")
+
+
+class _SkillCreateBody(_TolerantBody):
+    name: str = Field(description="Skill name (`<card>/<skill>` for a source-backed skill).")
+    description: str = Field("", description="One-line description shown in the catalog.")
+    body: str = Field("", description="The skill's markdown.")
+    overwrite: bool = Field(False, description="Replace an existing skill of that name.")
+
+
 class _CreateMissionBody(BaseModel):
     instance: str          # REQUIRED — multi-PMO implicit routing is a footgun
     title: str
@@ -514,7 +563,7 @@ async def get_config():
 
 
 @app.put("/api/v1/config")
-async def put_config(body: dict):
+async def put_config(body: Annotated[dict, Body(description="A partial settings document: nested objects deep-merge into the current settings; the plural lists (pmos, repos, skill_sources, crons) are replaced whole.")]):
     """Replace the general settings; validated server-side, plural lists replaced whole, adapters hot-reloaded."""
     s = svc()
     return await apply_config_patch(body, config=s.config, dev_types=s.dev_types,
@@ -527,9 +576,9 @@ async def put_config(body: dict):
 
 
 @app.put("/api/v1/config/pmos/{name}/intake")
-async def put_pmo_intake(name: str, body: dict):
+async def put_pmo_intake(name: str, body: _IntakeBody):
     """Flip one PMO's intake switch without rewriting the pmos list (docs/11)."""
-    return set_pmo_intake(name=name, paused=body.get("paused"),
+    return set_pmo_intake(name=name, paused=body.paused,
                           config=svc().config)
 
 
@@ -550,10 +599,10 @@ async def get_profile(name: str):
 
 
 @app.post("/api/v1/profiles")
-async def save_profile(body: dict):
+async def save_profile(body: _ProfileSaveBody):
     """Snapshot the live settings and secret values as a named profile."""
     s = svc()
-    return profiles_service.save_profile_body(body, s.config, s.dev_types)
+    return profiles_service.save_profile_body(body.model_dump(), s.config, s.dev_types)
 
 
 @app.post("/api/v1/profiles/{name}/apply")
@@ -571,9 +620,9 @@ async def apply_profile(name: str):
 
 
 @app.post("/api/v1/profiles/{name}/rename")
-async def rename_profile(name: str, body: dict):
+async def rename_profile(name: str, body: _NameBody):
     """Rename a saved profile."""
-    return profiles_service.rename_profile_body(name, body)
+    return profiles_service.rename_profile_body(name, body.model_dump())
 
 
 @app.delete("/api/v1/profiles/{name}")
@@ -633,9 +682,9 @@ async def get_prompt_templates():
 
 
 @app.put("/api/v1/prompt-templates/{mission_type}/{name}")
-async def put_prompt_template(mission_type: str, name: str, body: dict):
+async def put_prompt_template(mission_type: str, name: str, body: _TemplateBody):
     """Save one mission-type playbook template override."""
-    return await devtypes_service.put_prompt_template(mission_type, name, body)
+    return await devtypes_service.put_prompt_template(mission_type, name, body.model_dump())
 
 
 @app.delete("/api/v1/prompt-templates/{mission_type}/{name}")
@@ -646,10 +695,10 @@ async def delete_prompt_template(mission_type: str, name: str):
 
 
 @app.put("/api/v1/devtype-prompts/{dev_type}/{name}")
-async def put_devtype_prompt(dev_type: str, name: str, body: dict):
+async def put_devtype_prompt(dev_type: str, name: str, body: _TemplateBody):
     """Save one Dev Type prompt template override."""
     return await devtypes_service.put_devtype_prompt(
-        dev_type, name, body, dev_types=svc().dev_types)
+        dev_type, name, body.model_dump(), dev_types=svc().dev_types)
 
 
 @app.delete("/api/v1/devtype-prompts/{dev_type}/{name}")
@@ -681,37 +730,37 @@ async def list_dev_types():
 
 
 @app.post("/api/v1/dev-types/first-setup")
-async def first_setup_dev_types(body: dict):
+async def first_setup_dev_types(body: _FirstSetupBody):
     """Empty-roster wizard: create executor, judge and steward Dev Types with pinned CLIs and global assignments."""
     s = svc()
     return await devtypes_service.first_setup(
-        body, config=s.config, dev_types=s.dev_types,
+        body.model_dump(), config=s.config, dev_types=s.dev_types,
         version_source=s.version_source)
 
 
 @app.post("/api/v1/dev-types")
 @app.put("/api/v1/dev-types/{name}")
-async def upsert_dev_type(body: dict, name: str | None = None):
+async def upsert_dev_type(body: _DevTypeBody, name: str | None = None):
     """Create or update a Dev Type."""
     return await devtypes_service.upsert_dev_type(
-        body, name, dev_types=svc().dev_types, config=svc().config)
+        body.model_dump(), name, dev_types=svc().dev_types, config=svc().config)
 
 
 @app.post("/api/v1/dev-types/{name}/rename")
-async def rename_dev_type(name: str, body: dict):
+async def rename_dev_type(name: str, body: _NameBody):
     """Rename a Dev Type, moving its prompts and secrets and rewriting assignments."""
     s = svc()
     return await devtypes_service.rename_dev_type(
-        name, body, config=s.config, dev_types=s.dev_types,
+        name, body.model_dump(), config=s.config, dev_types=s.dev_types,
         shared_breakers=s.shared_breakers)
 
 
 @app.post("/api/v1/dev-types/{name}/clone")
-async def clone_dev_type(name: str, body: dict):
+async def clone_dev_type(name: str, body: _NameBody):
     """Clone a Dev Type under a new name, copying its fields and prompt templates."""
     s = svc()
     return await devtypes_service.clone_dev_type(
-        name, body, config=s.config, dev_types=s.dev_types,
+        name, body.model_dump(), config=s.config, dev_types=s.dev_types,
         shared_breakers=s.shared_breakers)
 
 
@@ -738,10 +787,10 @@ async def get_assignments():
 
 
 @app.put("/api/v1/assignments")
-async def put_assignments(body: dict):
+async def put_assignments(body: dict[str, Assignment]):
     """Replace the global Mission-Type to Dev-Type map."""
     s = svc()
-    return await devtypes_service.put_assignments(body, config=s.config,
+    return await devtypes_service.put_assignments({k: v.model_dump() for k, v in body.items()}, config=s.config,
                                                   dev_types=s.dev_types)
 
 
@@ -897,10 +946,10 @@ async def list_internal_repos():
 
 
 @app.post("/api/v1/internal-repos/create")
-async def create_internal_repo(body: dict):
+async def create_internal_repo(body: _RepoCreateBody):
     """Create an operator repository on the bundled forge."""
     return await internal_repos_service.create_internal_repo(
-        body, internal_forge=svc().internal_forge)
+        body.model_dump(), internal_forge=svc().internal_forge)
 
 
 @app.get("/api/v1/skills")
@@ -920,10 +969,10 @@ async def get_skill(name: str):
 
 
 @app.post("/api/v1/skills")
-async def create_skill(body: dict):
+async def create_skill(body: _SkillCreateBody):
     """Create or update a skill in the store."""
     return await internal_repos_service.create_skill(
-        body, skill_service=svc().skill_service)
+        body.model_dump(), skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/skills/import", openapi_extra={"x-devcake-mcp": "never"})

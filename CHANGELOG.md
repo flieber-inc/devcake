@@ -16,6 +16,16 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — the README leads with agent-assisted setup and operations,
+  and the operator skill is agent-neutral.** The README opens with a
+  prompt for the operator's coding agent and explains fresh context per
+  run, work, reference and memory repositories, skills, staffing and
+  scheduled work in a third of its former length. The operator skill
+  moved to `skills/devcake-ops/SKILL.md` (the old `.claude/skills` path
+  links to it), teaches the product model and an evidence-based
+  diagnosis loop, and names the activity endpoint for "frozen or
+  waiting".
+
 ## v0.5.7 (2026-09-06)
 
 Patch release in the v0.5 "Java Lava" line.

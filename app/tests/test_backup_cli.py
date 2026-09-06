@@ -4,6 +4,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import pytest
+
 
 BACKUP_SCRIPT = Path("/srv/repo-scripts/backup_data.sh")
 RESTORE_SCRIPT = Path("/srv/repo-scripts/restore_data.sh")
@@ -306,6 +308,21 @@ def test_restore_extract_failure_keeps_older_pre_restore_leftovers(tmp_path):
 
 
 # --- host-side contract: the scripts drive docker with the pinned image ---
+
+
+@pytest.mark.parametrize("script", [BACKUP_SCRIPT, BACKUP_GITEA_SCRIPT,
+                                    RESTORE_SCRIPT, RESTORE_GITEA_SCRIPT])
+def test_wrapper_does_not_hide_the_container_runtime(tmp_path, script):
+    fake_bin, log = _fake_docker(tmp_path)
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"synthetic input; docker is faked")
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    subprocess.run([str(script), str(archive)], check=True, capture_output=True,
+                   text=True, env=env)
+    args = log.read_text().split()
+    targets = [args[i + 1].split(":")[1] for i, arg in enumerate(args) if arg == "-v"]
+    assert not set(targets) & {"/lib", "/lib64", "/bin", "/usr"}, (
+        "payload mounts must preserve the container's shell and dynamic loader")
 
 
 def _fake_docker(tmp_path):

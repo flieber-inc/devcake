@@ -17,7 +17,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Digest-pinned (OPS-M1): root + RW on the data volume.
-ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
+# GNU tar is required: BusyBox treats multiple -C options globally.
+# DEVCAKE_ALPINE_IMAGE remains a legacy override; custom images need GNU tar.
+BACKUP_IMAGE="${DEVCAKE_BACKUP_IMAGE:-${DEVCAKE_ALPINE_IMAGE:-debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171}}"
 
 VOLUME="${DEVCAKE_DATA_VOLUME:-devcake_devcake_data}"
 TARBALL="${1:?usage: restore_data.sh <devcake-data-*.tar.gz>}"
@@ -36,6 +38,6 @@ TARFILE="$(basename "$TARBALL")"
 # drill) owns preflight/kind-check/move-aside/extract ordering.
 docker run --rm -e TARFILE="$TARFILE" -e KIND=data \
   -v "$VOLUME":/dst -v "$TARDIR":/in:ro \
-  -v "$(pwd)/scripts/lib":/lib:ro \
-  "$ALPINE_IMAGE" sh /lib/restore_payload.sh
+  -v "$(pwd)/scripts/lib":/devcake-scripts:ro \
+  "$BACKUP_IMAGE" sh /devcake-scripts/restore_payload.sh
 echo "restored $VOLUME from $TARBALL — docker compose up -d to restart the stack"

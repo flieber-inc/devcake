@@ -1,6 +1,6 @@
 #!/bin/sh
 # Container-side payload for restore_data.sh / restore_gitea.sh — POSIX sh
-# (busybox in the alpine container; any sh in the pytest restore drill, which
+# (GNU tar in the Debian helper; any sh in the pytest restore drill, which
 # overrides DST/IN_DIR to run it against tmp dirs without docker).
 #
 # Ordering is the safety property (2026-08-12 audit OPS-H1 — the old payload

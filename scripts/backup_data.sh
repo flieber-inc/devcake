@@ -21,7 +21,9 @@ cd "$(dirname "$0")/.."
 # Digest-pinned (2026-08-12 audit OPS-M1): this container
 # runs as root with RW on the secrets-bearing output dir — the one place a
 # floating :latest was least acceptable. check_image_pins.py enforces.
-ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
+# GNU tar is required: BusyBox treats multiple -C options globally.
+# DEVCAKE_ALPINE_IMAGE remains a legacy override; custom images need GNU tar.
+BACKUP_IMAGE="${DEVCAKE_BACKUP_IMAGE:-${DEVCAKE_ALPINE_IMAGE:-debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171}}"
 
 VOLUME="${DEVCAKE_DATA_VOLUME:-devcake_devcake_data}"
 if [[ $# -gt 0 ]]; then
@@ -54,6 +56,6 @@ fi
 docker run --rm \
   -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" -e KIND=data \
   -v "$VOLUME":/src:ro -v "$OUT_DIR":/out \
-  -v "$(pwd)/scripts/lib":/lib:ro \
-  "$ALPINE_IMAGE" sh /lib/backup_payload.sh
+  -v "$(pwd)/scripts/lib":/devcake-scripts:ro \
+  "$BACKUP_IMAGE" sh /devcake-scripts/backup_payload.sh
 echo "wrote $OUT_DIR/$OUT_BASE (verified readable) — contains EVERY operator secret in plaintext; store like a password export"

@@ -92,6 +92,15 @@ Properties:
 
 ### 3.1 Dispatch (ordered, crash-safe)
 
+Mission dispatch and all STEWARD callers prepare repository context through
+`repository_context.prepare_repository_context`, using the focused
+`RepositoryContextCache` port. Its typed result carries required mirrors,
+deferred reasons, stale context, and omitted mounts. The shared policy resolves
+skill aliases before classification, keeps work/family repositories required,
+and applies `context_sourcing_strict` to memory and skill-only context. Callers
+retain their own dispatch diagnostics and lifecycle; optional omissions also
+leave the mirror/mount snapshot.
+
 Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_steward`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart. **`dispatch_lock`** serializes every flavor with clear-runs (poll alone is not enough — oauth / steward / hello bypass the poll lock). Clear-runs itself holds **`poll_rt.lock` and `bootstrap.dispatch_lock`** for the full wipe (order: poll then dispatch — matching the poll loop's own acquire order so it never deadlocks with an in-flight cycle). Launch also stamps `run.store_gen` from `RunStore.wipe_generation` so a later clear cannot be undone by in-flight saves (`10-persistence.md`).
 
 ```

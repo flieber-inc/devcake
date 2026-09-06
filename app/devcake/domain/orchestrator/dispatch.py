@@ -477,70 +477,24 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
     blocker_entries, blocker_skips, blocker_notes = await resolve_blocker_work(
         mgr, live, repo_name, all_runs)
 
-    # ADR-0024: fail-closed mirror precondition (docs/07 §5a). NOT a run
-    # failure — no container launches, no attempt burns; the reason lands on
-    # the missions row via the shared gate dict and retries next cycle.
-    # ADR-0016 addendum: skill-source cards (`<card>/<skill>` in the Dev
-    # Type's skills) JOIN the same needed-set — fail-closed by founder
-    # ruling, as a set-union in the ONE gate, never a second gate. They are
-    # deliberately NOT in sourced_repo_names: skills feed the payload, they
-    # are never cloned into /workspace.
-    from ..repo_sourcing import (classify_context_failures, memory_mount_names,
-                                 resolved_skill_cards,
-                                 unresolvable_memory_cards)
-    sourced = set(mgr.repo_cache.needed_for(
-        work_repo=repo_name, mission_type=mtype.value,
-        instance=mgr.instance, blocker_entries=blocker_entries,
-        dev_type=dev_type, config=mgr.config))
-    # ADR-0039: skill cards join the union RESOLVED to physical mirror
-    # names; a backing card that also rides sourcing classifies as
-    # sourcing (the subtraction below) — resolved_skill_cards documents
-    # the rule once for both gates (steward_service shares it).
-    skill_cards = resolved_skill_cards(dev_type.skills, mgr.repo_cache)
-    needed = sorted(sourced | skill_cards)
-    ok, why = await mgr.repo_cache.ensure_fresh(needed)
-    memory_cards = set(memory_mount_names(
-        instance=mgr.instance, dev_type=dev_type, repo_ref=repo_name))
-    stale_cards: set[str] = set()
-    omit_cards: set[str] = set()
-    if not ok:
-        defer, stale_cards, omit_cards = classify_context_failures(
-            why, context_cards=memory_cards | (skill_cards - sourced),
-            strict=mgr.config.context_sourcing_strict,
-            has_mirror=getattr(mgr.repo_cache, "has_last_good",
-                               lambda n: False))
-        if defer:
-            # provisioning family (ADR-0025) — no container, no attempt.
-            # Never DEV_BAD_OUTPUT; never a Dev-type breaker.
-            mgr.blocked_reasons[live.pmo_id] = (
-                "repository mirror not fresh — dispatch deferred: "
-                + "; ".join(f"{n}: {r}" for n, r in sorted(defer.items())))
-            log.warning("dispatch of %s deferred — %s", live.key,
-                        mgr.blocked_reasons[live.pmo_id])
-            return None
-    # PLAN_MEMORY §3.5, second half: the mirror gate only sees
-    # mirror-eligible names — dangling bindings and uncredentialed
-    # internal-forge notebooks must resolve here or the run would start
-    # memoryless while its prompt claims the mount.
-    bad_memory = unresolvable_memory_cards(
-        mgr.config, memory_cards - omit_cards,
-        mirror_eligible=mgr.repo_cache.eligible)
-    if bad_memory:
-        if mgr.config.context_sourcing_strict:
-            mgr.blocked_reasons[live.pmo_id] = (
-                "memory mounts unavailable — dispatch deferred: "
-                + "; ".join(f"{n}: {r}" for n, r in sorted(bad_memory.items())))
-            log.warning("dispatch of %s deferred — %s", live.key,
-                        mgr.blocked_reasons[live.pmo_id])
-            return None
-        omit_cards |= set(bad_memory)
-    needed = [n for n in needed if n not in omit_cards]
-    if stale_cards:
-        log.warning("dispatch of %s proceeding on stale cache for %s",
-                    live.key, ", ".join(sorted(stale_cards)))
-    if omit_cards:
-        log.warning("dispatch of %s omitting unavailable context %s",
-                    live.key, ", ".join(sorted(omit_cards)))
+    # One policy for mission and STEWARD dispatch; the result also supplies
+    # the mount snapshot, so omitted context cannot leak into the runspec.
+    from ..repository_context import prepare_repository_context
+    context = await prepare_repository_context(
+        mgr.repo_cache, config=mgr.config, instance=mgr.instance,
+        dev_type=dev_type, work_repo=repo_name, mission_type=mtype.value,
+        blocker_entries=blocker_entries)
+    if context.deferred:
+        prefix = ("memory mounts unavailable" if context.problem == "memory"
+                  else "repository mirror not fresh")
+        mgr.blocked_reasons[live.pmo_id] = (
+            prefix + " — dispatch deferred: "
+            + "; ".join(f"{n}: {r}" for n, r in sorted(context.deferred.items())))
+        log.warning("dispatch of %s deferred — %s", live.key,
+                    mgr.blocked_reasons[live.pmo_id])
+        return None
+    needed = list(context.mirrors)
+    stale_cards, omit_cards = set(context.stale), set(context.omitted)
 
     # The branch a Dev merges from and targets: the card's pin, else what
     # the mirror resolved from the repository's HEAD (the gate above just

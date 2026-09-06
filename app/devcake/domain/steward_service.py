@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from .repository_context import RepositoryContext, prepare_repository_context
 from ..config import AppConfig, DevType, intake_blocks_dispatch
 from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
 from ..harness import missing_referenced_secret_env
@@ -96,15 +97,14 @@ class StewardService:
         # otherwise emit an identical (ERROR) span every poll tick
         outcome, error = None, None
         degraded = self.degraded()
-        mirror_ok, mirror_why, ctx_stale, ctx_omit = \
-            await self._context_gate(dt, repo)
-        if not mirror_ok:
+        context = await self._context_gate(dt, repo)
+        if context.deferred:
             # ADR-0024 fail-closed precondition — same semantics as mission
             # dispatch: skip this cycle, retry next; NEVER raises into the
             # poll segment (an exception here would mark the instance
             # poll_degraded)
             outcome = "mirror_stale"
-            error = f"repository mirror not fresh: {mirror_why.get(repo, '')}"
+            error = f"repository mirror not fresh: {context.deferred.get(repo, '')}"
             log.warning("steward periodic run skipped — %s", error)
         elif degraded:
             outcome, error = "degraded_skip", degraded
@@ -125,8 +125,8 @@ class StewardService:
                     outcome = "concurrency_deferred"  # counts toward the global cap
                 else:
                     run = await self.mgr.dispatch_steward(
-                        dt, missions, context_stale=ctx_stale,
-                        context_omit=ctx_omit)
+                        dt, missions, context_stale=set(context.stale),
+                        context_omit=set(context.omitted))
                     if run is None:
                         outcome = "dispatch_skipped"
                     else:
@@ -210,11 +210,10 @@ class StewardService:
             # an unconfigured/internal skill card must gate LOUDLY
             # (fail-closed ruling), unlike family work repos which are
             # legitimate internal clone extras (audit B2: keep BOTH halves).
-            mirror_ok, mirror_why, ctx_stale, ctx_omit = \
-                await self._context_gate(dt, repo, extra=fam_repos)
-            if not mirror_ok:
+            context = await self._context_gate(dt, repo, extra=fam_repos)
+            if context.deferred:
                 outcome = "mirror_stale"          # fail-closed, retry later
-                error = f"family mirrors not fresh: {mirror_why}"
+                error = f"family mirrors not fresh: {context.deferred}"
                 log.warning("discovery steward skipped — %s", error)
             else:
                 async with self._lock:
@@ -228,8 +227,8 @@ class StewardService:
                         # omit ride into launch so mounts and mirror_repos
                         # match what `_context_gate` just decided
                         run = await mgr.dispatch_steward_discovery(
-                            dt, fam, pending, context_stale=ctx_stale,
-                            context_omit=ctx_omit)
+                            dt, fam, pending, context_stale=set(context.stale),
+                            context_omit=set(context.omitted))
                         if run is None:
                             outcome = "dispatch_skipped"   # workspace/empty
                         else:
@@ -246,58 +245,11 @@ class StewardService:
                     span.set_status(Status(StatusCode.ERROR, error[:200]))
         self._last_discovery_outcome = outcome
 
-    async def _context_gate(self, dt, repo: str, extra=()
-                            ) -> tuple[bool, dict, set[str], set[str]]:
-        """Mirror gate + PLAN_MEMORY §3.5: skill-source and memory cards
-        are toggle-governed; work/family extras stay fail-closed. Returns
-        (ok, why, stale, omit) — the stale/omit sets ride into the launch
-        snapshot so the run record stays honest about its mounts."""
-        from .repo_sourcing import (classify_context_failures, memory_mount_names,
-                                    resolved_skill_cards,
-                                    unresolvable_memory_cards)
-        # ADR-0039: resolved to physical mirror names — the same rule as
-        # dispatch's gate; raw source names would never match ensure_fresh's
-        # resolved failure keys and a backed source's failure would defer
-        # even in open mode.
-        skill_cards = resolved_skill_cards(dt.skills, self.mgr.repo_cache)
-        memory_cards = set(memory_mount_names(
-            instance=self.mgr.instance, dev_type=dt, repo_ref=repo))
-        needed_for = getattr(self.mgr.repo_cache, "needed_for", None)
-        if callable(needed_for):
-            sourced = set(needed_for(
-                work_repo=repo, mission_type="STEWARD",
-                instance=self.mgr.instance, blocker_entries=None,
-                dev_type=dt, config=self.config)) | set(extra or ())
-            needed = sorted(sourced | skill_cards)
-        else:
-            # test fakes that only implement ensure_fresh (ADR-0033 gate tests)
-            sourced = {repo} | set(extra or ())
-            needed = [repo] + list(extra or ()) + sorted(skill_cards | memory_cards)
-        ok, why = await self.mgr.repo_cache.ensure_fresh(needed)
-        stale: set[str] = set()
-        omit: set[str] = set()
-        if not ok:
-            has_last = getattr(self.mgr.repo_cache, "has_last_good", None)
-            defer, stale, omit = classify_context_failures(
-                why, context_cards=memory_cards | (skill_cards - sourced),
-                strict=self.config.context_sourcing_strict,
-                has_mirror=has_last if callable(has_last) else (lambda n: False))
-            if defer:
-                return False, defer, set(), set()
-        # §3.5 second half: dangling / uncredentialed internal notebooks
-        # never reach the mirror gate — resolve them here, same as dispatch
-        eligible = getattr(self.mgr.repo_cache, "eligible", None)
-        if callable(eligible):
-            bad = unresolvable_memory_cards(
-                self.config, memory_cards - omit, mirror_eligible=eligible)
-            if bad:
-                if self.config.context_sourcing_strict:
-                    return False, bad, set(), set()
-                omit |= set(bad)
-        if stale or omit:
-            log.warning("steward context gate: stale=%s omit=%s",
-                        sorted(stale), sorted(omit))
-        return True, {}, stale, omit
+    async def _context_gate(self, dt: DevType, repo: str, extra=()
+                            ) -> RepositoryContext:
+        return await prepare_repository_context(
+            self.mgr.repo_cache, config=self.config, instance=self.mgr.instance,
+            dev_type=dt, work_repo=repo, mission_type="STEWARD", extra_repos=extra)
 
     def kick_discovery(self) -> None:
         """Event trigger (harvest enqueued from the ingress task context):
@@ -356,18 +308,17 @@ class StewardService:
         if repo in self.mgr.forges.breakers:
             raise StewardUnconfigured(
                 f"repo '{repo}' is not writable; fix its token first")
-        mirror_ok, mirror_why, ctx_stale, ctx_omit = \
-            await self._context_gate(dt, repo)
-        if not mirror_ok:
+        context = await self._context_gate(dt, repo)
+        if context.deferred:
             raise StewardUnconfigured(
                 f"repository mirror for '{repo}' is not fresh: "
-                f"{mirror_why.get(repo, 'sync failed')}")
+                f"{context.deferred.get(repo, 'sync failed')}")
         async with self._lock:
             if self.active():
                 raise StewardBusy("a steward run is already active")
             missions = await self.mgr.pmo.list_all(self.mgr.instance.team_key)
             run = await self.mgr.dispatch_steward(
-                dt, missions, context_stale=ctx_stale, context_omit=ctx_omit)
+                dt, missions, context_stale=set(context.stale), context_omit=set(context.omitted))
             if run is None:
                 # AUD-001 skip (workspace base unusable) — surfaced as 422,
                 # not an AttributeError 500 in the route (pre-existing bug)

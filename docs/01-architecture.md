@@ -67,6 +67,7 @@ app/devcake/
     repo_mirror.py #   RepoCache — mandatory source mirrors, freshness gate,
                    #   needed_for (ADR-0024)
     repo_sourcing.py   # ONE rule for which repo names a run draws in
+    repository_context.py # Shared mirror/context preparation for dispatch + STEWARD
                    #   (primary / refs / blockers / memory stages — ADR-0034)
     forge_runtime.py   # ForgeRuntime — live adapter set, per-repo breakers,
                    #   bounded health sweeps (M10)

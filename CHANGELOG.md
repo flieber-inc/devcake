@@ -326,7 +326,7 @@ First release in the v0.5 "Java Lava" line.
   `up.sh` is removed — the CLI is the only bring-up path
   ([ADR-0038](docs/adr/0038-devcake-cli-scope-command-surface-and-agent-operability.md)).
   A new operator skill at
-  [`.claude/skills/devcake-ops/SKILL.md`](.claude/skills/devcake-ops/SKILL.md)
+  [`skills/devcake-ops/SKILL.md`](skills/devcake-ops/SKILL.md)
   teaches any capable agent to install and manage a deployment; the README
   quickstart leads with it. `devcake-cli` publishes to PyPI via trusted
   publishing on `cli-v*` tags.

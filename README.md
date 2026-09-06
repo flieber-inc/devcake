@@ -8,356 +8,122 @@
 
 </div>
 
-DevCake turns the task board you already run into a software team. Write a
-ticket the way you would brief a colleague; DevCake staffs it with an AI
-developer in a fresh, disposable container — it triages, plans, implements,
-and passes every mission through REVIEW — and the work comes back as a **pull
-request**, with the full **transcript and token bill** attached to the ticket.
+DevCake runs a team of coding agents from your task board. Give it a goal;
+it breaks down large work, plans, implements, and reviews. You get pull
+requests, session transcripts, and recorded token usage and costs. You steer
+on the board and decide what gets merged.
 
-You steer with labels. You own the merge. **Done means merged** — with
-auto-merge off (the default), DevCake parks approved work and waits for you.
+**Bring a coding agent.** Use your preferred agent as your setup and operations
+companion: have it configure the host, connect your tools, explain the queue,
+and diagnose failed runs. DevCake keeps the work moving between your sessions.
 
-- **Board-native.** Linear or GitHub / GitLab / Gitea Issues — no second
-  work queue, no chat window pretending to be one. The bundled admin UI is
-  for configuration and operations; the board drives the work. A human edit
-  always beats an in-flight agent.
-- **Receipts, not vibes.** Missions post their transcript and token cost to
-  the ticket (the documented invariant, named exceptions and all), and every
-  dispatch, kill, sweep, and merge is traced end to end.
-- **Your box, your rules.** Self-hosted on a dedicated machine, with **your**
-  model subscriptions or API keys and **your** forge (code-hosting platform)
-  credentials. There is no hosted SaaS; the control plane does not ship your
-  secrets anywhere.
-- **A workforce, not a bot.** Six CLI harnesses — Claude Code, Grok Build,
-  Codex, Pi, OpenCode, Qwen Code — staffable per role: judgment work here,
-  volume work there. Every harness release upgrades your workforce without a
-  line of DevCake changing.
+Clone this repository, open it in your agent, and start with:
 
-> **The deal, stated plainly:** anyone who can write tickets on the
-> configured team (or land content in a configured repo) can influence agents
-> that hold forge and model credentials. You own branch protection, team
-> membership, and whether the **app** may auto-merge after REVIEW. That
-> ownership is *why* the output can be trusted. Full contract:
-> [`docs/14-security.md`](docs/14-security.md).
+> Read `skills/devcake-ops/SKILL.md`. Explain how DevCake fits my workflow,
+> check this host, and help me set it up for one small mission. Keep
+> auto-merge off. Verify the result and tell me what still needs my attention.
 
-**Proof over promises:** we pointed DevCake at its own codebase — one board
-prompt became 54 self-decomposed tickets, 257 agent runs, and 42 human-merged
-pull requests, receipts included. Read the field report:
-[`docs/evidence/2026-08-devcake-audits-devcake.md`](docs/evidence/2026-08-devcake-audits-devcake.md).
+The [operator skill](skills/devcake-ops/SKILL.md) is agent-neutral. Ask your
+agent to read it explicitly; automatic discovery is optional.
 
-Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning.md).
+## Start with one mission
 
----
+You need a **dedicated Linux or macOS host**, Docker with Compose and Buildx,
+Python 3.12+, and model credentials. Ask your agent to check the
+[deployment requirements](docs/13-deployment.md), then, from this checkout:
 
-## Why DevCake?
+```bash
+uv tool install .          # install the CLI from the version you will run
+devcake doctor --json      # inspect prerequisites and remedies
+devcake up --bake          # prepare secrets, build, start, and smoke-test
+```
 
-The deepest AI-assisted work today happens in CLI harnesses — Claude Code,
-Grok Build, Codex, Pi, OpenCode, and Qwen Code — with an expert invisibly
-orchestrating each session:
-curating context, sizing the task, sequencing the work, verifying the output.
-DevCake mechanizes that orchestration for board-shaped work. It is a
-**meta-harness** — a CLI agent orchestrator that staffs those harnesses rather
-than competing with them: not a new coding agent, but a session made
-repeatable, without the expert chained to the keyboard.
+Have your agent connect a board and repositories with `devcake setup`
+(`--help` lists options), or use the admin UI at
+**http://localhost:8080**. Its login lives in the generated `.env`.
+Configure model credentials there; the host baker builds the selected agent images.
 
-The method is context hygiene, engineered: one clear goal per session, tasks
-decomposed until they fit, fresh containers, curated read-only mounts of
-exactly the relevant prior work, feedback at step boundaries — never
-interruption inside one. We call it putting AI to work in a state of flow,
-and we treat the conditions for it as a design target, not a hope. In one
-phrase: **the clean room for delegated deep work** — as capability gets
-cheap, the scarce thing is accountability, and the envelope supplies it,
-domain-free ([`docs/17-positioning.md`](docs/17-positioning.md) §1c).
+**Ask your agent:** “Check my connections and branch protection, then walk me
+through the [first mission](docs/tutorials/01-first-mission.md).” Start in
+opt-in mode with one `DEVCAKE`-labeled ticket and inspect its PR together.
 
-We believe this works. The mechanisms are built and tested; the evidence so far 
-is our own production use, self-reported ([`docs/16-roadmap.md`](docs/16-roadmap.md), living log). 
-The full argument — its evidence status stated claim by claim, and what 
-would change our mind — is [`docs/19-thesis.md`](docs/19-thesis.md).
+## A fresh start for every run
 
----
+The usual path is **ONBOARD → PLAN → EXECUTE → REVIEW → merge**. Large
+missions split into linked tickets; triage can supply the plan. REVIEW always
+runs. For work that produces a PR, **Done means merged**; auto-merge is off
+by default.
 
-## Who this is for
+Each run starts a fresh session in a disposable container, with the ticket,
+prior transcripts and plans, relevant upstream work, and selected repositories
+and skills. Progress passes between runs through these artifacts; continuations
+within a run can resume its session.
 
-- Teams already running work on a **PMO board** (project-management system —
-  Linear, Gitea Issues, GitHub Issues, and GitLab Issues are all
-  launch-supported)
-- A **single operator** who will **self-host on a dedicated machine** (Docker,
-  Bake, your forge, your models) — not multi-tenant SaaS
-- People who want **receipts** (transcripts, costs, traces) more than a chat copilot
+**Ask your agent:** “Help me write a bounded mission with acceptance criteria,
+choose its repositories, and decide whether plans should need my approval.”
 
-**Not for:** anyone wanting a hosted, zero-ops service (self-hosting *is* the
-trust model); boards without discipline (DevCake amplifies your board — it
-cannot invent one); shared Docker hosts; exposing the admin UI to the open
-internet on basic auth alone; or expecting injection-proof agents. Prompt
-injection is in scope of “ticket writers are trusted,” not a product defect to
-be papered over.
+## Give the team the right context
 
-What you own as the operator — once at setup, and recurring — fits on one page:
-[`docs/18-operator-contract.md`](docs/18-operator-contract.md).
-
----
-
-## What you get
-
-| You set up | The system does |
-|---|---|
-| One or more **PMO instances** (teams) | Polls, managed labels, feed posts, adoption modes |
-| Zero or more **external repos** | Clone, branch, PR; zero uses the bundled Gitea; **RO** + **reviewer** tokens recommended (write always for work repos) |
-| **Work** vs **reference** vs **memory** repos per PMO | Routing targets vs read-only consultation clones vs team-memory notebooks (curated notes, mounted read-only into every run — ADR-0035) |
-| **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional steward) |
-| **Skills** per Dev Type (skill store + skill sources) | Curated skills seeded into an editable Gitea repo, plus your own external **skill sources** — dedicated read-only connections serving `<source>/<skill>` — installed into agent sessions |
-| **Scheduled Tasks** | Built-in maintenance on a timer — the Relations Steward (proposes ticket orderings) and the Memory Curator (reviews raw leads into notebook notes via PRs) — plus your own recurring ticket-creating tasks |
-| Auto-merge, intake pause, limits | Operator knobs — defaults favor a human merge |
-
-### Three ways to use it
-
-1. **External forge** — Classic path: a Linear ticket becomes a PR on your
-   GitHub or GitLab repo, with the full label pipeline and receipts on the issue.
-2. **Internal forge** — No external repo: work runs on the **bundled Gitea**;
-   missions still complete on the board, with deliverables you can take from the
-   PMO feed. Useful for non-code or sandbox workloads without burning forge PATs.
-3. **Multi-connection** — Several teams and/or repos on one stack. Missions
-   route by instance config and optional markers; reference repos can ride along
-   read-only for every stage.
-
-REVIEW is always a pipeline stage (judgment in `result.json`). The
-**reviewer token** — app-only, different forge account — is what is
-**recommended** when branch protection requires formal approval; it is never
-injected into a Dev. Staffing a different Dev Type for REVIEW than EXECUTE is
-optional and about role focus (skills, identifying prompt), not security. How
-merges are actually controlled is next.
-
-### How forge merges are controlled (first deploy)
-
-Three different things are easy to conflate. Only the forge enforces the last:
-
-| Knob | Who it constrains | What it does |
+| Ingredient | What it does | Ask your agent |
 |---|---|---|
-| **`auto_merge`** (per repo, default **off**) | The **app** only | Off on a repo → app never merges that repo's PRs; parks at `DEVCAKE-MERGE` until a real merge is observed. On → app squash-merges after REVIEW approve. (ADR-0020) |
-| **Forge tokens** (Repositories page) | Devs + app | **Write** token: EXECUTE push + open PR; app also uses it to **merge** when auto-merge is on. **RO** token (recommended): non-EXECUTE stages clone without write. **Reviewer** token (**recommended** for formal PR/MR approval under branch protection; **app-only** — never injected into a Dev). |
-| **Branch protection** (on the forge; the Repositories page can **apply** a derived baseline per repo or in bulk) | Everyone with a token | Server rules on the **default branch** (require a PR, require ≥1 approval, no bypass for the Dev account). Token scopes usually **cannot** separate “push a feature branch” from “merge to main” — protection is what does. |
+| **Work repositories** | Targets for branches and PRs. Use GitHub, GitLab, Gitea, or the bundled Gitea for code, documents, and other deliverables. | “Where should this team's output go?” |
+| **Reference repositories** | Consultation copies supplied across stages: shared libraries, specifications, examples. | “Which sources should this team consult?” |
+| **Memory repositories** | Persistent notebooks shared across missions, bound to a board or Dev Type. Consumers get read-only context. | “Help me organize a notebook and its curation.” |
+| **Skills** | Reusable instructions selected per Dev Type, from the editable built-in store or trusted external Git skill sources. | “Find useful skills and review their instructions with me.” |
+| **Dev Types** | Harness, model, credentials, prompts, skills, and capacity assigned to pipeline roles. | “Staff my planning, execution, and review roles.” |
 
-**Happy path with protection + tokens configured:**
+Memory is ordinary Git: a notebook's README defines its organization. Runs
+contribute unverified leads to `.claims/`; a Memory Curator works through
+them and proposes notes as PRs. **You merge notes by default.** DevCake
+handles transport and review; learning depends on the notes you keep.
+The implementation's comparative pilot is still [outstanding](docs/adr/0035-memory-notebooks-claims-conveyor-and-scheduled-tasks.md#ship-gate-throwaway-box-ab-not-yet-satisfied).
 
-1. **EXECUTE** Dev (write token) pushes a feature branch and opens a PR.
-2. **REVIEW** Dev judges the PR (`result.json`). It does **not** formally approve on the forge. With an RO token set, it does not even hold write credentials.
-3. **App** (on approve): posts the PR comment; if a **reviewer** token is set, files a **formal forge approval** with that token (different identity from the PR author — needed when the forge blocks self-approval).
-4. Then either:
-   - **mission's repo `auto_merge` off:** park at `DEVCAKE-MERGE`; **you** merge on the forge; the app marks Done when it sees the merge.
-   - **mission's repo `auto_merge` on:** the app **merges with the write token** (not the reviewer token), then Done.
+Supported boards: **Linear, GitHub Issues, GitLab Issues, Gitea Issues**.
+Supported harnesses: **Claude Code, Codex, Grok Build, Pi, OpenCode, Qwen Code**.
+Mix them by role or team.
 
-Without branch protection, a Dev that holds the write token can often merge (or push) despite `auto_merge` being off — playbooks say not to; that is guidance, not enforcement. Full contract: [`docs/14-security.md`](docs/14-security.md) §2 zone C · setup steps: [`docs/13-deployment.md`](docs/13-deployment.md) §8a · token details: [`docs/06-forge-adapter.md`](docs/06-forge-adapter.md) §4–5.
+## Put recurring work on a schedule
 
----
+Scheduled Tasks create tickets from a template at an interval: dependency
+reviews, documentation checks, recurring reports, or your own maintenance
+routine. They use the normal mission pipeline. The same settings page holds
+the **Memory Curator** and the **Relations Steward**, which proposes ticket
+dependencies directly. Intake pause applies to scheduled work too.
 
-## A day on the board
+**Ask your agent:** “Set up a recurring documentation check with a clear
+deliverable, a suitable interval, and human review.”
 
-1. Write a ticket; add `DEVCAKE` (opt-in mode) — or adopt a whole team deliberately.
-2. Labels advance: ONBOARD → PLAN → EXECUTE → REVIEW as work completes.
-3. A PR opens on `devcake/…` (or the internal forge equivalent).
-4. With auto-merge **off** (default): the **app** parks at `DEVCAKE-MERGE` until
-   the PR is merged (normally by you); then Done. Branch protection is what
-   stops Devs from merging on their own — see above.
-5. Steer with comments and label swaps; stop everything with `DEVCAKE-SKIP`.
-   (Comments steer the *next run*; granting a failing step **fresh attempts**
-   takes the literal `DEVCAKE-RETRY` in a comment, or a label op — the strict
-   default keeps bot comments from resetting the budget. ADR-0026.)
+## Operate it with your agent
 
-Details and interventions: [Tutorial 2](docs/tutorials/02-operating-devcake.md).
+- “Read `devcake status --json`. Explain what's running, waiting, or blocked.”
+- “Investigate this failed mission using its ticket, run record, and logs.
+  Fix the cause before granting another attempt.”
+- “Review token usage and concurrency with me before we expand intake.”
+- “Prepare backups and a quiet upgrade; verify health and a dispatch afterward.”
 
----
+Ask your agent to use the [operator skill](skills/devcake-ops/SKILL.md) and
+[daily operations tutorial](docs/tutorials/02-operating-devcake.md) for these tasks.
 
-## Architecture (one screen)
+**You own the host and the trust.** Ticket authors and repository contributors
+can influence agents holding your credentials. Docker access is
+root-equivalent; containers are not an injection-proof sandbox. Keep control
+ports private, protect default branches, and safeguard backups containing
+plaintext secrets. Auto-merge off constrains the app; forge branch protection
+constrains agent tokens. Ask your agent to walk through the
+[security contract](docs/14-security.md) and
+[operator duties](docs/18-operator-contract.md) before real work.
 
-```
-PMO (Linear / Gitea Issues) ──poll / labels──► app (orchestrator)
-                                    │ RunBootstrap → Dagu
-                                    ▼
-                         docker.sock ──► Dev containers
-                         (runtime net, open egress)
-                                    │
-                         Redis Streams (per-run ACL)
-                                    ▼
-                              finalize → PMO + forge
-                                    │
-                         OpenObserve ← app OTLP
-                         (Devs → otel-collector only)
-```
+## Evidence and next steps
 
-- **Dedicated host.** Dagu holds `docker.sock` (root-equivalent). See
-  [`docs/14`](docs/14-security.md) §5 and [`docs/13`](docs/13-deployment.md).
-- **No per-mission lease or checkout.** A crashed agent holds nothing; the next
-  poll reschedules. Process-local locks serialize dispatch and maintenance.
-- **PMO is source of truth.** Local run files are advisory
-  ([`docs/10`](docs/10-persistence.md)).
-- **Control plane** (app, admin, Dagu, OpenObserve) stays off the Dev network;
-  optional **Gitea** straddles both for clone/push.
+DevCake is early-production software. In our own
+[documented run](docs/evidence/2026-08-devcake-audits-devcake.md), one board
+prompt became 54 tickets, 257 runs, and 42 human-merged PRs: self-reported
+evidence to assess with your agent against your own workload.
 
----
+Ask your agent to explore the [product overview](docs/00-overview.md),
+[architecture](docs/01-architecture.md), or [design thesis](docs/19-thesis.md)
+with you. For changes to DevCake itself, start with
+[Contributing](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
-## Trust in one breath
-
-Self-hosted, single operator, loopback by default. Stack passwords live in
-`.env`; **operator secrets** (PMO keys, forge tokens, model credentials) are
-entered through the admin UI's Connections (Repositories, PMO, Skill sources), Fleet, and Settings pages and stored
-on the app volume — never echoed back. Be clear-eyed about what "GUI secret
-store" means: values rest as **plaintext files (mode 0600) on the `/data`
-volume** — there is no vault and no at-rest encryption (a key would have to
-live on the same host); anyone with host root or a volume backup reads
-everything. Treat `/data` backups like a password-manager export
-([`docs/14-security.md`](docs/14-security.md) §4).
-
-Agents are powerful by design. The app enforces outcome legality and never lets
-Devs write the PMO directly; it **warns** on weak posture (write token on every
-stage, unprotected default branch). It does not replace forge branch protection
-or careful team membership.
-
-→ [`docs/14-security.md`](docs/14-security.md) (contract) · checklist before first
-real EXECUTE: §9.
-
----
-
-## Quickstart
-
-> **Have an agent set it up for you.** Tell your CLI agent:
-> *“Read `.claude/skills/devcake-ops/SKILL.md` in this repo and help me set
-> up and manage DevCake.”* The skill teaches any capable agent the install,
-> preflight, bring-up, non-interactive configuration, day-to-day operations,
-> and upgrades — with JSON receipts and sealed exit codes it can assert on.
-> (Claude Code discovers it automatically when opened in this repo.)
-
-```bash
-# Clone the remote or fork you intend to run:
-git clone <this-repo-url> && cd devcake
-uv tool install devcake-cli   # from PyPI — or from this checkout: uv tool install . (snapshot) / uv pip install -e . (editable)
-devcake doctor             # named preflight + one-time remedies (--json ok)
-devcake status             # compose + baker + PMO request budgets vs each tracker's limit (--json ok)
-devcake up --bake          # auto-inits .env secrets, DOCKER_GID, control plane + hello + baker
-# Later restarts (images already baked):  devcake up
-
-# Configure in a browser: http://localhost:8080 — basic auth (from .env) →
-# Connections / Fleet / Settings → secrets + connection tests. Saving Dev
-# Types triggers the baker's harness bake; the first mission waits for it.
-
-# Or configure non-interactively (agents; same validation as the UI):
-devcake setup --same-harness claude-code --json     # first Dev roster
-devcake setup --help    # PMO/repo wiring (secrets via env/file/stdin) + settings-bundle import
-
-# Telemetry connectivity: app boot auto-provisions the OO ingest user from OO_INGEST_*.
-# Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
-```
-
-`devcake up` is the only bring-up path (ADR-0038): it auto-generates missing
-bootstrap secrets into a mode-600 `.env`, upserts the docker socket group id,
-optionally bakes, then runs compose and installs the host baker. Control
-ports bind `127.0.0.1`. Images are **Bake-only** — compose never builds them.
-
-**macOS / Docker Desktop:** see [`docs/13-deployment.md`](docs/13-deployment.md) §8b before first `devcake up --bake` — socket gid, install gates, and the nested-engine probe.
-
-**Before the first real mission:**
-
-1. Sandbox (or tightly controlled) Linear team — ticket writers = agent trust.
-2. On the forge: **protect the default branch** (require PR + ≥1 approval; Dev
-   write account must not bypass) — see [merge control](#how-forge-merges-are-controlled-first-deploy).
-3. Repositories: write token; prefer **RO** for non-EXECUTE and a **reviewer**
-   token (app-only formal approval — the security-relevant second identity).
-4. Leave each repo's **`auto_merge` off** until you want the **app** to merge that repo after REVIEW.
-
-Then, step by step:
-
-- [Tutorial 1 — first mission](docs/tutorials/01-first-mission.md)
-- [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)
-- [Tutorial 3 — MCP plugins](docs/tutorials/03-mcp-plugins.md)
-- Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
-- Pre-v1 host wipe-and-re-onboard: [host-refresh](docs/tutorials/host-refresh.md)
-
-After upgrades or changes under `app/`, `admin/`, or `images/`:
-
-```bash
-devcake up --bake
-```
-
-More detail: [`AGENTS.md`](AGENTS.md) · [`docs/13-deployment.md`](docs/13-deployment.md).
-
----
-
-## Verify
-
-Primary local unit path (always rebakes `app-test` so the image matches the
-tree; prefers Docker Buildx bake and falls back to a plain Dockerfile build
-where bake is unavailable — e.g. podman/buildah hosts, see
-`scripts/lib/bake_app_test.sh`):
-
-```bash
-./scripts/pytest_app.sh
-```
-
-CI-shaped proof on a full Docker Engine (real Buildx — not buildah's shim)
-matches [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — bake group
-`ci`, then Redis + pytest in `app-test`, then the dispatch smoke. Locally
-that bake is:
-
-```bash
-docker buildx bake ci
-```
-
-(GHA applies `type=gha` cache via bake-action `set:` — not a second bake
-file; see `docs/13-deployment.md` §6.)
-
-Full local suite when the stack is up (pin gate + ruff + pytest + forge/PMO
-contract batteries + dispatch-hello smoke). Not a full GHA clone (no
-npm/pip-audit, no control-plane rebake); a mixed-version live stack prints a
-warning banner:
-
-```bash
-./scripts/ci_suite.sh
-```
-
-PR CI (`.github/workflows/ci.yml`) also runs pin gate, npm checks, pip-audit,
-compose with Gitea, and contract batteries — see `docs/13-deployment.md` §6.
-Token-spending golden path (**manual pre-release only**, real models/forges —
-**not** FOSS CI / `ci_suite` / GHA unit path): `scripts/acceptance.py` —
-including internal-forge / Gitea lanes when configured. Tester credentials
-from shell/`.env`; spends model + PMO tokens.
-
-Coding agents: follow [`AGENTS.md`](AGENTS.md). Security and autonomy claims
-must not exceed [`docs/14-security.md`](docs/14-security.md).
-
----
-
-## Documentation
-
-| I want to… | Start here |
-|---|---|
-| Understand the product and invariants | [`docs/00-overview.md`](docs/00-overview.md) |
-| Onboard as a new engineer (reading path) | [`docs/00-overview.md`](docs/00-overview.md) §6a |
-| Contribute (build, tests, PR expectations) | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| Report a vulnerability | [`SECURITY.md`](SECURITY.md) |
-| Understand the security deal | [`docs/14-security.md`](docs/14-security.md) |
-| Know what you own as operator | [`docs/18-operator-contract.md`](docs/18-operator-contract.md) |
-| Run a first mission / operate daily | [`docs/tutorials/`](docs/tutorials/) |
-| Deploy, networks, runbook | [`docs/13-deployment.md`](docs/13-deployment.md) |
-| Labels, lifecycle, orchestrator | [`docs/02`](docs/02-domain-model.md) · [`03`](docs/03-mission-lifecycle.md) · [`04`](docs/04-orchestrator.md) |
-| PMO / forge / harnesses | [`05`](docs/05-pmo-adapter.md) · [`06`](docs/06-forge-adapter.md) · [`08`](docs/08-harness-templates.md) |
-| Admin API & UI contract | [`docs/11-admin-panel.md`](docs/11-admin-panel.md) |
-| History and backlog | [`docs/16-roadmap.md`](docs/16-roadmap.md) · [`CHANGELOG.md`](CHANGELOG.md) |
-| How we talk about it | [`docs/17-positioning.md`](docs/17-positioning.md) |
-| Why this exists — the thesis | [`docs/19-thesis.md`](docs/19-thesis.md) |
-
-Full map and architecture: [`docs/00`](docs/00-overview.md) §7 · [`docs/01`](docs/01-architecture.md).
-
----
-
-## Contributing
-
-Self-hosted operator software. Prefer PRs with tests at public seams
-(`app/tests/`) and zero-drift docs when public contracts change. Build with
-**Bake**, target **Python 3.12**, and prove run/up paths — not only “build
-succeeded.” Full contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md) ·
-coding agents: [`AGENTS.md`](AGENTS.md) · vulnerability reporting:
-[`SECURITY.md`](SECURITY.md).
-
-## License
-
-DevCake is free software, released under the **GNU General Public License,
-version 3** — see [`LICENSE`](LICENSE) for the full text.
+[Changelog](CHANGELOG.md) · [Roadmap and known gaps](docs/16-roadmap.md) ·
+[Report a vulnerability](SECURITY.md) · [GPL-3.0 license](LICENSE)

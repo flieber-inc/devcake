@@ -234,12 +234,33 @@ def test_degraded_skips_discovery_and_retains_pending(tmp_path):
         mgr.runs.store.save(Run(
             run_id=f"TEAM-{i}-STEWARD-XXXXXX", mission_key="TEAM",
             mission_type="STEWARD", dev_type="steward", seq=i, state=st,
-            error=f"dead-{i}"))
+            error=f"dead-{i}", pmo_ref=mgr.instance_name))
     assert svc.degraded()
     mgr._discoveries_pending.add("src")
     run_coro(svc.maybe_dispatch_discovery(missions))
     assert calls == []
     assert mgr._discoveries_pending == {"src"}
+
+
+def test_degraded_backoff_elapsed_drains_discovery(tmp_path):
+    """The pause has a horizon: once the newest death is older than three
+    steward intervals the drain admits one run instead of waiting for a
+    human's Run now forever (docs/15)."""
+    from datetime import timedelta
+    from devcake.domain.run import Run, utcnow
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    old = utcnow() - timedelta(
+        minutes=3 * svc.config.steward.interval_minutes + 1)
+    for i, st in enumerate(("failed", "timed_out", "orphaned"), start=1):
+        mgr.runs.store.save(Run(
+            run_id=f"TEAM-{i}-STEWARD-XXXXXX", mission_key="TEAM",
+            mission_type="STEWARD", dev_type="steward", seq=i, state=st,
+            error=f"dead-{i}", pmo_ref=mgr.instance_name,
+            created_at=old, ended_at=old))
+    assert svc.degraded() is None
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert len(calls) == 1 and mgr._discoveries_pending == set()
 
 
 def test_harvest_notify_seam_is_best_effort(tmp_path):

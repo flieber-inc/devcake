@@ -129,8 +129,9 @@ class MissionManager:
         # reuse the poll's list_all; set by poll_instance, None until then
         self.snapshot: BoardSnapshot | None = None
         # when a labeled mission's feed is re-read (ADR-0033 addendum);
-        # our own feed writes invalidate through feed._feed
-        self.feed_memo = FeedScanMemo()
+        # our own feed writes invalidate through feed._feed; the safety
+        # rescan is a vendor property (`updated_at_tracks_comments`)
+        self.feed_memo = FeedScanMemo.for_pmo(pmo)
         # per-cycle demand counters (board.bump) → /health pmo_demand
         self.cycle_stats: dict[str, int] = {}
         # pmo_ids whose deferred-merge window is known CLOSED (hand-off posted,

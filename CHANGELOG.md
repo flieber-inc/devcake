@@ -16,6 +16,28 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — fewer routine tracker reads on large boards, and two stalls
+  removed.** The feed-scan memo's safety rescan is now a PMO capability
+  (`updated_at_tracks_comments`): on a tracker whose item `updated_at`
+  moves with every comment (Linear), a labelled mission's feed is re-read
+  only when the mission changed or DevCake wrote to it, so the discovery
+  and merge sweeps no longer re-read every labelled feed every few
+  minutes; a settings Save keeps the memo unless the PMO card itself
+  changed. The deferred-merge window always makes one more admitted
+  attempt after it elapses and hands off only if that attempt does not
+  merge, so cycles whose reads the request budget refused can no longer
+  spend the window with zero attempts; the sweeps' write-backs (a merged
+  completion, a closed-PR cancellation, a conflict route, a hand-off, a
+  tracking completion) now run as critical-class calls, so the budget's
+  reserve covers a mission's outcome while the poll's own reads are being
+  refused. Three dead steward runs in a row on an instance pause that
+  instance's periodic service and discovery drain for three steward
+  intervals and then admit one run (a success clears it, a failure re-arms
+  it) instead of stopping until an operator clicks Run now — and one
+  board's deaths no longer pause another board's steward. Boards that had
+  raised the poll interval for quota can lower it again (`13-deployment.md`
+  upgrade notes).
+
 ## v0.5.8 (2026-09-06)
 
 Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.3.

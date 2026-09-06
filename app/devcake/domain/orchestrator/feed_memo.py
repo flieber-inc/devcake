@@ -4,11 +4,14 @@ from the board; truncation is never memoized).
 
 The discovery and merge sweeps derive a small state from a mission's whole
 comment feed. Re-reading every labeled feed every poll cycle multiplies
-vendor requests with board size (ADR-0040). A scan is reused while three
+vendor requests with board size (ADR-0040). A scan is reused while the
 signals agree: the mission's `updated_at` is unchanged, DevCake itself has
-not written to that feed since (our own posts bump a generation), and the
-scan is younger than MAX_AGE — the safety rescan that catches a human's
-comment on a vendor whose `updated_at` does not move for comments.
+not written to that feed since (our own posts bump a generation), and — on
+a vendor whose `updated_at` does not move for comments
+(`PMOCapabilities.updated_at_tracks_comments` False) — the scan is younger
+than MAX_AGE, the safety rescan that catches a human's comment there. A
+vendor that declares the capability needs no rescan: a comment moves the
+mission, and the changed `updated_at` already misses the memo.
 Process-local by construction: a restart or a config reload rescans.
 """
 
@@ -33,11 +36,23 @@ class _Entry:
 
 class FeedScanMemo:
     def __init__(self, clock: Callable[[], datetime] = utcnow,
-                 max_age: timedelta = MAX_AGE) -> None:
+                 max_age: timedelta | None = MAX_AGE) -> None:
         self._entries: dict[tuple[str, str], _Entry] = {}
         self._gen: dict[str, int] = {}
         self._clock = clock
+        # None = no safety rescan: the vendor's `updated_at` covers comments
         self.max_age = max_age
+
+    @classmethod
+    def for_pmo(cls, pmo: Any) -> "FeedScanMemo":
+        """The memo shaped by the adapter's self-description: a vendor whose
+        `updated_at` moves on every comment needs no safety rescan. A fake or
+        a broken self-description keeps the conservative rescan."""
+        try:
+            tracks = bool(pmo.capabilities().updated_at_tracks_comments)
+        except Exception:  # noqa: BLE001 — a missing/broken capability row keeps the rescan, never fails the manager
+            tracks = False
+        return cls(max_age=None if tracks else MAX_AGE)
 
     def generation(self, pmo_id: str) -> int:
         return self._gen.get(pmo_id, 0)
@@ -60,7 +75,8 @@ class FeedScanMemo:
             return None
         if e.updated_at != getattr(mission, "updated_at", None):
             return None
-        if self._clock() - e.scanned_at > self.max_age:
+        if self.max_age is not None \
+                and self._clock() - e.scanned_at > self.max_age:
             return None
         return e.value
 

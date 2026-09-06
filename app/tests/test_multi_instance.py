@@ -704,6 +704,39 @@ def test_rekey_pmo_instance_preserves_manager_and_poll_maps(tmp_path, monkeypatc
     assert poll_rt.missions_cache[0]["instance"] == "bravo"
 
 
+def test_reload_keeps_the_feed_memo_unless_the_pmo_card_changed(monkeypatch):
+    """A Save that leaves a PMO card's identity (system, team, api_base)
+    untouched must not throw the memoized feed scans away — a full rescan of
+    every labelled mission is the one cost a metered tracker feels most. A
+    changed board or vendor rebuilds the memo (ADR-0033 memo addendum)."""
+    from types import SimpleNamespace
+
+    from fakes import fake_pmo_capabilities, make_services
+
+    mgr = _mgr("alpha")                       # instance team_key "ALPHA"
+    cfg = AppConfig(pmos=[PMOInstance(name="alpha", team_key="ALPHA",
+                                      repos=[])], repos=[])
+    memo = mgr.feed_memo
+    memo.put("discovery", _mission("m1", "ALPHA-1", "alpha"), "scan", 0)
+    pmo = SimpleNamespace(capabilities=lambda: fake_pmo_capabilities())
+    monkeypatch.setattr("devcake.api.services.make_pmo", lambda i: pmo)
+    s = make_services(
+        config=cfg, managers={"alpha": mgr},
+        stewards={"alpha": SimpleNamespace(kick_discovery=lambda: None)},
+        poll_rt=None,
+        forge_runtime=SimpleNamespace(rebuild=lambda *a, **k: None),
+        shared_breakers={}, shared_backend_degraded={},
+        manager=SimpleNamespace(), messaging=SimpleNamespace(),
+        internal_forge=None, skill_service=None, repo_cache=None,
+        receipt_store=None, oidc_tokens=None, claims=None,
+        blocker_locator=None, dev_types={})
+    s.build_managers()                        # same card: the memo survives
+    assert mgr.feed_memo is memo and len(memo) == 1
+    cfg.pmos[0] = PMOInstance(name="alpha", team_key="BRAVO", repos=[])
+    s.build_managers()                        # another board: a fresh memo
+    assert mgr.feed_memo is not memo and len(mgr.feed_memo) == 0
+
+
 def test_config_put_pmo_rename_rekeys_and_keeps_intake(
         tmp_path, monkeypatch):
     """apply_config_patch + rekey + build_managers: renamed PMO stays on the

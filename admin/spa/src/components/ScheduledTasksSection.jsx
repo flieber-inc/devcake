@@ -135,8 +135,9 @@ function StewardPanel() {
       footer={healthInfo?.steward_degraded && (
         <p className="text-sm text-amber-600 dark:text-amber-400">
           Backing off — the last 3 steward runs failed
-          ({healthInfo.steward_degraded}). Run now still works; a successful
-          run resumes the schedule.
+          ({healthInfo.steward_degraded}). The schedule retries on its own
+          after three intervals; Run now still works, and a successful run
+          clears this.
         </p>
       )}>
       <SettingRow label="Dev Type"

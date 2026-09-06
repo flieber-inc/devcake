@@ -54,8 +54,11 @@ wrongly.
 
 The port declares urgency through `pmo_call(class)` (a context, so the 17
 port methods are untouched): **critical** = anything that writes a run's
-results back or launches work — finalize, dispatch, operator actions —
-and **routine** = everything else: poll reads, sweeps, probes. A fixed
+results back or launches work — finalize, dispatch, operator actions, and
+the sweeps' write-backs (a completion, a cancellation, a conflict route, a
+hand-off), declared at the write site since the sweep runs inside the
+poll's routine context — and **routine** = everything else: poll reads,
+the sweeps' reads and bookkeeping, probes. A fixed
 share of the limit is reserved: routine calls are refused once the
 estimate reaches it; critical calls may spend it. An undeclared caller is
 routine, so nothing gains the reserve by omission.

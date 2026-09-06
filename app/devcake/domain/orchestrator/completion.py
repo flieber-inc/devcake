@@ -36,12 +36,19 @@ from enum import StrEnum
 from opentelemetry import trace
 
 from ...ports.forge import mission_branch
+from ...ports.pmo import pmo_call
 from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
 from . import freshness, steps
 from .feed import unquoted
 from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
+
+# The sweeps run inside the poll's routine call context (ADR-0040): their
+# write-backs — a completion, a cancellation, a conflict route, a hand-off —
+# declare the critical class themselves, with this bounded wait for quota,
+# so a starved key refuses the poll's reads but never a mission's outcome.
+WRITE_BACK_WAIT_S = 20.0
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -106,9 +113,6 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
     with tracer.start_as_current_span("mission.complete") as span:
         span.set_attribute("devcake.mission.key", mission_key)
         span.set_attribute("devcake.cause", str(cause))
-        if spec.disclose_before and mission is not None:
-            await freshness.disclose_unread_at_close(mgr, mission)
-
         async def _core():
             # status FIRST: derive keys on status, the sweep keys on the
             # park label. Swap-then-status stranded a merged PR at row 9
@@ -120,10 +124,17 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
                             spec.feed.format(pr_url=pr_url))
             mgr._audit(ref.pmo_id, spec.audit_action, pr_url)
 
-        if run is not None:
-            await mgr._checkpoint(run, steps.REVIEW_DONE, _core)
-        else:
-            await _core()
+        # a completion is a write-back (ADR-0040 §3): critical class, so the
+        # sweep paths — inside the poll's routine context — may spend the
+        # reserve instead of being refused on a starved key; the finalize
+        # path is already critical (the inner declaration wins, same class)
+        with pmo_call("critical", wait_budget_s=WRITE_BACK_WAIT_S):
+            if spec.disclose_before and mission is not None:
+                await freshness.disclose_unread_at_close(mgr, mission)
+            if run is not None:
+                await mgr._checkpoint(run, steps.REVIEW_DONE, _core)
+            else:
+                await _core()
         try:
             if run is not None:
                 await mgr.deliver_internal_zip(run, pr)
@@ -176,15 +187,17 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
         # undercounts. The EXECUTE playbook tells the Dev a 🧩 resolve
         # directive overrides its normal implement-the-mission job (🧩 is
         # reserved for this directive — 🔀 already means "PR opened").
-        await mgr._feed(
-            pmo_id, "issue",
-            f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
-            f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
-            f"Next Dev: sync `{mission_branch(mgr.instance_name, key)}` with the default branch, "
-            f"resolve the conflicts, and push; the PR then returns to "
-            f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
-        await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                   remove={from_label}, add={LABEL_EXECUTE})
+        # a write-back (ADR-0040 §3): critical class from the sweep too
+        with pmo_call("critical", wait_budget_s=WRITE_BACK_WAIT_S):
+            await mgr._feed(
+                pmo_id, "issue",
+                f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
+                f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
+                f"Next Dev: sync `{mission_branch(mgr.instance_name, key)}` with the default branch, "
+                f"resolve the conflicts, and push; the PR then returns to "
+                f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
+            await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                       remove={from_label}, add={LABEL_EXECUTE})
         mgr._audit(pmo_id, "conflict_resolve_dispatched",
                     f"attempt {n + 1} ({pr_url})")
         return True

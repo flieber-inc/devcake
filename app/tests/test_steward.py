@@ -5,7 +5,7 @@ classification the steward's output relies on."""
 import asyncio
 import base64
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -200,9 +200,11 @@ def make_service(tmp_path, enabled=True, dev_type="steward"):
     return svc, mgr, dispatched
 
 
-def steward_run(n, state):
+def steward_run(n, state, *, pmo_ref=None, **fields):
+    from fakes import DEFAULT_INSTANCE
     return Run(run_id=f"TEAM-{n}-STEWARD-{'X' * 6}", mission_key="TEAM",
-               mission_type="STEWARD", dev_type="steward", seq=n, state=state)
+               mission_type="STEWARD", dev_type="steward", seq=n, state=state,
+               pmo_ref=pmo_ref or DEFAULT_INSTANCE.name, **fields)
 
 
 def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
@@ -263,6 +265,47 @@ def test_degraded_after_three_dead_runs_skips_periodic_only(tmp_path):
     # a finished run clears the condition (store-derived, restart-safe)
     mgr.runs.store.save(steward_run(9, "finished"))
     assert svc.degraded() is None
+
+
+def test_degraded_backoff_elapses_admits_one_run_and_rearms_on_failure(tmp_path):
+    """docs/15: the pause is three steward intervals from the newest death,
+    not a latch — then one run is admitted; its own death re-arms the pause."""
+    from devcake.domain.run import utcnow
+    svc, mgr, dispatched = make_service(tmp_path)
+    old = utcnow() - timedelta(
+        minutes=3 * svc.config.steward.interval_minutes + 1)
+    for i, st in enumerate(("failed", "timed_out", "orphaned"), start=1):
+        mgr.runs.store.save(steward_run(i, st, created_at=old, ended_at=old))
+    assert svc.degraded() is None                   # back-off served
+    svc._last_at = time.monotonic() - 10**6
+    run_coro(svc.maybe_dispatch([]))
+    assert dispatched == ["steward"]                # one run admitted
+    mgr.runs.store.save(steward_run(4, "failed"))   # and it died just now
+    assert svc.degraded()                           # re-armed from that death
+
+
+def test_degraded_backoff_uses_ended_at_when_present(tmp_path):
+    """A run that was dispatched long ago but died just now counts from
+    its death (kills and orphans are stamped at the end, not the start)."""
+    from devcake.domain.run import utcnow
+    svc, mgr, dispatched = make_service(tmp_path)
+    long_ago = utcnow() - timedelta(days=2)
+    for i in (1, 2, 3):
+        mgr.runs.store.save(steward_run(i, "failed", created_at=long_ago,
+                                        ended_at=utcnow()))
+    assert svc.degraded()
+
+
+def test_degraded_is_scoped_to_the_instance(tmp_path):
+    """The run store is shared across instances: another board's dead
+    steward runs are not this board's weather."""
+    svc, mgr, dispatched = make_service(tmp_path)
+    for i, st in enumerate(("failed", "timed_out", "orphaned"), start=1):
+        mgr.runs.store.save(steward_run(i, st, pmo_ref="other-board"))
+    assert svc.degraded() is None
+    svc._last_at = time.monotonic() - 10**6
+    run_coro(svc.maybe_dispatch([]))
+    assert dispatched == ["steward"]
 
 
 def test_run_now_errors(tmp_path):

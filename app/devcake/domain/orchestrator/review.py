@@ -22,6 +22,12 @@ async def _flag_out_of_pipeline_merge(mgr, run: Run) -> None:
     can merge unless branch protection forbids it. If the mission's PR turns
     up merged while the mission is still mid-pipeline, say so loudly —
     detection only; a human decides (they may have merged early themselves)."""
+    # A merge recorded by this run is our own completed side effect. A board
+    # outage can leave REVIEW finalizing after that merge; replay must not
+    # accuse it of an out-of-pipeline merge. Without a durable receipt the
+    # actor is still unknown, so retain the existing detection path.
+    if steps.REVIEW_MERGE in run.finalized_steps:
+        return
     forge = mgr.forges.get(run.repo_ref)
     if forge is None:
         # repo vanished: the detection cannot run — say so instead of going

@@ -181,7 +181,10 @@ def compare_and_transition(run, intended: Transition):
     # swap marker of ours (_SWAP_MARKER_STAGE) is accepted as our own prior
     # work — not an external change. A human change between deliveries still
     # halts further mutation.
-    if stage_label(live) not in expected_stages(run):
+    review_stopped = run.mission_type == "REVIEW" and (
+        live.status == "canceled" or "DEVCAKE-SKIP" in live.labels)
+    if review_stopped \
+            or stage_label(live) not in expected_stages(run):
         # A human (or another actor) changed state mid-run.
         pmo.post_feed(run.mission_ref,
             "DevCake completed a {type} run, but the mission's state was changed "
@@ -196,7 +199,20 @@ def compare_and_transition(run, intended: Transition):
 
 4. **Forge side effects** (EXECUTE/REVIEW only): PR comments/approval per `03-mission-lifecycle.md` and `06-forge-adapter.md`. **Exception to the ordering:** on REVIEW-approve, the merge (when the mission's repo has `auto_merge` on) runs *before* the status transition — Done is only declared after a real merge; a failed merge lands on `DEVCAKE-MERGE` instead (`03-mission-lifecycle.md` §4.1).
 
-Each completed side effect is appended to `run.finalized_steps` (keys from `orchestrator/steps.py` only — ADR-0034) and the Run file rewritten (atomic tmp+rename), so a crash mid-finalization resumes exactly where it stopped — already-done steps are skipped by their step keys.
+Each completed side effect is appended to `run.finalized_steps` (keys from `orchestrator/steps.py` only — ADR-0034) and the Run file rewritten (atomic tmp+rename). Replay skips durably recorded steps. Remote writes and local checkpoints are not one transaction: a remote write may succeed before its response or the checkpoint is recorded, so an unrecorded step can repeat after restart. Comments and approval requests are not promised exactly-once delivery; merge recovery uses the forge's already-merged handling and state probe.
+
+REVIEW treats a live `canceled` status or `DEVCAKE-SKIP` label as an external
+stop even if the tracker keeps the REVIEW label. After an approval-time crash,
+either stop prevents the resumed run from merging or changing the ticket's
+status/labels; an approval already accepted by the forge is not revoked. Artifacts remain
+available and the run finishes with an external-transition verdict.
+
+When the run has durably recorded its merge, replay does not report that
+merge as out-of-pipeline. Without that receipt, the existing detection still
+runs: a crash between remote merge and local persistence leaves the actor
+uncertain. `tests/test_review_restart.py` covers lost responses, process exits
+at remote writes, PMO completion failure, human stops, and completed replay
+through artifact ingress and startup reconciliation with real run files.
 
 Because the *label swap is the stage-advancing PMO mutation* and scheduling only derives work from live labels, a Mission can never be worked twice concurrently: until the swap lands, the Mission still derives as its old type, and the in-flight guard + grace cycle (§2) keep it out of candidates; after the swap, it derives as the next type. (Feed posts and other non-stage side effects may still land after the swap on some paths — the scheduler keys on the stage label, not on "last write wins.")
 
@@ -208,7 +224,7 @@ Runs every 10 s over all Runs in `dispatched | running`:
 - **Liveness:** a Run in `running` whose last `run.heartbeat` (`09-messaging.md`) is older than 5 minutes triggers a Dagu run-status query; a non-running Dagu status ⇒ Run `failed` (`DEV_KILLED` — the kill-chokepoint catch-all; exit 10/20 `DEV_CRASH` is only stamped when a Dev failure artifact or orphan post-mortem carries that code). A `dispatched` run that never starts within the startup grace (90 s) is treated the same way. Same unresolved + Dagu-dead promote-to-`finalizing` gate as timeout (Dagu is already known dead on this branch).
 
 - **Every kill branch re-reads before it kills.** The loop's snapshot of `store.active()` goes stale at every `await` (earlier kills, the Dagu status probe), so the timeout and liveness branches re-read the record and re-derive their verdict on the FRESH state immediately before killing — a run that finalized, entered finalize, or heartbeat mid-window is left alone. The same guard protects the stalled-finalize branch; `_kill_inner` (`domain/runs.py`) additionally aborts its save (and the mission-status restore) if the state moved during its own teardown awaits — the mover wins.
-- **No mid-run kill on mission terminal:** the watchdog does **not** poll the PMO for `done`/`canceled` mid-run. `EXTERNAL_TRANSITION` is decided only at **finalize**, when compare-and-transition re-reads the live stage label and finds it differs from `stage_label_at_dispatch` (artifacts still post; no further stage mutation).
+- **No mid-run kill on mission terminal:** the watchdog does **not** poll the PMO for `done`/`canceled` mid-run. `EXTERNAL_TRANSITION` is decided at **finalize** by the live stage comparison (§4); REVIEW also stops on a live `canceled` status or `DEVCAKE-SKIP` label even when its stage label remains. Artifacts still post; no further status/label mutation is applied on that external-transition path.
 - **Finalize-stall backstop:** Runs in `finalizing` are never wall-clock-killed while their `run.artifacts` entry can still be redelivered (crash+reclaim resumes them). But if a run is past `timeout_seconds + DEVCAKE_FINALIZE_STALL_SECONDS` (default 3600, age from `created_at`) **and** its entry is no longer on the ingress stream (poison dead-lettered per `15-errors-and-retries.md` §5, or lost), nothing can ever finish it — the watchdog fails it without re-entering finalize, so it stops blocking its mission and holding a concurrency slot.
 
 ## 6. Startup reconciliation (ordered checklist)

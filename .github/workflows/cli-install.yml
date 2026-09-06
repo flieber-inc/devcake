@@ -1,0 +1,44 @@
+name: CLI installation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: Install CLI (${{ matrix.distribution }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        distribution: [wheel, sdist]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Build release artifacts and install into a clean Python 3.12 environment
+        env:
+          DISTRIBUTION: ${{ matrix.distribution }}
+        run: |
+          set -euo pipefail
+          uv python install 3.12
+          uv build --out-dir "$RUNNER_TEMP/cli-dist"
+          uv venv --python 3.12 "$RUNNER_TEMP/cli-installed"
+          if [ "$DISTRIBUTION" = wheel ]; then
+            artifact=("$RUNNER_TEMP/cli-dist/"*.whl)
+          else
+            artifact=("$RUNNER_TEMP/cli-dist/"*.tar.gz)
+          fi
+          test "${#artifact[@]}" -eq 1
+          uv pip install --python "$RUNNER_TEMP/cli-installed/bin/python" "${artifact[0]}"
+      - name: Exercise installed commands outside the checkout
+        run: |
+          "$RUNNER_TEMP/cli-installed/bin/python" scripts/check_cli_install.py \
+            --python "$RUNNER_TEMP/cli-installed/bin/python"

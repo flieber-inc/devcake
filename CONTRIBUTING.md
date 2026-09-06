@@ -81,6 +81,12 @@ reporting: [`SECURITY.md`](SECURITY.md).
 
 ## CI and forks
 
+`cli-install.yml` builds the release wheel and sdist and installs each in a
+clean Python 3.12 environment. It runs the installed entry points from outside
+the checkout, imports shipped modules, and checks help, JSON diagnostics,
+version agreement, and usage/checkout exit codes. It does not start a host
+baker or a production stack; those runtime paths have separate proof.
+
 GitHub Actions for this repository do **not** require custom private org
 secrets for pull-request CI.
 

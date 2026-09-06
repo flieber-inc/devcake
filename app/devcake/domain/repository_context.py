@@ -13,7 +13,7 @@ from typing import Literal
 from ..config import AppConfig, DevType, PMOInstance
 from ..ports.repository_context import RepositoryContextCache
 from .repo_sourcing import (classify_context_failures, memory_mount_names,
-                           skill_source_cards, unresolvable_memory_cards)
+                           resolved_skill_cards, unresolvable_memory_cards)
 
 log = logging.getLogger("devcake.context")
 
@@ -42,7 +42,9 @@ async def prepare_repository_context(
         work_repo=work_repo, mission_type=mission_type, instance=instance,
         blocker_entries=blocker_entries, dev_type=dev_type, config=config))
     sourced.update(extra_repos)
-    skills = {cache.mirror_name_of(n) for n in skill_source_cards(dev_type.skills)}
+    # ADR-0039: skill cards join the union resolved to physical mirror names
+    # — the one spelling of that rule, shared with the launch snapshot
+    skills = resolved_skill_cards(dev_type.skills, cache)
     needed = sorted(sourced | skills)
     memory = set(memory_mount_names(
         instance=instance, dev_type=dev_type, repo_ref=work_repo))

@@ -23,6 +23,7 @@ import os
 import shutil
 import stat
 import time
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -273,7 +274,7 @@ class RepoCache:
         return ""
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
-                   blocker_entries: list[dict],
+                   blocker_entries: list[dict] | None,
                    dev_type=None, config=None) -> list[str]:
         """The mirror-eligible repo set one run must have fresh (docs/07 §5a).
         Sourcing comes from THE shared rule (repo_sourcing.sourced_repo_names,
@@ -331,7 +332,7 @@ class RepoCache:
             self._synced_mono.pop(physical, None)
             log.debug("mirror %s: freshness dropped after an own write", physical)
 
-    async def ensure_fresh(self, names) -> tuple[bool, dict[str, str]]:
+    async def ensure_fresh(self, names: Iterable[str]) -> tuple[bool, dict[str, str]]:
         """Sync every named mirror unless already fresh. (all_ok, {name:
         reason}) — reasons only for failures. NEVER raises; the caller's
         poll segment must survive anything this does."""
@@ -845,7 +846,7 @@ class NullRepoCache:
     def needed_for(self, **_kw) -> list[str]:
         return []
 
-    async def ensure_fresh(self, names) -> tuple[bool, dict[str, str]]:
+    async def ensure_fresh(self, names: Iterable[str]) -> tuple[bool, dict[str, str]]:
         return True, {}
 
     async def tree_head(self, name: str) -> str | None:

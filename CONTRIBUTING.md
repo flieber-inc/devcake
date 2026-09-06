@@ -51,6 +51,12 @@ tree. Prefer `./scripts/pytest_app.sh` or `PYTHONPATH=app` on Python 3.12.
 New behavior is **test-first** at public seams (`app/tests/`, port fakes). See
 [`AGENTS.md`](AGENTS.md) (TDD, SOLID, Always Works™).
 
+The ordinary app suite also runs a focused mypy gate for repository-context
+preparation and its cache Protocol. Static witnesses cover `RepoCache` and
+`NullRepoCache`; a negative case proves an incompatible failure-map signature
+is rejected. This is a scoped contract check, not whole-tree type coverage.
+Run it with `./scripts/pytest_app.sh -k repository_context_types`.
+
 ## Pull requests
 
 - **One intent per PR.** Prefer small, reviewable diffs.

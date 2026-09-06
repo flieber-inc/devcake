@@ -54,6 +54,6 @@ fi
 docker run --rm \
   -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" -e KIND=data \
   -v "$VOLUME":/src:ro -v "$OUT_DIR":/out \
-  -v "$(pwd)/scripts/lib":/lib:ro \
-  "$ALPINE_IMAGE" sh /lib/backup_payload.sh
+  -v "$(pwd)/scripts/lib":/devcake-scripts:ro \
+  "$ALPINE_IMAGE" sh /devcake-scripts/backup_payload.sh
 echo "wrote $OUT_DIR/$OUT_BASE (verified readable) — contains EVERY operator secret in plaintext; store like a password export"

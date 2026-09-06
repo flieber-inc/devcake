@@ -36,6 +36,6 @@ TARFILE="$(basename "$TARBALL")"
 # drill) owns preflight/kind-check/move-aside/extract ordering.
 docker run --rm -e TARFILE="$TARFILE" -e KIND=data \
   -v "$VOLUME":/dst -v "$TARDIR":/in:ro \
-  -v "$(pwd)/scripts/lib":/lib:ro \
-  "$ALPINE_IMAGE" sh /lib/restore_payload.sh
+  -v "$(pwd)/scripts/lib":/devcake-scripts:ro \
+  "$ALPINE_IMAGE" sh /devcake-scripts/restore_payload.sh
 echo "restored $VOLUME from $TARBALL — docker compose up -d to restart the stack"

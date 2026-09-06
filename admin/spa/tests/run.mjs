@@ -36,6 +36,7 @@ const SUITES = [
   "skills_fetch_external.mjs",
   "repo_backed_skills.mjs",
   "settings.mjs",
+  "draft_persistence.mjs",
   "tasks.mjs",
   "hierarchy.mjs",
   "devtypes.mjs",

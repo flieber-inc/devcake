@@ -100,7 +100,9 @@ export default function DraftChrome({ registerNavGuard, health }) {
   const confirmSave = async () => {
     const fromNav = review?.fromNav;
     const ok = await doSave();
-    if (fromNav) fromNav(ok); // proceed only on full success
+    // Keep navigation pending while the results dialog offers a retry.
+    // Closing the dialog cancels it; only a successful save proceeds.
+    if (fromNav && ok) fromNav(true);
   };
 
   const closeReview = () => {
@@ -144,7 +146,7 @@ export default function DraftChrome({ registerNavGuard, health }) {
         results={saveResults}
         onConfirm={confirmSave}
         onCancel={closeReview}
-        onRetry={doSave}
+        onRetry={confirmSave}
       />
       <NavGuardDialog
         open={!!navPrompt}

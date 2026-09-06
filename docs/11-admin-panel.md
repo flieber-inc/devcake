@@ -173,6 +173,13 @@ Internal (zero-repo) missions always auto-merge; operators who want doctrine con
 
 ## 3. Config page — draft/Save model and sections
 
+If **Save & leave** encounters a failed save, the results dialog keeps the
+requested navigation pending. **Retry failed** saves the remaining dirty units
+and leaves only after success; **Close** cancels that navigation and preserves
+the draft. Successful units drop out after the server rebase and are not sent
+again on retry. `admin/spa/tests/draft_persistence.mjs` verifies these behaviors
+through the rendered UI and controlled HTTP responses.
+
 **Unified draft (founder decision, 2026-07-13):** every edit on this page lands in a client-side draft — *nothing* persists until the operator reviews and saves. A **DirtyBar** appears while the draft differs from the server state; **Save** opens a **SaveReviewDialog** listing every pending change (per section) for confirmation, then issues the PUTs (`/config`, `/dev-types/{name}`, `/assignments`) and reports per-section results inline. A **nav guard** intercepts hash navigation away from a dirty draft (revert-and-ask, then replay). Danger confirms (adoption mode, auto-merge) still appear at flip time but only write the draft — the real write happens at Save. The one exception is the sidebar's mission-intake switch, which is deliberately immediate (§0); `dismissed_alerts` writes also bypass the draft (they're UI state, not operator config).
 
 **Multi-select convention (mandatory for new fields):** every field that

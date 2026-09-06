@@ -102,14 +102,50 @@ def test_a_failed_run_reports_in_full():
 
 def test_cost_is_none_because_grok_reports_none():
     # A 0 here would read as "this run was free" in the feed report and would
-    # aggregate as real spend on devcake.cost.usd.
+    # aggregate as real spend on devcake.cost.usd. The 0.2.112 captures carry
+    # no cost field and no cache-creation count: both stay None, never 0.
     report = ep.grok_end_report(ep.grok_end_event(stream("grok_healthy")))
     assert report["cost_usd_native"] is None
     assert report["cost_usd_native"] != 0
+    assert report["cache_write_tokens"] is None
+
+
+def test_newer_cli_cost_and_cache_writes_are_the_clis_own_numbers():
+    """Newer grok CLIs report `cache_creation_input_tokens` under `usage`
+    and a per-model `costUSD` under `modelUsage` (shape observed in the
+    field at 1.0.x). Both are mapped when present: the cost is the sum over
+    the listed models, a reported zero of cache writes is kept as 0 (the
+    vendor's number, not an absence), and a model without a cost figure
+    contributes nothing rather than a zero."""
+    ev = {"type": "end", "stopReason": "EndTurn",
+          "usage": {"input_tokens": 137800, "cache_read_input_tokens": 745984,
+                    "cache_creation_input_tokens": 0, "output_tokens": 10062,
+                    "reasoning_tokens": 4805, "total_tokens": 893846},
+          "num_turns": 13,
+          "modelUsage": {"grok-build": {"inputTokens": 137800, "outputTokens": 10062,
+                                        "cacheReadInputTokens": 745984,
+                                        "cacheCreationInputTokens": 0,
+                                        "modelCalls": 13, "costUSD": 0.190320848},
+                         "grok-fast": {"inputTokens": 10, "outputTokens": 1,
+                                       "modelCalls": 1, "costUSD": 0.0001}}}
+    report = ep.grok_end_report(ev)
+    assert report["source"] == "end_event" and report["model"] == "grok-build"
+    assert report["cache_write_tokens"] == 0
+    assert report["cache_read_tokens"] == 745984
+    assert report["cost_usd_native"] == pytest.approx(0.190420848)
+    # a cost-less model list leaves the figure absent, never 0
+    ev["modelUsage"]["grok-build"].pop("costUSD")
+    ev["modelUsage"]["grok-fast"].pop("costUSD")
+    assert ep.grok_end_report(ev)["cost_usd_native"] is None
+    # cache writes reported as a count are carried through
+    ev["usage"]["cache_creation_input_tokens"] = 4096
+    assert ep.grok_end_report(ev)["cache_write_tokens"] == 4096
 
 
 @pytest.mark.parametrize("name", sorted(WITH_END_EVENT) + WITHOUT_END_EVENT)
 def test_no_grok_capture_carries_any_cost_field(name):
+    # the 0.2.112 captures: no cost field anywhere — the mapper must read
+    # None from them (newer CLIs report one; covered above)
     def costs(node):
         if isinstance(node, dict):
             return any("cost" in str(k).lower() for k in node) \

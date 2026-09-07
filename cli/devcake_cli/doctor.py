@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .paths import find_checkout_root
+from . import envfile
+from .paths import find_checkout_root, read_version_pin
 
 # Stable ids once shipped (ADR-0038 / CAKE-177 plan). Order is intentional.
 CHECK_IDS: tuple[str, ...] = (
@@ -360,6 +361,43 @@ def check_digest_lockstep(*, repo_root: Path | None) -> CheckResult:
     )
 
 
+def check_version_pin(*, repo_root: Path | None) -> CheckResult:
+    """The checkout's release pin (`VERSION`) against the tag the stack was
+    brought up under (`DEVCAKE_TAG` in `.env`, written by `devcake up`). A
+    drift means the running images are not the checkout's release; the
+    remedy is one command. Soft: a scratch build (a process-env override)
+    drifts on purpose."""
+    if repo_root is None:
+        return CheckResult(id="version_pin", ok=False, hard=False,
+                           detail="no checkout — cannot read VERSION")
+    pinned = read_version_pin(repo_root)
+    if not pinned:
+        return CheckResult(
+            id="version_pin", ok=False, hard=False,
+            detail=("VERSION missing at the checkout root — the image tag falls "
+                    "back to latest. A release checkout carries its own pin "
+                    "(CONTRIBUTING.md, Cutting a release)."))
+    env_path = repo_root / ".env"
+    running = ""
+    if env_path.is_file():
+        running = (envfile.parse_env_file(env_path).get("DEVCAKE_TAG") or "").strip()
+    if not running:
+        return CheckResult(
+            id="version_pin", ok=True, hard=False,
+            detail=f"checkout pins {pinned}; no stack brought up yet "
+                   f"(.env carries no DEVCAKE_TAG) — devcake up --bake all")
+    if running != pinned:
+        override = os.environ.get("DEVCAKE_TAG", "").strip()
+        why = (" (a DEVCAKE_TAG override is set in this shell)"
+               if override == running else "")
+        return CheckResult(
+            id="version_pin", ok=False, hard=False,
+            detail=(f"checkout pins {pinned} but the stack was brought up under "
+                    f"{running}{why} — run: devcake up --bake all"))
+    return CheckResult(id="version_pin", ok=True,
+                       detail=f"checkout pins {pinned} and the stack runs under it")
+
+
 def check_user_session_linger(
     *,
     run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
@@ -554,6 +592,7 @@ def run_checks(
         check_buildx(run=run),
         check_checkout_layout(repo_root=root),
         check_digest_lockstep(repo_root=root),
+        check_version_pin(repo_root=root),
         check_user_session_linger(run=run),
         check_ports(probe=port_probe),
         check_baker_liveness(repo_root=root),

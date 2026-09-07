@@ -821,6 +821,13 @@ until that run exists, field evidence below stays operator-self-reported.
   on the pair; `.env` is written, never read, for the tag. The "re-pin the
   host" chore after every release becomes `git checkout vX.Y.Z && devcake
   up --bake all`. CLI 0.1.4. Docs 13, AGENTS, CONTRIBUTING.
+- **Hardenings after the demand campaign** (2026-09-07, founder ask):
+  `status`/`doctor` drift check between `VERSION` and the running tag plus
+  a `Release pin` tag guard; `/health.discovery_drain(_warnings)` so leads
+  that nobody routes surface as an Overview warning instead of silence;
+  the merge window hands off after the second failed probe in a row, not
+  the first; `CRITICAL_BOUNDED_WAIT_S` on the port replaces five literals.
+  Docs 03/04/06/11/15, CONTRIBUTING.
 
 ### Field evidence (receipted)
 

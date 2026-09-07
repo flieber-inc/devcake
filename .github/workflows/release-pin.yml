@@ -1,0 +1,37 @@
+# A release tag must sit on the commit that bumped the checkout's pin.
+# CONTRIBUTING.md "Cutting a release": one PR bumps VERSION with the
+# changelog; the tag goes on its merge commit. This gate refuses a `v*` tag
+# whose name differs from VERSION, and re-runs the VERSION↔CHANGELOG check
+# (scripts/check_version_pin.py) on the tagged tree. CLI tags (`cli-v*`) are
+# gated by release-cli.yml the same way.
+name: Release pin
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    name: Tag matches VERSION and the changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: The tag names the checkout's pin
+        run: |
+          set -euo pipefail
+          want="${GITHUB_REF_NAME}"
+          have="$(tr -d '[:space:]' < VERSION)"
+          if [ "$want" != "$have" ]; then
+            echo "tag ${want} but VERSION is ${have} — a release tag goes on the commit that bumped VERSION" >&2
+            exit 1
+          fi
+          echo "tag ${want} matches VERSION"
+
+      - name: VERSION matches the changelog
+        run: python3 scripts/check_version_pin.py

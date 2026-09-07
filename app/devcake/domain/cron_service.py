@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 from ..config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
                       intake_blocks_dispatch, memory_bound_names)
 from ..ports.cron import CronStore
-from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
+from ..ports.pmo import (CRITICAL_BOUNDED_WAIT_S, PMOTransient, pmo_call,
+                        with_pmo_call)
 from . import claims as claims_mod
 from .model import LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW
 from .orchestrator.board import retire_snapshot
@@ -154,7 +155,7 @@ class CronService:
                 try:
                     # ADR-0040: a scheduled ticket launches work — critical
                     # class, short wait (this runs inside the poll cycle)
-                    with pmo_call("critical", wait_budget_s=20):
+                    with pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S):
                         created = await self.fire(row.id, automatic=True)
                     self.store.record(
                         row.id, "created" if created else "skipped",
@@ -175,7 +176,7 @@ class CronService:
             except Exception:  # noqa: BLE001 — ledger/window faults stay isolated
                 log.exception("cron %s automatic pass failed", row.id)
 
-    @with_pmo_call("critical", wait_budget_s=20)   # a ticket launches work (ADR-0040); Run now included
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)   # a ticket launches work (ADR-0040); Run now included
     async def fire(self, job_id: str, *, automatic: bool) -> list[dict]:
         """Create tickets. `automatic=False` is Run now (F4: no empty skip).
         Automatic outcomes are recorded by maybe_fire (one per window); a

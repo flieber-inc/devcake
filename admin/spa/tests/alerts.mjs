@@ -174,6 +174,23 @@ check("claims-queue-capped alert names Policies → Counting budgets", () => {
   assert.doesNotMatch(hit.body, /Limits →/);
 });
 
+// Leads waiting with no discovery run (docs/11): a dismissable warning that
+// names the board and carries the advisory text verbatim.
+check("discovery leads waiting with no drain run is a dismissable warning", () => {
+  const alerts = deriveAlerts({
+    discovery_drain_warnings: {
+      eng: "3 mission(s) hold discovery leads no steward run has routed — last discovery run never",
+    },
+  });
+  const hit = alerts.find((a) => a.id === "discovery-drain");
+  assert.ok(hit, "discovery-drain alert missing");
+  assert.equal(hit.severity, "warning");
+  assert.equal(hit.dismissable, true);
+  assert.match(hit.title, /not being routed/);
+  assert.match(hit.body, /eng: 3 mission/);
+  assert.equal(deriveAlerts({}).find((a) => a.id === "discovery-drain"), undefined);
+});
+
 if (failed) {
   console.error(`alerts.mjs: ${failed} check(s) failed`);
   process.exit(1);

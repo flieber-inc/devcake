@@ -36,6 +36,7 @@ _EXPECTED_CHECK_IDS = (
     "buildx",
     "checkout_layout",
     "digest_lockstep",
+    "version_pin",
     "user_session_linger",
     "ports",
     "baker_liveness",
@@ -111,3 +112,36 @@ def test_doctor_failure_prints_remedy_human(monkeypatch, tmp_path, capsys):
     # it already ran usermod / enable-linger.
     assert "usermod" not in text.lower() or "do not run" in text.lower() or "printed" in text.lower() or "sudo" not in text
     assert "enable-linger" not in text or "loginctl enable-linger" in text
+
+
+def test_version_pin_check_reports_drift_between_checkout_and_stack(tmp_path, monkeypatch):
+    """docs/13: the checkout's VERSION is the pin; `.env`'s DEVCAKE_TAG is what
+    the stack was brought up under. Agreement is ok; a drift is a soft fail
+    with the one-line remedy; a missing pin or no stack are soft too."""
+    from test_devcake_cli_setup import _ensure_cli_importable
+    _ensure_cli_importable()
+    from devcake_cli import doctor
+
+    monkeypatch.delenv("DEVCAKE_TAG", raising=False)
+    missing = doctor.check_version_pin(repo_root=tmp_path)
+    assert missing.id == "version_pin" and not missing.ok and not missing.hard
+    assert "VERSION missing" in missing.detail
+
+    (tmp_path / "VERSION").write_text("v0.5.9\n")
+    fresh = doctor.check_version_pin(repo_root=tmp_path)
+    assert fresh.ok and not fresh.hard and "no stack brought up yet" in fresh.detail
+
+    (tmp_path / ".env").write_text("ADMIN_USER=a\nDEVCAKE_TAG=v0.5.8\n")
+    drift = doctor.check_version_pin(repo_root=tmp_path)
+    assert not drift.ok and not drift.hard
+    assert "pins v0.5.9" in drift.detail and "under v0.5.8" in drift.detail
+    assert "devcake up --bake all" in drift.detail
+
+    (tmp_path / ".env").write_text("ADMIN_USER=a\nDEVCAKE_TAG=v0.5.9\n")
+    same = doctor.check_version_pin(repo_root=tmp_path)
+    assert same.ok and same.hard and "runs under it" in same.detail
+
+    monkeypatch.setenv("DEVCAKE_TAG", "abc1234")               # a scratch build
+    (tmp_path / ".env").write_text("DEVCAKE_TAG=abc1234\n")
+    scratch = doctor.check_version_pin(repo_root=tmp_path)
+    assert not scratch.ok and "override is set in this shell" in scratch.detail

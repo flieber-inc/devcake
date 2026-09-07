@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...config import AppConfig, DevType
-from ...ports.pmo import PMOPort, with_pmo_call
+from ...ports.pmo import CRITICAL_BOUNDED_WAIT_S, PMOPort, with_pmo_call
 from ..blocker_locator import LEGACY_PMO_REFS
 from ..runs import RunManager
 
@@ -149,6 +149,11 @@ class MissionManager:
         # a terminal answer on a memoized number is confirmed by the lookup
         # before the sweep writes.
         self._merge_pr_numbers: dict[str, int] = {}
+        # pmo_id → admitted attempts past the merge window that did not
+        # merge (docs/03 §4.1): the second in a row hands off, so one
+        # transient forge error cannot end a mission's automation. Process-
+        # local; pruned when the mission leaves MERGE.
+        self._merge_closing_attempts: dict[str, int] = {}
         # AUD-005: per-cycle scratch — pmo_ids whose parked-merge window was
         # actually driven this sweep, so a repo's OFF→ON re-arm is cleared only
         # once every parked mission on it was reached (not on a PR-lookup miss).
@@ -229,14 +234,14 @@ class MissionManager:
     async def schedule(self, missions: list[Mission], gate: dict[str, str] | None = None):
         return await schedule.schedule(self, missions, gate)
 
-    @with_pmo_call("critical", wait_budget_s=20)
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)
     async def dispatch(self, mission: Mission, mtype: MissionType, dev_type: DevType):
         return await dispatch.dispatch(self, mission, mtype, dev_type)
 
     def runspec_secret_payload(self, run: Run):
         return dispatch.runspec_secret_payload(self, run)
 
-    @with_pmo_call("critical", wait_budget_s=20)
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)
     async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
         return await activity_payload_mod.activity_payload(self, pmo_id, kind)
 
@@ -261,14 +266,14 @@ class MissionManager:
     def dev_failure_error(self, run: Run, payload: dict):
         return finalize.dev_failure_error(self, run, payload)
 
-    @with_pmo_call("critical", wait_budget_s=20)   # a status revert is write-back, not enumeration
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)   # a status revert is write-back, not enumeration
     async def restore_after_failure(self, run: Run):
         return await finalize.restore_after_failure(self, run)
 
     async def sweeps(self, missions: list[Mission]):
         return await sweeps.sweeps(self, missions)
 
-    @with_pmo_call("critical", wait_budget_s=20)
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)
     async def dispatch_steward(self, dev_type: DevType, missions: list[Mission],
                                context_stale=frozenset(),
                                context_omit=frozenset()):
@@ -276,7 +281,7 @@ class MissionManager:
             self, dev_type, missions,
             context_stale=context_stale, context_omit=context_omit)
 
-    @with_pmo_call("critical", wait_budget_s=20)
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)
     async def dispatch_steward_discovery(self, dev_type: DevType, family,
                                          pending: dict,
                                          context_stale=frozenset(),

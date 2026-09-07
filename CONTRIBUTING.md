@@ -126,9 +126,14 @@ host deploys a release by checking out its tag and running `devcake up`
    When `cli/` changed, bump both CLI version strings (`pyproject.toml`,
    `cli/devcake_cli/__init__.py`) in the same PR.
 2. Merge it; tag the merge commit `vX.Y.Z` and publish the GitHub release
-   from it with prose notes (`--latest`). When the CLI was bumped, also push
-   `cli-v<version>` on the same commit — that tag publishes to PyPI.
+   from it with prose notes (`--latest`). The `Release pin` workflow refuses
+   a `v*` tag whose name differs from `VERSION` on the tagged commit. When
+   the CLI was bumped, also push `cli-v<version>` on the same commit — that
+   tag publishes to PyPI.
 3. Hosts: `git checkout vX.Y.Z && devcake up --bake all`. Nothing to edit.
+   `devcake status` and `devcake doctor` report a drift between the
+   checkout's pin and the tag the stack runs under, with that command as
+   the remedy.
 
 ## Further reading
 

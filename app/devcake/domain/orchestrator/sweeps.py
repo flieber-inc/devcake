@@ -26,6 +26,9 @@ tracer = trace.get_tracer("devcake")
 # pages — past the cap the witness proves nothing and the memo is dropped
 FEED_DELTA_OVERLAP = timedelta(seconds=60)
 FEED_DELTA_MAX_PAGES = 10
+# admitted attempts past the merge window that may fail before the hand-off
+# (docs/03 §4.1): two, so a single transient forge error is not terminal
+CLOSING_ATTEMPTS = 2
 
 
 def _feed_delta_supported(mgr) -> bool:
@@ -90,6 +93,8 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     mgr._merge_window_closed &= merge_ids
     mgr._merge_pr_numbers = {k: v for k, v in mgr._merge_pr_numbers.items()
                              if k in merge_ids}
+    mgr._merge_closing_attempts = {
+        k: v for k, v in mgr._merge_closing_attempts.items() if k in merge_ids}
     # needs-human advisories: rebuilt wholesale from the label each cycle
     # (restart-safe; clears the moment the human removes the label)
     mgr.needs_human = {
@@ -380,11 +385,11 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
     verdict = await forge.mergeable(pr.number)
     if verdict is None:
         if elapsed:
-            # still computing past the window: that is the hand-off case
+            # still computing past the window: a closing attempt that did
+            # not merge (the second in a row hands off)
             with tracer.start_as_current_span("sweep.merge_retry") as span:
                 span.set_attribute("devcake.mission.key", m.key)
-                _mark_window_exhausted(span, window)
-                await _hand_off_exhausted(mgr, m, pr_url, window)
+                await _closing_attempt_failed(mgr, m, pr_url, window, span)
         return  # still computing / CI running — next cycle re-reads
     # a False verdict can be a non-blocking "behind" (strict up-to-date
     # rules are what make it fail) — one plain merge attempt is far
@@ -420,10 +425,9 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                     mgr.merge_handoffs[m.pmo_id] = (
                         f"{m.key}: awaiting human merge — {pr_url}")
             elif elapsed:
-                # the closing attempt did not merge and it was no conflict:
-                # the window ran its course
-                _mark_window_exhausted(span, window)
-                await _hand_off_exhausted(mgr, m, pr_url, window)
+                # a closing attempt that did not merge and was no conflict:
+                # the second in a row hands off
+                await _closing_attempt_failed(mgr, m, pr_url, window, span)
             else:
                 # state may have moved under us; next cycle re-reads
                 span.set_attribute("devcake.outcome", "merge_failed_transient")
@@ -459,6 +463,22 @@ async def _hand_off_exhausted(mgr, m: Mission, pr_url: str,
             f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
     mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
     mgr._merge_window_closed.add(m.pmo_id)
+
+
+async def _closing_attempt_failed(mgr, m: Mission, pr_url: str, window: int,
+                                  span) -> None:
+    """An admitted attempt past the window did not merge. The second in a
+    row hands off — one transient forge error must not end a mission's
+    automation, and a forge that says "still computing" twice past the
+    window has had its chance. The count is process-local and pruned when
+    the mission leaves MERGE; a restart grants at most one extra attempt."""
+    n = mgr._merge_closing_attempts.get(m.pmo_id, 0) + 1
+    mgr._merge_closing_attempts[m.pmo_id] = n
+    if n < CLOSING_ATTEMPTS:
+        span.set_attribute("devcake.outcome", "closing_attempt_failed")
+        return
+    _mark_window_exhausted(span, window)
+    await _hand_off_exhausted(mgr, m, pr_url, window)
 
 
 async def tracking_sweep(mgr, m: Mission) -> None:

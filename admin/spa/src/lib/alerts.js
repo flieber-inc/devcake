@@ -217,6 +217,24 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // Discovery leads waiting with nothing routing them (docs/11): the
+  // steward's back-off replaced a latch that stayed silent for days; this
+  // names the board and how long since its last discovery run. Warning,
+  // dismissable: the drain resumes on its own once the cause is gone.
+  const drainWarnings = Object.entries(health.discovery_drain_warnings || {});
+  if (drainWarnings.length > 0) {
+    alerts.push({
+      id: "discovery-drain",
+      severity: "warning",
+      dismissable: true,
+      title:
+        drainWarnings.length === 1
+          ? "Discovery leads are not being routed"
+          : `Discovery leads are not being routed on ${drainWarnings.length} boards`,
+      body: drainWarnings.map(([name, msg]) => `${name}: ${msg}`).join(" · "),
+    });
+  }
+
   if (Object.keys(health.anomalies || {}).length > 0) {
     alerts.push({
       id: "anomalies",

@@ -106,13 +106,36 @@ devcake_ws_host {env_path.as_posix()!r} {repo.as_posix()!r}
     return ws
 
 
-def resolve_tag(env_path: Path) -> str:
+def read_version_pin(repo: Path) -> str:
+    """The committed release pin: `VERSION` at the checkout root, or ""."""
+    try:
+        return (repo / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def resolve_tag(env_path: Path, repo: Path | None = None) -> str:
+    """The image tag bake and compose run under. The checkout's `VERSION`
+    file is the pin — cutting a release bumps it together with the
+    changelog — so an operator never edits `.env` for it; `devcake up`
+    writes the resolved value INTO `.env` so a later plain `docker compose`
+    stays lockstep. A `DEVCAKE_TAG` in the process environment overrides it
+    for development builds (a short sha, a scratch label). `.env`'s own
+    value is never a source: a stale pin there is rewritten, not obeyed."""
     tag = os.environ.get("DEVCAKE_TAG", "").strip()
     if tag:
         return tag
+    pinned = read_version_pin(repo) if repo is not None else ""
+    return pinned or "latest"
+
+
+def stale_env_tag(env_path: Path, tag: str) -> str:
+    """A `DEVCAKE_TAG` in `.env` that disagrees with the resolved tag, or ""."""
+    if not env_path.is_file():
+        return ""
     data = envfile.parse_env_file(env_path)
-    tag = (data.get("DEVCAKE_TAG") or "").strip()
-    return tag or "latest"
+    stale = (data.get("DEVCAKE_TAG") or "").strip()
+    return stale if stale and stale != tag else ""
 
 
 def _log(msg: str, *, as_json: bool) -> None:
@@ -150,10 +173,17 @@ def prepare_env(
         )
 
     ws_host = resolve_ws_host(repo, env_path)
-    tag = resolve_tag(env_path)
+    tag = resolve_tag(env_path, repo)
     _log(gid_line, as_json=opts.as_json)
     _log(f"── DEVCAKE_WS_HOST={ws_host}", as_json=opts.as_json)
-    _log(f"── DEVCAKE_TAG={tag}  (bake + compose lockstep)", as_json=opts.as_json)
+    source = ("process env" if os.environ.get("DEVCAKE_TAG", "").strip()
+              else "the checkout's VERSION" if read_version_pin(repo) else "default")
+    _log(f"── DEVCAKE_TAG={tag}  ({source}; bake + compose lockstep)",
+         as_json=opts.as_json)
+    stale = stale_env_tag(env_path, tag)
+    if stale:
+        _log(f"── .env carried DEVCAKE_TAG={stale}; the pin lives in the "
+             f"checkout now and .env is rewritten to {tag}", as_json=opts.as_json)
 
     env_seeded = False
     env_generated: list[str] = []

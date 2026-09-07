@@ -37,6 +37,9 @@ jobs:
       - name: Assert image digests pinned
         run: python3 scripts/check_image_pins.py
 
+      - name: Assert the release pin matches the changelog
+        run: python3 scripts/check_version_pin.py
+
       - name: Test hermetic admin helpers
         run: npm run test:helpers --prefix admin/spa
 

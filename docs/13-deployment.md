@@ -330,15 +330,16 @@ DAG's `name:` keys (ADR-0025), with the human-readable run id format of
 | `devcake/dev-qwen-code` | `qwen-code` | `./images` → `qwen-code` | 〃 |
 | `devcake/dev-hello` | `hello` | `./images` → `hello` | CI stub |
 
-`TAG` / `DEVCAKE_TAG` default to `latest`. Pin a release with:
+The release pin is **the checkout's `VERSION` file** (a release tag such as `v0.5.9`), bumped together with the changelog when a release is cut (`CONTRIBUTING.md`, "Cutting a release"; CI refuses a drift between the two). `devcake up` resolves the tag once — a `DEVCAKE_TAG` in the process environment for development builds, else `VERSION`, else `latest` — exports it for bake + compose, and **writes it into `.env`** so a later plain `docker compose up -d` stays lockstep. `.env` is never a source for it: a value set there by hand is rewritten on the next `devcake up`, and `up` says so. Deploying a release is therefore:
 
 ```bash
-export DEVCAKE_TAG=$(git rev-parse --short HEAD)
-devcake up --bake all         # preferred: upserts pin into .env + bake + compose
-# or, without the CLI:
-docker buildx bake all
-docker compose up -d          # needs DEVCAKE_TAG still exported or in .env
+git checkout v0.5.9            # the release checkout carries its own pin
+devcake up --bake all          # bake + compose under that tag; .env updated
+# without the CLI:
+export DEVCAKE_TAG=$(cat VERSION); docker buildx bake all; docker compose up -d
 ```
+
+A development build tags itself explicitly: `DEVCAKE_TAG=$(git rev-parse --short HEAD) devcake up --bake all`.
 
 Harness image tags follow **`DEVCAKE_TAG`** (same as app/admin — default `latest`): empty pin is `devcake/dev-*:${DEVCAKE_TAG}`; an explicit `cli_version` is `devcake/dev-*:${DEVCAKE_TAG}-${cli_version}` so two pins on one template cannot collide. Dispatch, steward, and OAuth go through **`resolve_image(dev_type)`** and **`require_staffed`**: every registry template refuses unless `/data/harness_receipts` has an `ok` receipt whose digest equals the app's `DEVCAKE_APP_DIGEST` ARG. Hello stays `HELLO_IMAGE` and is not gated. Bare `bake app` leaves the sentinel `DEVCAKE_APP_DIGEST_UNSET`; `devcake up --bake` computes `scripts/app_digest.py` and passes it to the app target and the host baker. `devcake up` **upserts** the resolved `DEVCAKE_TAG` into `.env` (with `DOCKER_GID` / `DEVCAKE_WS_HOST`) so a later plain `docker compose up -d` stays lockstep without re-exporting the pin.
 

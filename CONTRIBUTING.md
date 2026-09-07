@@ -113,6 +113,23 @@ image publish attaches Bake SBOM metadata. There is **no** committed tree-wide
 SBOM or continuous full-repo SBOM pipeline. Details:
 [`SECURITY.md`](SECURITY.md).
 
+## Cutting a release
+
+The release pin lives in the checkout, not in any host's `.env`: `VERSION`
+at the repo root is the tag `devcake up` bakes and runs images under, and a
+host deploys a release by checking out its tag and running `devcake up`
+(`docs/13-deployment.md`). Cutting a release is one change plus a tag:
+
+1. One PR: move the `Unreleased` changelog entries under a new
+   `## vX.Y.Z (date)` section with their PR numbers, and bump `VERSION` to
+   `vX.Y.Z`. CI refuses a drift between the two (`scripts/check_version_pin.py`).
+   When `cli/` changed, bump both CLI version strings (`pyproject.toml`,
+   `cli/devcake_cli/__init__.py`) in the same PR.
+2. Merge it; tag the merge commit `vX.Y.Z` and publish the GitHub release
+   from it with prose notes (`--latest`). When the CLI was bumped, also push
+   `cli-v<version>` on the same commit — that tag publishes to PyPI.
+3. Hosts: `git checkout vX.Y.Z && devcake up --bake all`. Nothing to edit.
+
 ## Further reading
 
 | Topic | Doc |

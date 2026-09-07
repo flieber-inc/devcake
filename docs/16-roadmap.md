@@ -815,6 +815,12 @@ until that run exists, field evidence below stays operator-self-reported.
   before the sweep writes. Field receipt that prompted it: on a host the
   merge sweep was the only forge traffic besides the health page's
   branch-protection probe. Docs 03/04.
+- **Release pin in the checkout** (2026-09-07, founder ask): `VERSION` at
+  the repo root is the tag `devcake up` bakes and runs under; a release
+  bumps it with the changelog and `scripts/check_version_pin.py` gates CI
+  on the pair; `.env` is written, never read, for the tag. The "re-pin the
+  host" chore after every release becomes `git checkout vX.Y.Z && devcake
+  up --bake all`. CLI 0.1.4. Docs 13, AGENTS, CONTRIBUTING.
 
 ### Field evidence (receipted)
 

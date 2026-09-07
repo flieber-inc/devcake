@@ -141,7 +141,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 
 - Build/rebuild with `docker buildx bake` / `bake all` / `bake images` (see `docker-bake.hcl`).
 - After changing `app/`, `admin/`, or `images/`, rebake the affected targets (or `bake all`).
-- Keep app/admin tags aligned with compose: `DEVCAKE_TAG` (default `latest`) in bake and compose.
+- Keep app/admin tags aligned with compose: `DEVCAKE_TAG` in bake and compose — the checkout's `VERSION` file pins it (bumped with the changelog at every release; CI refuses a drift), `devcake up` writes it into `.env`.
 - For **new behavior**: red→green TDD first (see **Engineering standards**), then bake/prove Always Works™.
 
 ### Do not
@@ -182,19 +182,19 @@ docker buildx bake all && docker compose up -d
 # before devcake up — stop dagu first: docker compose stop dagu && devcake up --bake
 ```
 
-Optional tag pin (bake and compose must match):
+The tag pin (bake and compose must match) is the checkout's `VERSION` file;
+a development build overrides it from the process environment:
 
 ```bash
-export DEVCAKE_TAG=$(git rev-parse --short HEAD)
-devcake up --bake all            # upserts pin into .env + bake + compose
+DEVCAKE_TAG=$(git rev-parse --short HEAD) devcake up --bake all   # scratch build
+devcake up --bake all            # a release checkout: VERSION pins the tag
 # or without devcake up:
-docker buildx bake all
-docker compose up -d          # needs export still set, or DEVCAKE_TAG in .env
+export DEVCAKE_TAG=$(cat VERSION); docker buildx bake all; docker compose up -d
 ```
 
-`devcake up` resolves `DEVCAKE_TAG` once (process env > `.env` > `latest`),
-exports it for bake + compose, and **upserts it into `.env`** so a later plain
-`docker compose up -d` stays lockstep. Compose passes the pin into the app
+`devcake up` resolves `DEVCAKE_TAG` once (process env > `VERSION` > `latest`;
+`.env` is never a source), exports it for bake + compose, and **writes it into
+`.env`** so a later plain `docker compose up -d` stays lockstep. Compose passes the pin into the app
 container, and **dispatch derives the harness image tags from it**
 (`app/devcake/harness.py`). An app container recreated with neither export nor
 `.env` pin falls back to `:latest` for app, admin, *and* dispatched harnesses.

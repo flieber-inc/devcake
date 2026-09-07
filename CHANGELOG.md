@@ -16,6 +16,16 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — the release pin lives in the checkout, not in `.env`.** A
+  `VERSION` file at the repo root names the release tag `devcake up`
+  bakes and runs images under; cutting a release bumps it together with
+  the changelog, and CI refuses a drift between the two. `devcake up`
+  resolves the tag as process env (development builds) > `VERSION` >
+  `latest`, writes it into `.env` for plain `docker compose`, and no
+  longer reads `.env` for it — a value set there by hand is rewritten and
+  reported, never obeyed. Deploying a release is `git checkout vX.Y.Z &&
+  devcake up --bake all`. Ships as `devcake-cli` 0.1.4.
+
 ## v0.5.9 (2026-09-07)
 
 Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.3.

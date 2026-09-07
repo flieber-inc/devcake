@@ -186,8 +186,10 @@ class MissionManager:
     def _trip_breaker(self, name: str, reason: str):
         return feed._trip_breaker(self, name, reason)
 
-    async def _feed(self, pmo_id: str, kind: str, markdown: str, *, externalize: bool = True):
-        return await feed._feed(self, pmo_id, kind, markdown, externalize=externalize)
+    async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
+                    externalize: bool = True, reply_to: str | None = None):
+        return await feed._feed(self, pmo_id, kind, markdown,
+                                externalize=externalize, reply_to=reply_to)
 
     async def _checkpoint(self, run: Run, key: str, fn):
         return await finalize._checkpoint(self, run, key, fn)

@@ -42,6 +42,7 @@ class FakePMO:
             attachments_supported=getattr(self, "attachments_supported", True),
             comment_max_chars=getattr(self, "comment_max_chars", None),
             feed_delta=getattr(self, "feed_delta", False),
+            feed_threads=getattr(self, "feed_threads", False),
         )
 
     async def feed_changes_since(self, team_ref, since, *, limit_pages):
@@ -76,7 +77,7 @@ class FakePMO:
         self._check_ref(ref)
         return self.mission
 
-    async def post_feed(self, ref, markdown):
+    async def post_feed(self, ref, markdown, *, reply_to=None):
         self._check_ref(ref)
         limit = getattr(self, "comment_max_chars", None)
         if limit is not None and len(markdown) > limit:
@@ -85,8 +86,14 @@ class FakePMO:
         if ref.kind == "project":
             self.project_updates = getattr(self, "project_updates", [])
             self.project_updates.append((ref.pmo_id, markdown))
-        else:
-            self.comments.append(markdown)
+            return None
+        self.comments.append(markdown)
+        # vendor entry id + parent, for the threading asserts: the
+        # chokepoint hands reply_to over only when feed_threads is True
+        cid = f"c{len(self.comments)}"
+        self.threads = getattr(self, "threads", [])
+        self.threads.append((cid, reply_to))
+        return cid
 
     async def swap_labels(self, ref, remove, add):
         self._check_ref(ref)

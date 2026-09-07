@@ -172,6 +172,9 @@ RUN_SCALAR_COLUMNS = {
     "schema_version", "run_id", "mission_key", "mission_pmo_id", "pmo_kind",
     "pmo_ref", "repo_ref", "mission_type", "dev_type", "seq",
     "attempt_of_step", "stage_label_at_dispatch", "branch", "spec_prompt",
+    # ADR-0014 addendum — the transcript comment's vendor id, the step's
+    # thread anchor; TEXT DEFAULT '' in DDL (deliberate widening)
+    "feed_anchor",
     # steward_duty: ADR-0033 flavor discriminator — deliberate widening
     "steward_duty",
     # CAKE-167: compact steward finalize line for Runs-tab hover

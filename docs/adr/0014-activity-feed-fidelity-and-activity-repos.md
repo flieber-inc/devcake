@@ -54,3 +54,49 @@ Every mission gets **its own repo** `activity-{instance}-{key}` in the operator 
 - The activity payload builder becomes push-then-clone instead of pure Redis; the Redis path remains as the documented degraded mode. A future optimization (roadmap): build incrementally against the repo's last-pushed state instead of re-downloading every asset each step.
 - Docs drift to ride the implementation PRs: docs/02 §8 (quoting + hardened scans), docs/03 §7, docs/05 §3/§4 (deep fetch, native attachments), docs/07 §1/§2/§5 (folder contract, MISSION.md, clone-first materialization), docs/16 (un-discard note pointing here), docs/14.
 - **Phases:** 0 = Decision 2 (standalone PR, blocking); 1 = Decision 1 (capture + flip); 2 = Decision 3 (folder contract); 3 = Decision 4 (repos + Clear + fallback). Each phase is independently shippable; 1–3 change what Devs and operators see and should be live-verified on the Linear sandbox per Always Works™.
+
+## Addendum — one thread per step: bookkeeping replies to the transcript comment
+
+Decision 1 fixed the step-end contract on the feed: the transcript comment
+(🧾, last message inline, full dump attached), then the token report (🧮),
+then the step's discovery harvest (🔎, ADR-0033). Read on a board, every
+step therefore costs three top-level entries, two of them bookkeeping a
+person rarely opens. Where the vendor threads comments (`feed_threads`,
+docs/05 §1) the report and the harvest are now posted as **replies to the
+step's transcript comment**, one thread per step, the transcript staying
+top level.
+
+Nothing about the contract changes: the same entries with the same bodies,
+markers, sentinel and order are posted, the answer comment stays top level
+and visible, and every scan reads a reply as an ordinary entry of the
+issue's feed. Decision 3's faithful mirror renders DevCake's own replies
+exactly as top-level entries, so the Dev's `ACTIVITY.md` is the same file on
+a threading vendor and on a flat one; people's replies keep their `↳ reply
+to` line. The anchor is the transcript comment's vendor id, saved on the run
+with the transcript checkpoint so a redelivered finalize threads the same
+way; a vendor that returns no id, or declares no threads, leaves the step
+flat. Steward deliveries, routing receipts, hand-offs and PR links stay top
+level — a later addendum may fold the steward's own bookkeeping the same
+way once its shape has settled.
+
+Three vendor facts verified live on Linear shape the guards. A reply to a
+reply is rejected ("incorrect parent"), so the anchor is always the
+top-level transcript comment. A reply whose anchor a person has deleted is
+rejected ("entity not found"), so the feed chokepoint lands such a post
+top level and audits `feed_thread_fallback` — a deleted bookkeeping comment
+must never fail a step's close, and the flat post is exactly the pre-thread
+behaviour; vendor transients still propagate and retry as before. A reply
+does not move the issue's `updated_at`, so the feed memo's `updated_at` arm
+cannot notice a person's reply inside a thread; the feed-changes witness
+(ADR-0033 addendum) lists replies, and the memoized scans read only
+DevCake's own top-level markers, so nothing DevCake decides on rides that
+arm. The dispatch-time mirror and the Freshness Gate read the feed in full,
+never through the memo, so a person's reply reaches the next Dev as any
+comment does.
+
+Rejected — one running ledger thread per mission (every report under a
+single "bookkeeping" comment): shorter boards, but the ledger comment would
+have to be minted and found again on every step (a scan, or a fourth
+persisted id per mission), and a reader loses the pairing between a step
+and its cost. The transcript already exists per step; anchoring on it costs
+nothing new.

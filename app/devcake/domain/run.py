@@ -138,6 +138,11 @@ class Run(BaseModel):
     # forge absent / empty feed → the Freshness Gate falls back to
     # entry-ts > created_at.
     feed_watermark: dict[str, str] = Field(default_factory=dict)
+    # the PMO entry id of this run's transcript comment: the step's
+    # bookkeeping posts (token report, discovery harvest) nest under it on
+    # vendors with `feed_threads`, so a redelivered finalize threads the
+    # same way. "" ⇒ top level (vendor returned no id, or no threads).
+    feed_anchor: str = ""
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on

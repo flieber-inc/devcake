@@ -47,8 +47,14 @@ class PMOPort(Protocol):
         # page cap; raises NotImplementedError unless capabilities().feed_delta
 
     # ── writes ──
-    async def post_feed(self, ref: MissionRef, markdown: str) -> None: ...
+    async def post_feed(self, ref: MissionRef, markdown: str, *,
+                        reply_to: str | None = None) -> str | None: ...
         # kind-appropriate channel: issue → comment, project → project update.
+        # Returns the created entry's id (the entry_id a later get_activity
+        # reports), None when the vendor returns none. `reply_to` nests the
+        # entry under an earlier top-level one where capabilities().feed_threads
+        # — the domain passes it only then; flat vendors accept and ignore it
+        # (03 §8: threading is presentation, never content).
         # Feed POLICY (redaction, sentinel, suppression) is the orchestrator's
         # job; transport is the adapter's.
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
@@ -109,8 +115,9 @@ class PMOCapabilities(BaseModel):
     attachments_supported: bool = True  # official file-upload API; False → feed multipart (GitHub)
     comment_max_chars: int | None = None  # GitHub Issues: 65536; None = no extra cap
     global_ids: bool = False          # pmo_ids unique across the vendor environment (Linear UUIDs: True; forge-issue numbers: False)
-    updated_at_tracks_comments: bool = False  # the item's updated_at moves when a comment is posted (Linear: True); False keeps the feed memo's safety rescan (04 §1)
+    updated_at_tracks_comments: bool = False  # the item's updated_at moves when a top-level comment is posted (Linear: True — a threaded reply does not move it; the feed-changes witness lists replies); False keeps the feed memo's safety rescan (04 §1)
     feed_delta: bool = False          # a team-wide feed-changes read exists (Linear, Gitea Issues: True); one read per cycle keeps memoized scans (04 §1)
+    feed_threads: bool = False        # post_feed can nest an entry under an earlier one via reply_to (Linear: True); False ⇒ every post lands top level (03 §8)
 
 class FeedChange(BaseModel):          # one changed feed entry — never its text
     pmo_id: str
@@ -195,7 +202,7 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 ## 4. Feed posts, transcripts, and attachments
 
-- `post_feed(ref, markdown)` → issue: `commentCreate(input: {issueId, body})`; project: `projectUpdateCreate(input: {projectId, body})` — Linear's project-native feed. Body is Markdown either way.
+- `post_feed(ref, markdown, reply_to=)` → issue: `commentCreate(input: {issueId, body[, parentId]})`, returning the created comment's id; project: `projectUpdateCreate(input: {projectId, body})` — Linear's project-native feed, no threads (the keyword is ignored there). Body is Markdown either way. Linear threads are one level deep — a reply is a `Comment` whose `parent` is set, listed in the issue's own comments connection with `parent { id }`, which the full activity read maps to `parent_id` — so `reply_to` always names a top-level comment (`feed_threads=True`).
 - **Attachment-first feed policy (feed hygiene):** the activity feed is for *messages* — directives, short specifications, token reports, status notes. Bulk markdown always goes up as `.md` attachments referenced from a short sentinel-signed comment. This policy lives in the **orchestrator**, not the adapter (the port note in §1: policy above, transport below):
   - **Transcripts** (ADR-0014: the FULL session dump — every assistant-visible text block of the run) on the **issue mission-step** finalize path are uploaded as `{seq}_{TYPE}.md` attachments; the step comment keeps the backticked filename (the seq-derivation marker) + asset link **and carries the Dev's last message inline as a `>`-blockquote** (redacted, truncated at 2048 chars with a pointer to the attachment, posted with the externalization opt-out — the full text already rides the attachment). Quoting is the ADR-0014 D2 quarantine: `>`-quoted lines never count in any feed scan. Old-image payloads without a last message post the pointer-only comment. If the attachment upload fails (INV-5 on this path), the dump posts inline — blockquoted, with only the marker header unquoted. Truly FAILED / STEWARD / CURATOR are outside the feed-post requirement (`00-overview.md` INV-5); project-kind feed behavior is unchanged and not newly authorized by that ruling.
   - **Answer comment** (`<!-- DEVCAKE-REPLY -->`, producer half of a public answer-delivery contract for downstream feed consumers — consumers match on `startswith`, so a quoted or relayed copy of the marker never classifies as the real answer): finalize posts the Dev's last message as **its own issue comment**, marker first, body fully `>`-blockquoted (ADR-0014 D2), `externalize=False`, redacted before truncate at 2048 chars. Truncation points at the step transcript (this comment has no attachment of its own — it never claims one exists). Empty/missing last message ⇒ no post. Issues only (the contract is defined on the issue comment feed; project feeds are a different surface). **REVIEW + `reviewed` is suppressed** so a trailing approve/reject "LGTM" cannot displace the EXECUTE answer for consumers that take the newest REPLY as the mission's answer; `human_needed` on any type (including REVIEW) still posts. Intermediate ONBOARD/PLAN/EXECUTE replies are intentional progressive posts consumers may use or ignore. Constants live in `orchestrator/markers.py` (`REPLY_MARKER`) — the marker string is frozen; renaming breaks external consumers.
@@ -243,7 +250,7 @@ Two batteries. Every future `PMOPort` implementation reuses both shapes: the off
 - **Port-surface pinning** — the exact method list of `PMOPort` is asserted, so a port edit must be deliberate.
 - **Adapter conformance** — `LinearAdapter` implements every port method with matching parameter names.
 - **Fake drift tripwire** — every port method a test fake (`FakePMO`/`MapPMO`/`DepPMO`) implements must match the port signature, keeping fakes honest as the contract evolves.
-- **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`; `get_activity` on a project returns `entries=[]` **in shallow mode** without ever querying comments, while full mode routes to the documents/updates enrichment (project-fidelity fix); attachment `name` resolution (named markdown link vs bare URL).
+- **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`, carries `reply_to` as `parentId` and returns the created id; `get_activity` on a project returns `entries=[]` **in shallow mode** without ever querying comments, while full mode routes to the documents/updates enrichment (project-fidelity fix); attachment `name` resolution (named markdown link vs bare URL).
 - **`health_probe` counting** — managed labels counted by `ALL_LABELS` intersection: a `DEVCAKE-CUSTOM-EXTRA` label must NOT count; `managed_labels_expected == len(ALL_LABELS)`.
 - **Transient typing** — a 429 surfaces as `PMOTransient` from the port (routine class; a critical-class caller is retried once after the vendor's wait — `test_pmo_budget_signals.py`).
 
@@ -319,6 +326,7 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 - **Labels:** repo labels; `PUT …/issues/{index}/labels` replaces the full set (`native_label_swap_atomic=True`; read-modify-write, serialized per mission by `label_write_lock` — §2). Managed set ensured uppercase. Vendor-cased managed names (`Devcake-Plan`) are mapped onto `ALL_LABELS` by `canonicalize_labels` so `derive()`/`swap_labels` see them.
 - **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified). Gitea pages oldest-first; `paginate_rest_newest` keeps the newest pages at the ceiling (same newest-first survival as Linear).
 - **Feed changes:** `GET …/issues/comments?since=<RFC 3339>` lists the repository's issue comments changed after the moment, walked until an empty page or the header's last page (a server may clamp `limit`; a short page is not the last page) up to the caller's cap (`truncated` past it); pull-request comments are skipped, an unreadable timestamp skips its row, and the mission is the issue index at the end of the comment's `issue_url` (`feed_delta=True`). A removed comment is not listed — the feed memo's safety rescan, which this vendor keeps, catches it.
+- **Threads:** none (`feed_threads=False`) — `post_feed` accepts the port's `reply_to`, posts top level with the same body, and returns the comment id.
 - **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
 ### 9.4 The default board (ADR-0030) — and manual setup for external Gitea
@@ -354,7 +362,7 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 
 GitHub Issues and GitLab Issues ship as **launch-supported** forge-issue adapters (same profile: issue-only, label stages, open→backlog, markdown comments, dependency/links). Registry `PMOSystemInfo.experimental=False`; `operator_note` still surfaces vendor API gaps (GitHub attachments; GitLab Premium/EE blocked-by links). Live `scripts/contract_tests_pmo.py` batteries remain useful ops proof but are not a blocker for the admin `experimental` flag. Shared cancel footer lives in `adapters/forge_issue.py` (not a second Issues Port).
 
-Neither declares `feed_delta`: `feed_changes_since` raises and the poll keeps its per-mission feed reads. GitHub exposes a repository-wide `issues/comments?since=` listing that could implement it; GitLab lists notes per issue only.
+Neither declares `feed_delta`: `feed_changes_since` raises and the poll keeps its per-mission feed reads. GitHub exposes a repository-wide `issues/comments?since=` listing that could implement it; GitLab lists notes per issue only. Neither threads issue comments (`feed_threads=False`): `post_feed` accepts `reply_to`, posts top level with the same body, and returns the comment/note id.
 
 ### 9.7 GitLab Issues (`gitlab_issues`)
 

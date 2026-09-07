@@ -334,6 +334,22 @@ def test_get_activity_ceiling_keeps_newest_comments(monkeypatch):
     assert [e.body for e in act.entries] == ["c5", "c6", "c7"]
 
 
+def test_post_feed_returns_the_entry_id_and_ignores_reply_to():
+    """docs/03 §8: a flat vendor (feed_threads False) accepts the port's
+    reply_to keyword, posts top level, and returns the comment id the
+    full activity read reports for it."""
+    r = Router()
+    pmo = make_pmo(r)
+    assert pmo.capabilities().feed_threads is False
+    cid = run(pmo.post_feed(MissionRef("1", "issue"), "first"))
+    nested = run(pmo.post_feed(MissionRef("1", "issue"), "second",
+                               reply_to=cid))
+    act = run(pmo.get_activity(MissionRef("1", "issue"), full=True))
+    assert [e.body for e in act.entries[-2:]] == ["first", "second"]
+    assert [e.entry_id for e in act.entries[-2:]] == [cid, nested]
+    assert all(e.parent_id is None for e in act.entries[-2:])
+
+
 def test_post_feed_and_activity_marker_body():
     r = Router()
     pmo = make_pmo(r)

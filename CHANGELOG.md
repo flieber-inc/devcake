@@ -37,6 +37,15 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   in a row past the window that does not merge, so one transient forge
   error is never terminal. The bounded wait every critical boundary call
   takes is one port constant instead of a literal repeated in five places.
+- **Changed — one thread per step on the board.** Where the tracker
+  threads comments (Linear), each step's token report and discovery
+  harvest are posted as replies to that step's transcript comment
+  instead of as further top-level entries, so a mission's feed reads
+  one entry per step with its bookkeeping folded under it. The feed
+  material is unchanged: same bodies, markers and order, the answer and
+  every hand-off stay top level, scans read the same entries, and the
+  Dev's activity mirror is byte-identical to a flat tracker's. Trackers
+  without threads (the forge-issue adapters) post exactly as before.
 
 ## v0.5.9 (2026-09-07)
 

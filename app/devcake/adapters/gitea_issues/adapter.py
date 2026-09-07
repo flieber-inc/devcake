@@ -480,11 +480,16 @@ class GiteaIssuesAdapter:
 
     # ── writes ──────────────────────────────────────────────────────────────
 
-    async def post_feed(self, ref: MissionRef, markdown: str) -> None:
+    async def post_feed(self, ref: MissionRef, markdown: str, *,
+                        reply_to: str | None = None) -> str | None:
+        # issue comments are flat (feed_threads stays False): reply_to is accepted
+        # and ignored — the entry lands top level with the same body
         self._require_issue(ref)
-        await self._req(
+        created = await self._req(
             "POST", self._repo_path(f"/issues/{ref.pmo_id}/comments"),
             json={"body": markdown})
+        cid = created.get("id") if isinstance(created, dict) else None
+        return str(cid) if cid is not None else None
 
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
         self._require_issue(ref)

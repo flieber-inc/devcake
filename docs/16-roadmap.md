@@ -828,6 +828,16 @@ until that run exists, field evidence below stays operator-self-reported.
   the merge window hands off after the second failed probe in a row, not
   the first; `CRITICAL_BOUNDED_WAIT_S` on the port replaces five literals.
   Docs 03/04/06/11/15, CONTRIBUTING.
+- **One thread per step on the board** (2026-09-07, ADR-0014 addendum):
+  where the tracker threads comments, a step's token report and discovery
+  harvest are posted as replies to the step's transcript comment; the
+  feed material, the scans and the Dev's `ACTIVITY.md` mirror are
+  unchanged (the mirror renders DevCake's own replies flat, people's
+  replies keep their `↳ reply to` line). `post_feed` returns the created
+  entry id and takes `reply_to`; the port gains `feed_threads` (Linear
+  on, forge-issue adapters off); the run keeps the transcript's id as its
+  anchor so a redelivered finalize threads the same way. Docs 03 §8, 05,
+  07.
 
 ### Field evidence (receipted)
 

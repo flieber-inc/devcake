@@ -449,6 +449,14 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         "steward_degraded": " · ".join(
             f"[{name}] {msg}" if prefixed else str(msg)
             for name, mp in stewards.items() if (msg := mp.degraded())) or None,
+        # the discovery drain per instance, and an advisory when leads wait
+        # with nothing routing them (docs/11; the SPA derives a warning)
+        "discovery_drain": {
+            name: mp.drain_state() for name, mp in stewards.items()
+            if hasattr(mp, "drain_state")},
+        "discovery_drain_warnings": {
+            name: w for name, mp in stewards.items()
+            if hasattr(mp, "drain_warning") and (w := mp.drain_warning())},
         "cron_degraded": sorted(cron.degraded) if cron is not None else [],
         "memory_curator_no_board": (
             sorted(cron.no_board) if cron is not None else []),

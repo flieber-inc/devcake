@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from . import envfile
-from .paths import require_checkout_root
+from .paths import read_version_pin, require_checkout_root
 
 
 @dataclass
@@ -104,14 +104,6 @@ devcake_ws_host {env_path.as_posix()!r} {repo.as_posix()!r}
             f"DEVCAKE_WS_HOST must be an absolute host path, got: {ws!r}"
         )
     return ws
-
-
-def read_version_pin(repo: Path) -> str:
-    """The committed release pin: `VERSION` at the checkout root, or ""."""
-    try:
-        return (repo / "VERSION").read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
 
 
 def resolve_tag(env_path: Path, repo: Path | None = None) -> str:

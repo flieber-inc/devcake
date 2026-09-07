@@ -27,3 +27,12 @@ def require_checkout_root(start: Path | None = None) -> Path:
             "cd to the repo root or re-clone"
         )
     return root
+
+
+def read_version_pin(root: Path) -> str:
+    """The committed release pin: `VERSION` at the checkout root, or "" when
+    the checkout carries none (docs/13; CONTRIBUTING "Cutting a release")."""
+    try:
+        return (root / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""

@@ -1278,3 +1278,35 @@ def test_fingerprint_is_script_agnostic():
     assert fp({"finding": "The cache is stale."}) == \
         fp({"finding": "the CACHE is stale"})
     assert len(fp({"finding": "x"})) == 12
+
+
+def test_drain_state_and_warning_name_leads_nobody_routes(tmp_path):
+    """docs/11: leads waiting with no discovery run for hours is an advisory;
+    a fresh drain run, a pause, or routing off silences it. Store-derived."""
+    from devcake.domain.run import utcnow
+    svc, mgr, dispatched = make_service(tmp_path)
+    assert svc.drain_state()["pending_sources"] == 0 and svc.drain_warning() is None
+    mgr._discoveries_pending.add("src")
+    state = svc.drain_state()
+    assert state["pending_sources"] == 1 and state["last_run_at"] is None
+    assert "never" in svc.drain_warning()                       # pending, no run ever
+    old = utcnow() - timedelta(hours=7)
+    mgr.runs.store.save(steward_run(1, "finished", steward_duty="discovery",
+                                    created_at=old))
+    assert "7 h ago" in svc.drain_warning()                     # stale drain
+    assert svc.drain_state()["last_run_state"] == "finished"
+    mgr.runs.store.save(steward_run(2, "finished", steward_duty="discovery"))
+    assert svc.drain_warning() is None                          # a fresh drain run
+    mgr.runs.store.save(steward_run(3, "finished", steward_duty="discovery",
+                                    created_at=old, pmo_ref="other-board"))
+    assert svc.drain_warning() is None                          # scoped: still fresh here
+    for r in list(mgr.runs.store.all()):
+        if r.seq == 2:
+            r.created_at = old
+            mgr.runs.store.save(r)
+    assert "7 h ago" in svc.drain_warning()
+    svc.config.intake_paused = True                             # a pause explains it
+    assert svc.drain_warning() is None
+    svc.config.intake_paused = False
+    mgr.instance.discovery_routing = False                      # routing off: no drain
+    assert svc.drain_warning() is None

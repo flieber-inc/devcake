@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -15,7 +15,8 @@ from opentelemetry.trace import Status, StatusCode
 
 from .repository_context import RepositoryContext, prepare_repository_context
 from ..config import AppConfig, DevType, intake_blocks_dispatch
-from ..ports.pmo import PMOTransient, pmo_call, with_pmo_call
+from ..ports.pmo import (CRITICAL_BOUNDED_WAIT_S, PMOTransient, pmo_call,
+                        with_pmo_call)
 from ..harness import missing_referenced_secret_env
 from .model import Mission
 from .run import Run, aware, utcnow
@@ -30,6 +31,10 @@ log = logging.getLogger("devcake.missions")
 # then one run is admitted — its death re-arms the pause, its success clears
 # it. A pause with no horizon was a latch that only Run now could open.
 DEGRADED_BACKOFF_INTERVALS = 3
+# Leads waiting with no discovery run for this long, routing on and intake
+# not paused, is an advisory on /health (docs/11): the latch this replaces
+# stayed silent for days.
+DRAIN_STALE_HOURS = 6
 tracer = trace.get_tracer("devcake")
 
 
@@ -94,6 +99,49 @@ class StewardService:
         if utcnow() - aware(newest.ended_at or newest.created_at) >= horizon:
             return None      # back-off served — one probe run is admitted
         return newest.error or "3 consecutive steward failures"
+
+    def drain_state(self) -> dict:
+        """What the discovery drain is doing, for /health (docs/11): sources
+        waiting (the sweep's advisory set), the newest discovery run of this
+        instance from the run store, and the last outcome the drain
+        decided. Store-derived, restart-safe."""
+        mgr = self.mgr
+        runs = sorted((r for r in mgr.runs.store.all()
+                       if r.mission_type == "STEWARD"
+                       and getattr(r, "steward_duty", "") == "discovery"
+                       and mgr._run_is_ours(r)),
+                      key=lambda r: r.created_at, reverse=True)
+        last = runs[0] if runs else None
+        return {
+            "pending_sources": len(getattr(mgr, "_discoveries_pending", ()) or ()),
+            "last_run_at": aware(last.created_at).isoformat() if last else None,
+            "last_run_state": last.state if last else None,
+            "last_outcome": self._last_discovery_outcome,
+        }
+
+    def drain_warning(self) -> str | None:
+        """An advisory when leads wait and nothing drains them: sources
+        pending, no discovery run for DRAIN_STALE_HOURS (or ever), routing
+        on, intake not paused (a pause explains the silence and is already
+        an alert). None otherwise."""
+        mgr = self.mgr
+        if not getattr(mgr.instance, "discovery_routing", True):
+            return None
+        if intake_blocks_dispatch(self.config, mgr.instance):
+            return None
+        state = self.drain_state()
+        if not state["pending_sources"]:
+            return None
+        age_h = None
+        if state["last_run_at"]:
+            age_h = (utcnow() - datetime.fromisoformat(state["last_run_at"])
+                     ).total_seconds() / 3600
+            if age_h < DRAIN_STALE_HOURS:
+                return None
+        since = "never" if age_h is None else f"{age_h:.0f} h ago"
+        why = f"; last drain outcome: {state['last_outcome']}" if state["last_outcome"] else ""
+        return (f"{state['pending_sources']} mission(s) hold discovery leads "
+                f"no steward run has routed — last discovery run {since}{why}")
 
     async def maybe_dispatch(self, missions: list[Mission]) -> None:
         """The interval path, called once per poll cycle (never while paused).
@@ -291,7 +339,7 @@ class StewardService:
         except RuntimeError:  # no running loop (sync test contexts)
             log.debug("discovery kick without a running loop — skipped")
 
-    @with_pmo_call("critical", wait_budget_s=20)   # an operator's button outranks polls (ADR-0040)
+    @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)   # an operator's button outranks polls (ADR-0040)
     async def run_now(self) -> Run:
         """Manual trigger: works regardless of the periodic toggle and of the
         degraded state — a human pressing the button IS the reset signal.

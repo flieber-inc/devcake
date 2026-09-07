@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .doctor import check_baker_liveness
+from .doctor import check_baker_liveness, check_version_pin
 from .paths import require_checkout_root
 from .setup import _basic_auth_header, _load_admin_auth
 
@@ -126,6 +126,7 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
     elif "not expected" in baker.detail or "skipped" in baker.detail:
         baker_alive = False
 
+    pin = check_version_pin(repo_root=root)
     payload = {
         "ok": compose_ok,
         "schema_version": 1,
@@ -134,6 +135,10 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
         "baker_alive": baker_alive,
         "baker_detail": baker.detail,
         "checkout": str(root),
+        # the checkout's release pin against the tag the stack runs under
+        # (docs/13): a drift is the one-line remedy in the detail
+        "version_pin_ok": pin.ok,
+        "version_pin": pin.detail,
         # ADR-0040: what the app measures against each tracker's quota —
         # None when the stack did not answer (down, or credentials missing)
         "health_reachable": health is not None,
@@ -147,6 +152,7 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
         sys.stdout.write(json.dumps(payload, indent=2) + "\n")
     else:
         sys.stdout.write(f"checkout: {root}\n")
+        sys.stdout.write(f"version: {'ok' if pin.ok else 'DRIFT'} — {pin.detail}\n")
         sys.stdout.write(f"compose: {'ok' if compose_ok else 'FAIL'}\n")
         if compose_text:
             sys.stdout.write(compose_text + "\n")

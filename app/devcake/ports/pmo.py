@@ -52,6 +52,13 @@ class PMOBudgetExceeded(PMOTransient):
 # means routine, so a caller that never declares gets today's behaviour.
 CallClass = Literal["critical", "routine"]
 
+# The bounded wait a critical call context takes at a boundary verb — an
+# operator action, a dispatch, a cron ticket, the sweeps' write-backs — so a
+# starved key delays such a call by at most this long before refusing it.
+# Finalize takes the governor's default instead (its work is already done;
+# losing it costs the most). ONE number, declared here beside the classes.
+CRITICAL_BOUNDED_WAIT_S = 20.0
+
 
 @dataclass
 class PMOCallContext:

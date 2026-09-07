@@ -37,7 +37,7 @@ from enum import StrEnum
 from opentelemetry import trace
 
 from ...ports.forge import mission_branch
-from ...ports.pmo import pmo_call, pmo_call_ctx
+from ...ports.pmo import CRITICAL_BOUNDED_WAIT_S, pmo_call, pmo_call_ctx
 from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
@@ -45,23 +45,19 @@ from . import freshness, steps
 from .feed import unquoted
 from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
 
-# The sweeps run inside the poll's routine call context (ADR-0040): their
-# write-backs — a completion, a cancellation, a conflict route, a hand-off —
-# declare the critical class themselves, with this bounded wait for quota,
-# so a starved key refuses the poll's reads but never a mission's outcome.
-WRITE_BACK_WAIT_S = 20.0
-
-
 def write_back_class():
-    """The call-class context for a write-back. Inside a context that is
-    already critical (finalize: the governor's default wait budget, one
-    cumulative deadline for the whole finalize) nothing is opened — a nested
-    declaration would fork the ledger and shrink that budget. From a routine
-    context (the sweeps) it declares critical with the bounded wait."""
+    """The call-class context for a write-back. The sweeps run inside the
+    poll's routine context (ADR-0040): their write-backs — a completion, a
+    cancellation, a conflict route, a hand-off — declare critical here with
+    the port's bounded wait, so a starved key refuses the poll's reads but
+    never a mission's outcome. Inside a context that is already critical
+    (finalize: the governor's default wait budget, one cumulative deadline
+    for the whole finalize) nothing is opened — a nested declaration would
+    fork the ledger and shrink that budget."""
     ctx = pmo_call_ctx.get()
     if ctx is not None and ctx.call_class == "critical":
         return nullcontext()
-    return pmo_call("critical", wait_budget_s=WRITE_BACK_WAIT_S)
+    return pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")

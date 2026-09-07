@@ -28,7 +28,7 @@ def _forge_runtime(*, last_full_probe_at=None, health=None, forges=None):
     )
 
 
-def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
+def _payload(fr, monkeypatch, repo_cache=None, workspaces=None, stewards=None):
     async def _true(*a, **k):
         return True
 
@@ -40,7 +40,8 @@ def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
     health_mod.reset_health_caches()
     return run_coro(health_mod.build_health_payload(
-        config=AppConfig(), dev_types={}, managers={}, stewards={},
+        config=AppConfig(), dev_types={}, managers={},
+        stewards=stewards or {},
         forge_runtime=fr, shared_breakers={},
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,
@@ -733,3 +734,25 @@ def test_branch_protection_probes_work_repos_only_with_the_resolved_branch():
     assert out == {"work": {"protected": True},
                    "pinned": {"protected": True}, "blank": None}
     assert asked == {"work": "trunk", "pinned": "release"}
+
+
+def test_health_payload_carries_the_discovery_drain(monkeypatch):
+    """docs/11: per-instance drain state and the advisory when leads wait
+    with nothing routing them; the SPA derives a dismissable warning."""
+    fr = _forge_runtime(last_full_probe_at=datetime.now(timezone.utc))
+    msg = ("3 mission(s) hold discovery leads no steward run has routed — "
+           "last discovery run never")
+    steward = SimpleNamespace(
+        degraded=lambda: None,
+        drain_state=lambda: {"pending_sources": 3, "last_run_at": None,
+                             "last_run_state": None, "last_outcome": None},
+        drain_warning=lambda: msg)
+    quiet = SimpleNamespace(degraded=lambda: None,
+                            drain_state=lambda: {"pending_sources": 0},
+                            drain_warning=lambda: None)
+    got = _payload(fr, monkeypatch, stewards={"eng": steward, "cs": quiet})
+    assert got["discovery_drain"]["eng"]["pending_sources"] == 3
+    assert got["discovery_drain"]["cs"]["pending_sources"] == 0
+    assert got["discovery_drain_warnings"] == {"eng": msg}
+    assert got["steward_degraded"] is None
+

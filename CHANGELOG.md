@@ -25,6 +25,18 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   longer reads `.env` for it — a value set there by hand is rewritten and
   reported, never obeyed. Deploying a release is `git checkout vX.Y.Z &&
   devcake up --bake all`. Ships as `devcake-cli` 0.1.4.
+- **Changed — four hardenings after the demand campaign.** `devcake status`
+  and `devcake doctor` report a drift between the checkout's `VERSION` and
+  the tag the stack was brought up under, with the remedy; a `Release pin`
+  workflow refuses a `v*` tag whose name differs from `VERSION`. `/health`
+  gains `discovery_drain` per instance and `discovery_drain_warnings`, an
+  advisory (and a dismissable Overview warning) when missions hold discovery
+  leads and no steward run has routed them for six hours while routing is
+  on and intake is not paused — the silent stall a back-off cannot catch.
+  The deferred-merge window now hands off after the second admitted probe
+  in a row past the window that does not merge, so one transient forge
+  error is never terminal. The bounded wait every critical boundary call
+  takes is one port constant instead of a literal repeated in five places.
 
 ## v0.5.9 (2026-09-07)
 

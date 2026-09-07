@@ -2234,8 +2234,10 @@ def test_sweep_window_expiry_hands_off_once(tmp_path):
     # mergeability still computing past the window: that is the hand-off
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
-    run_coro(sweeps.merge_sweep(mgr, m))
+    run_coro(sweeps.merge_sweep(mgr, m))               # first closing probe
     assert forge.merges == []                          # nothing to attempt yet
+    assert not any("`devcake:merge-handoff`" in c for c in fake.comments)
+    run_coro(sweeps.merge_sweep(mgr, m))               # second in a row: hand off
     handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
     assert len(handoffs) == 1 and "DEVCAKE-MERGE" in m.labels
     # the hand-off marker closes the window: later sweeps skip this mission
@@ -2269,8 +2271,11 @@ def test_expired_window_still_makes_one_attempt_and_merges(tmp_path):
 def test_expired_window_with_verdict_none_hands_off_once(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     _aged_marker(fake, 31)
-    run_coro(sweeps.merge_sweep(mgr, m))
+    run_coro(sweeps.merge_sweep(mgr, m))               # first probe past the window
     assert forge.merges == []
+    assert not any("Still unmergeable" in c for c in fake.comments)
+    assert mgr._merge_closing_attempts == {m.pmo_id: 1}
+    run_coro(sweeps.merge_sweep(mgr, m))               # second in a row: hand off
     assert sum("Still unmergeable" in c for c in fake.comments) == 1
     assert m.pmo_id in mgr._merge_window_closed
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
@@ -2298,6 +2303,11 @@ def test_expired_window_non_conflict_merge_failure_hands_off(tmp_path):
     _aged_marker(fake, 31)
     run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == [8]                          # the attempt was made
+    # one transient forge error past the window is not terminal
+    assert not any("Still unmergeable" in c for c in fake.comments)
+    assert m.pmo_id not in mgr._merge_window_closed
+    run_coro(sweeps.merge_sweep(mgr, m))               # second failure in a row
+    assert forge.merges == [8, 8]
     assert sum("Still unmergeable" in c for c in fake.comments) == 1
     assert "DEVCAKE-MERGE" in m.labels and m.pmo_id in mgr._merge_window_closed
 
@@ -2333,7 +2343,8 @@ def test_sweep_write_backs_declare_the_critical_class(tmp_path):
     seen.clear()
     record(fake, "post_feed")
     with pmo_call("routine"):
-        run_coro(sweeps.merge_sweep(mgr, m))
+        run_coro(sweeps.merge_sweep(mgr, m))           # first closing probe
+        run_coro(sweeps.merge_sweep(mgr, m))           # second: the hand-off
     assert seen == [("post_feed", "critical")]           # the hand-off
 
     # inside an already-critical context (finalize) no nested declaration
@@ -2405,10 +2416,11 @@ def test_sweeps_prune_the_pr_memo_when_a_mission_leaves_merge(tmp_path):
     fake.all_missions = [m]
     run_coro(sweeps.sweeps(mgr, [m]))
     assert mgr._merge_pr_numbers == {m.pmo_id: 8}
+    mgr._merge_closing_attempts[m.pmo_id] = 1
     m.labels.discard("DEVCAKE-MERGE")
     m.labels.add("DEVCAKE-EXECUTE")                     # a human moved it back
     run_coro(sweeps.sweeps(mgr, [m]))
-    assert mgr._merge_pr_numbers == {}
+    assert mgr._merge_pr_numbers == {} and mgr._merge_closing_attempts == {}
 
 
 def test_sweep_boolean_forge_conflict_hands_off_not_execute(tmp_path):
@@ -2522,7 +2534,8 @@ def test_active_retry_window_suppresses_banner(tmp_path):
 def test_expired_window_banners_and_skips_future_feed_reads(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
-    run_coro(sweeps.merge_sweep(mgr, m))
+    run_coro(sweeps.merge_sweep(mgr, m))               # first closing probe
+    run_coro(sweeps.merge_sweep(mgr, m))               # second: the hand-off
     assert forge.merges == []
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert m.pmo_id in mgr._merge_window_closed

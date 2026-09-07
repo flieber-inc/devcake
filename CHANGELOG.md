@@ -16,8 +16,13 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.9 (2026-09-07)
+
+Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.3.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.9).
+
 - **Changed — fewer routine tracker reads on large boards, and two stalls
-  removed.** The feed-scan memo's safety rescan is now a PMO capability
+  removed** (#417). The feed-scan memo's safety rescan is now a PMO capability
   (`updated_at_tracks_comments`): on a tracker whose item `updated_at`
   moves with every comment (Linear), a labelled mission's feed is re-read
   only when the mission changed or DevCake wrote to it, so the discovery
@@ -37,7 +42,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   board's deaths no longer pause another board's steward. Boards that had
   raised the poll interval for quota can lower it again (`13-deployment.md`
   upgrade notes).
-- **Changed — labelled feeds are re-read only when they changed.** On
+- **Changed — labelled feeds are re-read only when they changed** (#418). On
   Linear and Gitea Issues, one team-wide feed-changes read per poll cycle
   (ids and times, never text) tells the orchestrator which memoized feed
   scans are still good, so a mission whose tracker record moved for a
@@ -47,7 +52,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   today's per-mission reads. Two new `pmo_demand` counters
   (`feed_delta_reads`, `feed_scan_memo_kept`) show the witness at work.
 - **Changed — the merge sweep remembers each parked mission's pull
-  request.** The branch-to-pull-request lookup is a stable fact once the
+  request** (#419). The branch-to-pull-request lookup is a stable fact once the
   pull request exists, so after the first cycle a parked mission costs the
   forge one state read per cycle instead of two. A number the forge no
   longer knows is looked up again; a merged or closed answer on a

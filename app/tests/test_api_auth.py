@@ -41,10 +41,15 @@ def test_every_admitted_mutation_writes_a_control_plane_audit_row(monkeypatch, t
     assert client.put("/api/v1/thing/refused", headers=intent).status_code == 409
     assert client.put("/api/v1/thing/a", headers=intent).status_code == 200
     assert client.put("/api/v1/thing/b", headers={**intent, "X-DevCake-Actor": "mcp"}).status_code == 200
+    # a caller that misuses the actor header cannot park a secret shape in
+    # the audit file: the label is allowlisted AND redacted at the write
+    leaked = {**intent, "X-DevCake-Actor": "glpat-abcdefghijklmnopqrstuv"}
+    assert client.put("/api/v1/thing/c", headers=leaked).status_code == 200
     rows = [json.loads(l) for l in (tmp_path / "state" / "events.jsonl").read_text().splitlines()]
     assert [(r["action"], r["detail"], r["actor"]) for r in rows] == [
         ("control_plane_write", "PUT /api/v1/thing/a 200", "admin"),
         ("control_plane_write", "PUT /api/v1/thing/b 200", "mcp"),
+        ("control_plane_write", "PUT /api/v1/thing/c 200", "«REDACTED»"),
     ]
 
 

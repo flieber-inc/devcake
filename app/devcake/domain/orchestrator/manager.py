@@ -143,6 +143,12 @@ class MissionManager:
         # marker opens a new episode. A human DELETING the hand-off comment
         # instead of swapping labels isn't noticed until restart.
         self._merge_window_closed: set[str] = set()
+        # pmo_id → the parked mission's PR number (docs/04 §1): the branch→PR
+        # lookup is a stable fact once the PR exists, so a cycle pays the
+        # state read alone. Process-local; pruned when a mission leaves MERGE;
+        # a terminal answer on a memoized number is confirmed by the lookup
+        # before the sweep writes.
+        self._merge_pr_numbers: dict[str, int] = {}
         # AUD-005: per-cycle scratch — pmo_ids whose parked-merge window was
         # actually driven this sweep, so a repo's OFF→ON re-arm is cleared only
         # once every parked mission on it was reached (not on a PR-lookup miss).

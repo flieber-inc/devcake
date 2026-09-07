@@ -8,7 +8,7 @@ from datetime import timedelta
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from ...ports.forge import legacy_branch, mission_branch
+from ...ports.forge import ForgeError, legacy_branch, mission_branch
 from ...ports.pmo import PMOTransient
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
@@ -88,6 +88,8 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     mgr.merge_handoffs = {k: v for k, v in mgr.merge_handoffs.items()
                            if k in merge_ids}
     mgr._merge_window_closed &= merge_ids
+    mgr._merge_pr_numbers = {k: v for k, v in mgr._merge_pr_numbers.items()
+                             if k in merge_ids}
     # needs-human advisories: rebuilt wholesale from the label each cycle
     # (restart-safe; clears the moment the human removes the label)
     mgr.needs_human = {
@@ -141,6 +143,51 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     mgr.rearm_merge_repos = mgr.rearm_merge_repos & unsatisfied
 
 
+async def _lookup_pr(forge, m: Mission):
+    pr = await forge.get_pr_by_branch(mission_branch(m.instance, m.key))
+    if not pr:
+        # pre-v3 branches carry no instance prefix — re-probe the legacy
+        # convention so parked missions from before the upgrade still complete
+        pr = await forge.get_pr_by_branch(legacy_branch(m.key))
+    return pr
+
+
+async def _parked_pr(mgr, forge, m: Mission):
+    """(pr, state) for a parked mission, or (None, None) when no PR can be
+    found for its branch. The branch→PR lookup is memoized per mission
+    (docs/04 §1): the number is a stable fact once the PR exists, so a
+    cycle pays the state read alone. A memoized number the forge no longer
+    knows (404) is looked up again; a TERMINAL answer on a memoized number
+    (merged, or closed without merging) is confirmed by the live lookup
+    before the sweep writes on it — a newer PR on the same branch wins,
+    exactly as it did when every cycle looked the branch up."""
+    memo = mgr._merge_pr_numbers
+    number = memo.get(m.pmo_id)
+    if number is not None:
+        try:
+            state = await forge.pr_state(number)
+        except ForgeError as e:
+            if e.status != 404:
+                raise
+            memo.pop(m.pmo_id, None)
+        else:
+            if not (state.merged or state.state == "closed"):
+                return state, state
+            fresh = await _lookup_pr(forge, m)
+            if fresh is not None and fresh.number == number:
+                return state, state
+            memo.pop(m.pmo_id, None)
+            if fresh is None:
+                return None, None
+            memo[m.pmo_id] = fresh.number
+            return fresh, await forge.pr_state(fresh.number)
+    pr = await _lookup_pr(forge, m)
+    if not pr:
+        return None, None
+    memo[m.pmo_id] = pr.number
+    return pr, await forge.pr_state(pr.number)
+
+
 async def merge_sweep(mgr, m: Mission) -> None:
     forge = mgr.forges.get(m.repo) if m.repo else None
     # forges + instances are co-populated; missing instance still VISIBLE-gates
@@ -155,11 +202,7 @@ async def merge_sweep(mgr, m: Mission) -> None:
             m.repo_reason or f"repo '{m.repo}' no longer configured — "
             f"merge sweep skipped")
         return
-    pr = await forge.get_pr_by_branch(mission_branch(m.instance, m.key))
-    if not pr:
-        # pre-v3 branches carry no instance prefix — re-probe the legacy
-        # convention so parked missions from before the upgrade still complete
-        pr = await forge.get_pr_by_branch(legacy_branch(m.key))
+    pr, state = await _parked_pr(mgr, forge, m)
     if not pr:
         # AUD-006: a DEVCAKE-MERGE mission with no discoverable PR is not
         # normal (forge list lag / branch-naming miss). Surface it instead of
@@ -173,7 +216,6 @@ async def merge_sweep(mgr, m: Mission) -> None:
             f"{mission_branch(m.instance, m.key)} — merge sweep deferred "
             f"(forge lag or branch mismatch)")
         return
-    state = await forge.pr_state(pr.number)
     if state.merged or state.state == "closed":
         mgr._rearm_satisfied.add(m.pmo_id)   # AUD-005: mission completing
         with tracer.start_as_current_span("sweep.merge") as span:

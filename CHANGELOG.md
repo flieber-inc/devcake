@@ -46,6 +46,14 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   `feed_delta` capability to the PMO port; GitHub and GitLab Issues keep
   today's per-mission reads. Two new `pmo_demand` counters
   (`feed_delta_reads`, `feed_scan_memo_kept`) show the witness at work.
+- **Changed — the merge sweep remembers each parked mission's pull
+  request.** The branch-to-pull-request lookup is a stable fact once the
+  pull request exists, so after the first cycle a parked mission costs the
+  forge one state read per cycle instead of two. A number the forge no
+  longer knows is looked up again; a merged or closed answer on a
+  remembered number is confirmed by a live lookup before the mission is
+  completed or cancelled, so a newer pull request on the same branch wins
+  exactly as before.
 
 ## v0.5.8 (2026-09-06)
 

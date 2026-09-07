@@ -16,6 +16,11 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.10 (2026-09-07)
+
+Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.4.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.10).
+
 - **Changed — the release pin lives in the checkout, not in `.env`.** A
   `VERSION` file at the repo root names the release tag `devcake up`
   bakes and runs images under; cutting a release bumps it together with
@@ -46,6 +51,10 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   every hand-off stay top level, scans read the same entries, and the
   Dev's activity mirror is byte-identical to a flat tracker's. Trackers
   without threads (the forge-issue adapters) post exactly as before.
+- **Fixed — audit rows never carry a raw actor label.** Both audit
+  writers pass the request's actor through the redactor before the
+  row is written, so a misused header cannot park a secret shape in
+  the audit file. Belt-and-braces on top of the boundary allowlist.
 
 ## v0.5.9 (2026-09-07)
 

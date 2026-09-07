@@ -157,3 +157,24 @@ def test_register_all_reloads_credential_files(tmp_path, monkeypatch):
         assert secret not in redact(f"leak {secret} end")
     finally:
         unregister_runtime_secret("cred:coder:auth.txt")
+
+
+def test_mission_audit_actor_label_redacted_on_disk(tmp_path, monkeypatch):
+    """The audit row's actor is an allowlisted label; a caller that misuses
+    the actor header still cannot park a secret shape on disk — the writer
+    scrubs the label with the same redact() the detail gets."""
+    import devcake.domain.orchestrator.markers as markers
+    from devcake.api.auth import REQUEST_ACTOR
+    from devcake.domain.orchestrator import feed
+
+    audit = tmp_path / "events.jsonl"
+    monkeypatch.setattr(markers, "AUDIT_PATH", audit)
+    token = REQUEST_ACTOR.set("glpat-abcdefghijklmnopqrstuv")
+    try:
+        mgr = SimpleNamespace(instance_name="lin", _grace_next=set())
+        feed._audit(mgr, "ISSUE-1", "label_swap", "A→B")
+    finally:
+        REQUEST_ACTOR.reset(token)
+    line = json.loads(audit.read_text().strip().splitlines()[-1])
+    assert "abcdefghijklmnopqrstuv" not in line["actor"]
+    assert line["actor"] == MASK

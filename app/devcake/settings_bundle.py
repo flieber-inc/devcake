@@ -128,7 +128,7 @@ def audit_event(action: str, detail: str = "") -> None:
     with open(path, "a") as f:
         f.write(json.dumps({"ts": _utcnow(), "instance": "", "pmo_id": "",
                             "action": action, "detail": redact(detail),
-                            "actor": _request_actor()}) + "\n")
+                            "actor": redact(_request_actor())}) + "\n")
     with tracer.start_as_current_span("audit.event") as span:
         span.set_attribute("devcake.audit.action", action)
         span.set_attribute("devcake.audit.detail", redact(detail)[:500])

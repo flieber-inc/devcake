@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from ...ports.pmo import PMOTransient
 from ...security import redact
 from ..model import Mission, MissionRef, STAGE_LABELS
 from ..run import utcnow
@@ -353,9 +354,26 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         for part in parts:
             # Cut-newlines stay: join_vendor_comments is concatenation.
             # Every page of one post nests under the same anchor.
-            cid = await mgr.pmo.post_feed(
-                MissionRef(pmo_id, "issue"),
-                part + "\n\n" + COMMENT_SENTINEL, **thread)
+            body = part + "\n\n" + COMMENT_SENTINEL
+            try:
+                cid = await mgr.pmo.post_feed(MissionRef(pmo_id, "issue"),
+                                              body, **thread)
+            except PMOTransient:
+                raise            # budget / network: retried as it always was
+            except Exception as e:  # noqa: BLE001 — see below
+                if not thread:
+                    raise
+                # the vendor refused the NESTING (verified live: the anchor
+                # was deleted by a person → "entity not found"; a reply to
+                # a reply → "incorrect parent"): the post itself must never
+                # be lost, so it lands top level — exactly a flat vendor's
+                # behaviour — and the audit says so once. The next parts of
+                # this post follow it flat.
+                log.warning("threaded post refused on %s (%s) — posting top "
+                            "level", pmo_id, e)
+                mgr._audit(pmo_id, "feed_thread_fallback", str(e)[:200])
+                thread = {}
+                cid = await mgr.pmo.post_feed(MissionRef(pmo_id, "issue"), body)
             if first is None:
                 first = cid
     finally:

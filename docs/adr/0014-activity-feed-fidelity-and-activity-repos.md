@@ -79,6 +79,21 @@ flat. Steward deliveries, routing receipts, hand-offs and PR links stay top
 level — a later addendum may fold the steward's own bookkeeping the same
 way once its shape has settled.
 
+Three vendor facts verified live on Linear shape the guards. A reply to a
+reply is rejected ("incorrect parent"), so the anchor is always the
+top-level transcript comment. A reply whose anchor a person has deleted is
+rejected ("entity not found"), so the feed chokepoint lands such a post
+top level and audits `feed_thread_fallback` — a deleted bookkeeping comment
+must never fail a step's close, and the flat post is exactly the pre-thread
+behaviour; vendor transients still propagate and retry as before. A reply
+does not move the issue's `updated_at`, so the feed memo's `updated_at` arm
+cannot notice a person's reply inside a thread; the feed-changes witness
+(ADR-0033 addendum) lists replies, and the memoized scans read only
+DevCake's own top-level markers, so nothing DevCake decides on rides that
+arm. The dispatch-time mirror and the Freshness Gate read the feed in full,
+never through the memo, so a person's reply reaches the next Dev as any
+comment does.
+
 Rejected — one running ledger thread per mission (every report under a
 single "bookkeeping" comment): shorter boards, but the ledger comment would
 have to be minted and found again on every step (a scan, or a fourth

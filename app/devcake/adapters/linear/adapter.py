@@ -1204,10 +1204,14 @@ class LinearAdapter:
                                native_label_swap_atomic=True,
                                relations_supported=True,
                                global_ids=True,   # Linear pmo_ids are UUIDs
-                               # an issue's updatedAt moves with every comment
-                               # posted on it (verified live on a field host:
-                               # over dozens of missions it never lagged the
-                               # newest comment), so the feed memo needs no
+                               # an issue's updatedAt moves with every
+                               # TOP-LEVEL comment posted on it (verified live
+                               # on a field host: over dozens of missions it
+                               # never lagged the newest comment) — a threaded
+                               # reply does NOT move it (verified live); the
+                               # feed-changes witness lists replies, and the
+                               # memoized scans read only DevCake's own
+                               # top-level markers, so the memo still needs no
                                # safety rescan here
                                updated_at_tracks_comments=True,
                                feed_delta=True,   # root comments(filter:) read

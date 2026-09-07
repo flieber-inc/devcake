@@ -519,17 +519,17 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         body = e.body or ""
         # provenance is sentinel-based, never author-based (docs/03 §8a):
         # DevCake may post with the operator's own PMO credentials
-        provenance = "🤖 DevCake" if is_devcake_comment(body) else "🧑 HUMAN"
+        own = is_devcake_comment(body)
+        provenance = "🤖 DevCake" if own else "🧑 HUMAN"
         lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} — {provenance} ({e.kind})")
         # DevCake's own bookkeeping replies (token report, harvest under
         # the step's transcript — docs/03 §8) are threaded for the human
         # reader only: the mirror renders them exactly as top-level posts,
         # so the Dev reads the same ACTIVITY.md whether the vendor threads
-        parent = (by_id.get(e.parent_id)
-                  if e.parent_id and provenance != "🤖 DevCake" else None)
+        parent = by_id.get(e.parent_id) if e.parent_id and not own else None
         if parent is not None:
             lines.append(f"↳ reply to {parent.author} @ {parent.ts:%Y-%m-%d %H:%M}")
-        elif e.parent_id and provenance != "🤖 DevCake":
+        elif e.parent_id and not own:
             lines.append("↳ reply to (deleted comment)")
         lines.append(body)                # full body — the mirror never trims
         for att in e.attachments:

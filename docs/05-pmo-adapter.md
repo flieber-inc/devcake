@@ -115,7 +115,7 @@ class PMOCapabilities(BaseModel):
     attachments_supported: bool = True  # official file-upload API; False → feed multipart (GitHub)
     comment_max_chars: int | None = None  # GitHub Issues: 65536; None = no extra cap
     global_ids: bool = False          # pmo_ids unique across the vendor environment (Linear UUIDs: True; forge-issue numbers: False)
-    updated_at_tracks_comments: bool = False  # the item's updated_at moves when a comment is posted (Linear: True); False keeps the feed memo's safety rescan (04 §1)
+    updated_at_tracks_comments: bool = False  # the item's updated_at moves when a top-level comment is posted (Linear: True — a threaded reply does not move it; the feed-changes witness lists replies); False keeps the feed memo's safety rescan (04 §1)
     feed_delta: bool = False          # a team-wide feed-changes read exists (Linear, Gitea Issues: True); one read per cycle keeps memoized scans (04 §1)
     feed_threads: bool = False        # post_feed can nest an entry under an earlier one via reply_to (Linear: True); False ⇒ every post lands top level (03 §8)
 

@@ -103,6 +103,58 @@ def test_attachment_pipe_returns_the_comment_id_and_threads(tmp_path):
     assert fake.uploads[0][0] == "X.md"
 
 
+# ── a refused nesting lands flat; a transient still propagates ─────────────
+
+def _refusing(fake, exc):
+    """post_feed that refuses NESTED posts with `exc` (Linear: a deleted
+    anchor → "entity not found"); flat posts succeed as usual."""
+    real = fake.post_feed
+
+    async def post(ref, markdown, *, reply_to=None):
+        if reply_to is not None:
+            raise exc
+        return await real(ref, markdown)
+    fake.post_feed = post
+
+
+def test_refused_nesting_falls_back_to_a_top_level_post_and_audits(tmp_path):
+    _, mgr, fake, _ = _mgr(tmp_path, threads=True)
+    audits = []
+    mgr._audit = lambda pmo_id, kind, detail="": audits.append((pmo_id, kind, detail))
+    _refusing(fake, RuntimeError("linear graphql: Entity not found: Comment"))
+    fake.comment_max_chars = 400
+    cid = run_coro(_feed(mgr, "p1", "issue", "x" * 900, reply_to="gone",
+                         externalize=False))
+    assert cid == "c1" and len(fake.comments) >= 2      # nothing lost, paged
+    assert {parent for _, parent in fake.threads} == {None}   # all parts flat
+    assert [a[1] for a in audits] == ["feed_thread_fallback"]   # said once
+    assert "Entity not found" in audits[0][2]
+
+
+def test_transient_on_a_nested_post_propagates_unchanged(tmp_path):
+    import pytest
+    from devcake.ports.pmo import PMOTransient
+    _, mgr, fake, _ = _mgr(tmp_path, threads=True)
+    _refusing(fake, PMOTransient("http 429"))
+    with pytest.raises(PMOTransient):
+        run_coro(_feed(mgr, "p1", "issue", "hello", reply_to="anchor"))
+    assert fake.comments == []                           # no flat double-post
+
+
+def test_finalize_completes_flat_when_the_anchor_was_deleted(tmp_path):
+    # a person deleted the transcript comment between the checkpoint and the
+    # redelivery: the report and the harvest land top level, the close finishes
+    _, mgr, fake, store = _mgr(tmp_path, threads=True)
+    _refusing(fake, RuntimeError("linear graphql: Entity not found: Comment"))
+    run = _exec_run(store, finalized_steps=[steps.TRANSCRIPT],
+                    feed_anchor="c-deleted")
+    run_coro(mgr.finalize(run, _payload([ENTRY])))
+    assert run.state == "finished"
+    assert _find(fake, "🧮 DevCake token report")
+    assert _find(fake, "devcake:discovery:v1")
+    assert {parent for _, parent in fake.threads} == {None}
+
+
 # ── finalize: one thread per step ───────────────────────────────────────────
 
 def test_finalize_threads_token_report_and_harvest_under_the_transcript(tmp_path):

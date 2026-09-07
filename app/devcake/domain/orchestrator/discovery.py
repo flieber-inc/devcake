@@ -161,10 +161,13 @@ async def harvest(mgr, run: Run, result: dict) -> int:
                        f"dropped (budgets.discoveries_per_run={cap})")
             del entries[cap:]
         try:
+            # nests under the step's transcript comment where the vendor
+            # threads (docs/03 §8); same body and markers either way
             await post_attachment_comment(
                 mgr, pmo_id, "issue", filename=name,
                 content=redact(render_discovery_md(run, entries)),
-                comment_of=lambda url: comment_body(run, entries, name, url))
+                comment_of=lambda url: comment_body(run, entries, name, url),
+                reply_to=run.feed_anchor or None)
         except Exception as e:  # noqa: BLE001 — audited; raise so we do not checkpoint
             mgr._audit(pmo_id, "discovery_post_failed", str(e)[:200])
             raise

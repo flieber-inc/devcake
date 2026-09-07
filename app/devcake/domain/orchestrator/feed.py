@@ -29,6 +29,15 @@ def _attachments_supported(mgr) -> bool:
         return True
 
 
+def _threads_supported(mgr) -> bool:
+    """Vendor nests comments (`feed_threads`). Missing/broken caps ⇒ top
+    level: threading is presentation, so the safe default is flat."""
+    try:
+        return bool(mgr.pmo.capabilities().feed_threads)
+    except Exception:  # noqa: BLE001 — missing/broken caps must not drop the feed
+        return False
+
+
 def _comment_max_chars(mgr) -> int | None:
     """Vendor issue-comment cap, or None when the adapter does not declare one."""
     try:
@@ -287,9 +296,14 @@ def _trip_breaker(mgr, name: str, reason: str) -> None:
 
 
 async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
-                externalize: bool = True) -> None:
+                externalize: bool = True,
+                reply_to: str | None = None) -> str | None:
     """The single choke-point for PMO comments: redaction + the provenance
-    sentinel. Bodies over FEED_INLINE_MAX are uploaded as .md attachments
+    sentinel. Returns the vendor entry id of the comment posted (part 1
+    when paged) so a step's bookkeeping can thread under it: `reply_to`
+    nests the post under that earlier top-level entry on vendors that
+    declare `feed_threads` and is silently dropped elsewhere — the body,
+    markers and sentinel are identical either way (docs/03 §8). Bodies over FEED_INLINE_MAX are uploaded as .md attachments
     and replaced by a short referencing comment (docs/05 §4) unless the
     caller opts out (externalize=False — the ADR-0014 finalize post, whose
     long text already lives in its own attachment). When the vendor
@@ -330,16 +344,25 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     cap = _comment_max_chars(mgr)
     parts = (split_vendor_comments(markdown, cap) if cap is not None
              else [markdown.rstrip()])
+    # the keyword reaches the adapter only when the vendor threads: a
+    # flat vendor's post_feed is called exactly as before
+    thread = ({"reply_to": reply_to}
+              if reply_to and _threads_supported(mgr) else {})
+    first: str | None = None
     try:
         for part in parts:
             # Cut-newlines stay: join_vendor_comments is concatenation.
-            await mgr.pmo.post_feed(
+            # Every page of one post nests under the same anchor.
+            cid = await mgr.pmo.post_feed(
                 MissionRef(pmo_id, "issue"),
-                part + "\n\n" + COMMENT_SENTINEL)
+                part + "\n\n" + COMMENT_SENTINEL, **thread)
+            if first is None:
+                first = cid
     finally:
         # even a post the client saw fail may have landed on the vendor:
         # invalidating after a failure is always safe, keeping is not
         feed_written(mgr, pmo_id)
+    return first
 
 
 def feed_written(mgr, pmo_id: str) -> None:
@@ -353,7 +376,8 @@ def feed_written(mgr, pmo_id: str) -> None:
 
 async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,
                                   filename: str, content: str,
-                                  comment_of) -> str | None:
+                                  comment_of,
+                                  reply_to: str | None = None) -> str | None:
     """The ONE attachment+comment pipe (ADR-0033 chokepoint ruling): upload
     `content` as `filename`, then post the comment `comment_of(url)` builds —
     url is None when the upload failed, so the builder picks its inline
@@ -361,7 +385,9 @@ async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,
     returns (body, externalize): callers keep their exact externalization
     semantics — a counted marker must ride the comment (False), a plain
     pointer comment may keep the size second-chance (True). Callers redact
-    `content`; the comment body still passes through _feed's redact."""
+    `content`; the comment body still passes through _feed's redact.
+    Returns the posted comment's entry id (None when the vendor returns
+    none); `reply_to` threads it as _feed does."""
     url = None
     if _attachments_supported(mgr):
         try:
@@ -371,8 +397,8 @@ async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,
             log.exception("attachment upload failed for %s — inline fallback",
                           filename)
     body, externalize = comment_of(url)
-    await mgr._feed(pmo_id, kind, body, externalize=externalize)
-    return url
+    return await mgr._feed(pmo_id, kind, body, externalize=externalize,
+                           reply_to=reply_to)
 
 
 def blockquote(text: str) -> str:

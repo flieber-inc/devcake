@@ -112,6 +112,34 @@ def test_post_feed_dispatches_on_kind():
     assert any("projectUpdateCreate" in q for q in rec.queries)
 
 
+def test_post_feed_reply_carries_parent_and_returns_the_comment_id():
+    """docs/03 §8 threads: `reply_to` becomes commentCreate's parentId and
+    the created comment's id comes back (the step's thread anchor)."""
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append(body["variables"])
+        if "commentCreate" in body["query"]:
+            return httpx.Response(200, json={"data": {"commentCreate": {
+                "success": True, "comment": {"id": "cm-9"}}}})
+        return httpx.Response(200, json={"data": {"projectUpdateCreate": {
+            "success": True, "projectUpdate": {"id": "pu-1"}}}})
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(handler))
+    assert pmo.capabilities().feed_threads is True
+    cid = run(pmo.post_feed(MissionRef("uuid-i1", "issue"), "hi",
+                            reply_to="cm-1"))
+    assert cid == "cm-9"
+    assert seen[-1] == {"input": {"issueId": "uuid-i1", "body": "hi",
+                                  "parentId": "cm-1"}}
+    run(pmo.post_feed(MissionRef("uuid-i1", "issue"), "hi"))
+    assert "parentId" not in seen[-1]["input"]       # top level by default
+    # project updates have no threads: the keyword is ignored, id still returned
+    assert run(pmo.post_feed(MissionRef("uuid-p1", "project"), "hi",
+                             reply_to="cm-1")) == "pu-1"
+    assert "parentId" not in json.dumps(seen[-1])
+
+
 def test_append_description_reads_then_appends():
     """ADR-0012 lineage note: append-only read-modify-write on the issue
     description; project refs are refused loudly (no v0 caller, and Linear

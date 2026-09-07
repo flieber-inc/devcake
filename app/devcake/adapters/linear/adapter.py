@@ -803,19 +803,30 @@ class LinearAdapter:
 
     # ── writes ───────────────────────────────────────────────────────────────
 
-    async def post_feed(self, ref: MissionRef, markdown: str) -> None:
+    async def post_feed(self, ref: MissionRef, markdown: str, *,
+                        reply_to: str | None = None) -> str | None:
         """Issue → comment; project → project update (Linear's project-native
-        feed — projects have no comments API, verified live)."""
+        feed — projects have no comments API, verified live). `reply_to` is
+        the parent comment's id: Linear threads are one level deep (a reply
+        is a Comment whose `parent` is set), so callers pass a top-level id.
+        Project updates have no threads; the keyword is ignored there."""
         if ref.kind == "project":
-            await self._gql(
+            data = await self._gql(
                 """mutation($p: String!, $b: String!) {
-                     projectUpdateCreate(input: {projectId: $p, body: $b}) { success } }""",
+                     projectUpdateCreate(input: {projectId: $p, body: $b}) {
+                       success projectUpdate { id } } }""",
                 {"p": ref.pmo_id, "b": markdown})
-            return
-        await self._gql(
-            """mutation($id: String!, $body: String!) {
-                 commentCreate(input: {issueId: $id, body: $body}) { success } }""",
-            {"id": ref.pmo_id, "body": markdown})
+            return ((data.get("projectUpdateCreate") or {})
+                    .get("projectUpdate") or {}).get("id") or None
+        payload: dict[str, Any] = {"issueId": ref.pmo_id, "body": markdown}
+        if reply_to:
+            payload["parentId"] = reply_to
+        data = await self._gql(
+            """mutation($input: CommentCreateInput!) {
+                 commentCreate(input: $input) { success comment { id } } }""",
+            {"input": payload})
+        return ((data.get("commentCreate") or {})
+                .get("comment") or {}).get("id") or None
 
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
         if ref.kind == "project":
@@ -1199,7 +1210,8 @@ class LinearAdapter:
                                # newest comment), so the feed memo needs no
                                # safety rescan here
                                updated_at_tracks_comments=True,
-                               feed_delta=True)   # root comments(filter:) read
+                               feed_delta=True,   # root comments(filter:) read
+                               feed_threads=True)  # commentCreate parentId
 
     # ── normalization ────────────────────────────────────────────────────────
 

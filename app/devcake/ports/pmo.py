@@ -150,6 +150,10 @@ class PMOCapabilities(BaseModel):
     # such read per cycle to keep the memoized feed scans of missions that
     # changed for reasons other than their feed (docs/04 §1).
     feed_delta: bool = False
+    # post_feed can nest a comment under an earlier one on the same item
+    # (`reply_to`). False ⇒ the feed chokepoint posts every comment top
+    # level and never hands `reply_to` to the adapter.
+    feed_threads: bool = False
 
 
 class PMOPort(Protocol):
@@ -207,8 +211,16 @@ class PMOPort(Protocol):
         ...
 
     # ── writes ───────────────────────────────────────────────────────────────
-    async def post_feed(self, ref: MissionRef, markdown: str) -> None:
-        """Post a feed entry. **Markdown fidelity is a port requirement:**
+    async def post_feed(self, ref: MissionRef, markdown: str, *,
+                        reply_to: str | None = None) -> str | None:
+        """Post a feed entry; returns the vendor id of the entry created
+        (the `entry_id` a later ``get_activity`` reports for it), or None
+        when the vendor returns none. `reply_to` nests the entry under the
+        given top-level entry on vendors whose `capabilities().feed_threads`
+        is True — the domain passes it only then; adapters without threads
+        accept the keyword and post top level. The body is identical either
+        way: threading is presentation, never content (docs/03 §8).
+        **Markdown fidelity is a port requirement:**
         DevCake stores state markers as backticked inline markdown (e.g.
         ``devcake:v1``, ``devcake:decomposition:v1 …``, merge-retry markers).
         Adapters must round-trip those bytes such that a later ``get_activity``

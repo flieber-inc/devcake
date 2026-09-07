@@ -156,8 +156,11 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
             if _pre_wipe(mgr, run):
                 log.info("abort finalize (transcript) pre-wipe %s", run.run_id)
                 return
-            await _post_transcript(mgr, run, transcript,
-                                        payload.get("last_message_md"))
+            anchor = await _post_transcript(mgr, run, transcript,
+                                            payload.get("last_message_md"))
+            # the step's bookkeeping threads under this comment (docs/03
+            # §8): saved with the checkpoint so redelivery threads the same
+            run.feed_anchor = anchor or ""
             run.finalized_steps.append(steps.TRANSCRIPT)
             mgr.runs.store.save(run)
 
@@ -179,7 +182,8 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
         if steps.TOKEN_REPORT not in run.finalized_steps:
             await mgr._feed(pmo_id, run.pmo_kind,
                              _token_report_md(run, token_report,
-                                              mgr.config.cost_inputs))
+                                              mgr.config.cost_inputs),
+                             reply_to=run.feed_anchor or None)
             if _pre_wipe(mgr, run):
                 log.info("abort finalize after token_report pre-wipe %s",
                          run.run_id)
@@ -435,17 +439,19 @@ async def restore_after_failure(mgr, run: Run) -> None:
 
 
 async def _post_transcript(mgr, run: Run, transcript: str,
-                           last_message: str | None = None) -> None:
+                           last_message: str | None = None) -> str | None:
     """ADR-0014 D1: attachment = full dump; comment = step line + the
     `>`-blockquoted last message. last_message missing/empty ⇒ the pointer-only
-    comment (old-image payloads; never derived from the transcript)."""
+    comment (old-image payloads; never derived from the transcript).
+    Returns the transcript comment's entry id (the step's thread anchor),
+    None for projects / vendors that return none."""
     transcript = redact(transcript)
     name = f"{run.seq}_{run.mission_type}.md"
     if run.pmo_kind == "project":
         await mgr._feed(run.mission_pmo_id, "project",
                          f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)"
                          f"\n\n---\n\n{transcript}")
-        return
+        return None    # project updates have no threads
     def _comment(url):
         if url is None:
             # INV-5: the transcript is always posted, even inline —
@@ -474,10 +480,11 @@ async def _post_transcript(mgr, run: Run, transcript: str,
 
     # docs/05 §4: transcripts always live as attachments, never inline —
     # via the ONE attachment+comment pipe (ADR-0033 chokepoint ruling)
-    await post_attachment_comment(mgr, run.mission_pmo_id, "issue",
-                                  filename=name, content=transcript,
-                                  comment_of=_comment)
+    anchor = await post_attachment_comment(mgr, run.mission_pmo_id, "issue",
+                                           filename=name, content=transcript,
+                                           comment_of=_comment)
     mgr._audit(run.mission_pmo_id, "transcript", name)
+    return anchor
 
 
 async def _post_reply(mgr, run: Run, last_message: str | None,

@@ -46,7 +46,7 @@ class MapPMO:
     async def create_relation(self, blocker_id, blocked_id):
         self.relations.append((blocker_id, blocked_id))
 
-    async def post_feed(self, ref, markdown):
+    async def post_feed(self, ref, markdown, *, reply_to=None):
         self.comments.append((ref.pmo_id, markdown))
 
     async def get_activity(self, ref, full=False):
@@ -813,7 +813,7 @@ class RoutePMO(MapPMO):
             ref.pmo_id, Activity(mission=self._mission(ref.pmo_id),
                                  entries=[], truncated=False))
 
-    async def post_feed(self, ref, markdown):
+    async def post_feed(self, ref, markdown, *, reply_to=None):
         self.comments.append((ref.pmo_id, markdown))
         self.feeds.setdefault(
             ref.pmo_id, Activity(mission=self._mission(ref.pmo_id),

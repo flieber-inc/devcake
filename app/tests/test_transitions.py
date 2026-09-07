@@ -189,9 +189,15 @@ class FakeForge:
         self.merges = []
         self.pr_comments = []
         self.capabilities = SimpleNamespace(mergeable_tristate=True)
+        self.lookups = 0            # get_pr_by_branch calls (the memoized read)
+        self.state_reads = []       # pr_state numbers, in order
+        self.branch_pr = PullRequest(number=8, url="https://forge/pr/8", state="open")
+        self.states = {}            # number → PullRequest answered by pr_state
+        self.state_exc = {}         # number → exception raised by pr_state
 
     async def get_pr_by_branch(self, branch):
-        return PullRequest(number=8, url="https://forge/pr/8", state="open")
+        self.lookups += 1
+        return self.branch_pr
 
     async def post_pr_comment(self, pr_number, markdown):
         self.pr_comments.append(markdown)
@@ -208,8 +214,11 @@ class FakeForge:
         return self.mergeable_result
 
     async def pr_state(self, pr_number):
-        return PullRequest(number=pr_number, url="https://forge/pr/8",
-                           state="open", merged=False)
+        self.state_reads.append(pr_number)
+        if pr_number in self.state_exc:
+            raise self.state_exc[pr_number]
+        return self.states.get(pr_number) or PullRequest(
+            number=pr_number, url="https://forge/pr/8", state="open", merged=False)
 
     @staticmethod
     def approval_footer(pr_url):
@@ -2340,6 +2349,66 @@ def test_sweep_write_backs_declare_the_critical_class(tmp_path):
     with pmo_call("critical"):                          # finalize's context
         run_coro(sweeps.merge_sweep(mgr, m))
     assert m.status == "done" and budgets == [None]     # the outer budget
+
+
+def test_merge_sweep_memoizes_the_branch_lookup(tmp_path):
+    """The branch→PR lookup is a stable fact once the PR exists: after the
+    first cycle a parked mission costs the state read alone."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.lookups == 1 and forge.state_reads == [8, 8]
+    assert mgr._merge_pr_numbers == {m.pmo_id: 8}
+
+
+def test_memoized_pr_the_forge_no_longer_knows_is_looked_up_again(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    forge.state_exc[8] = ForgeError("GET /pulls/8 → 404: gone", status=404)
+    forge.branch_pr = PullRequest(number=9, url="https://forge/pr/9", state="open")
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.lookups == 2 and forge.state_reads == [8, 8, 9]
+    assert mgr._merge_pr_numbers == {m.pmo_id: 9}
+    assert "DEVCAKE-MERGE" in m.labels                  # still parked, still driven
+    forge.state_exc[9] = ForgeError("GET /pulls/9 → 502", status=502)
+    with pytest.raises(ForgeError):                    # a transient is not a miss
+        run_coro(sweeps.merge_sweep(mgr, m))
+    assert mgr._merge_pr_numbers == {m.pmo_id: 9}
+
+
+def test_terminal_answer_on_a_memoized_number_is_confirmed_by_the_lookup(tmp_path):
+    """A newer PR on the same branch wins, exactly as when every cycle looked
+    the branch up: the old one closing must not cancel a mission whose new
+    PR is open — and when the lookup confirms the closed PR, it cancels."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    forge.states[8] = PullRequest(number=8, url="https://forge/pr/8",
+                                  state="closed", merged=False)
+    forge.branch_pr = PullRequest(number=9, url="https://forge/pr/9", state="open")
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert "DEVCAKE-MERGE" in m.labels and m.status == "in_progress"
+    assert forge.lookups == 2 and mgr._merge_pr_numbers == {m.pmo_id: 9}
+    assert not any("closed without merging" in c for c in fake.comments)
+
+    m, mgr, fake, forge = sweep_mgr(tmp_path / "confirmed", mergeable_result=None)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    forge.states[8] = PullRequest(number=8, url="https://forge/pr/8",
+                                  state="closed", merged=False)
+    forge.branch_pr = forge.states[8]                  # the lookup agrees
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.lookups == 2 and "DEVCAKE-MERGE" not in m.labels
+    assert any("closed without merging" in c for c in fake.comments)
+
+
+def test_sweeps_prune_the_pr_memo_when_a_mission_leaves_merge(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
+    fake.all_missions = [m]
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert mgr._merge_pr_numbers == {m.pmo_id: 8}
+    m.labels.discard("DEVCAKE-MERGE")
+    m.labels.add("DEVCAKE-EXECUTE")                     # a human moved it back
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert mgr._merge_pr_numbers == {}
 
 
 def test_sweep_boolean_forge_conflict_hands_off_not_execute(tmp_path):

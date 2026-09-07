@@ -808,6 +808,13 @@ until that run exists, field evidence below stays operator-self-reported.
   for a label, status, or relation edit; only a feed with a newer entry
   is re-read. GitHub and GitLab Issues keep per-mission reads. Docs
   04/05/11.
+- **Merge sweep remembers the pull request** (2026-09-06): the branch→PR
+  lookup is memoized per parked mission (process-local, pruned when the
+  mission leaves the merge stage), halving the sweep's forge reads; a
+  terminal answer on a memoized number is confirmed by a live lookup
+  before the sweep writes. Field receipt that prompted it: on a host the
+  merge sweep was the only forge traffic besides the health page's
+  branch-protection probe. Docs 03/04.
 
 ### Field evidence (receipted)
 

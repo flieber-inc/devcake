@@ -13,6 +13,16 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Fixed — the discovery drain no longer starves itself.** Before
+  dispatching a steward run, the drain re-read every pending source of
+  the family live, bypassing the feed memo. On a large family that was
+  about a hundred tracker reads per cycle; the shared credential hit the
+  request budget's critical floor part-way, the next read was refused,
+  the drain deferred and restarted the same family a cycle later — two
+  thousand requests an hour and no dispatch. The drain now decides on
+  the same memoized, witnessed scan the sweep made this cycle, and a
+  refused read resumes next cycle instead of restarting.
+
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 

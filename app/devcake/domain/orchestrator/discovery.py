@@ -235,10 +235,11 @@ async def scan_source(mgr, m, *, memo: bool = True) -> SourceState:
     write to=-. pending = posted − receipted when counts are known —
     restart-proof board arithmetic, no local ledger.
 
-    `memo` (ADR-0033 addendum): the per-cycle sweep reuses a recent scan
-    while nothing changed (`FeedScanMemo`); a caller about to WRITE on the
-    strength of the scan passes memo=False and pays the live read. A
-    truncated scan is never memoized."""
+    `memo` (ADR-0033 addendum): the per-cycle sweep and the discovery
+    drain reuse a recent scan while nothing changed (`FeedScanMemo`); a
+    caller about to WRITE on the strength of the scan (a label drop, a
+    `to=-` close, the steward's own apply) passes memo=False and pays the
+    live read. A truncated scan is never memoized."""
     fm = getattr(mgr, "feed_memo", None) if memo else None
     if fm is not None:
         hit = fm.get("discovery", m)

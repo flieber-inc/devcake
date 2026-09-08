@@ -465,3 +465,9 @@ The memo above re-reads a labeled feed whenever its mission's `updated_at` moved
   ADR-0031 (elevated markers, marker counting), ADR-0032 (handoff
   sibling lane, defang treatment), docs/19 §2 (impedance), §4
   (instrument), §6 (membrane).
+
+## Addendum — the drain decides on the memoized scan (2026-09-08)
+
+The discovery drain (`StewardService.maybe_dispatch_discovery`) used to re-read every pending source of the family it was about to serve **live**, bypassing the memo, on the reasoning that a dispatch should decide on the freshest feed. That rule predates the witness above. Field receipt from a board whose pending sources form one large decomposition family: the drain read about a hundred feeds per cycle, the shared tracker credential reached the request budget's critical floor part-way through the family, the next read was refused as routine, the drain deferred, kept nothing, and started the same family from scratch a cycle later — an instance demand of about two thousand requests an hour with zero dispatches, while the sweep's own scans of the same missions were memo hits. Unlatching the steward's degradation exposed it; while latched, the drain returned before its scan loop.
+
+Ruling: the drain decides on the **same memoized scan the sweep made this cycle**. That scan is invalidated by every DevCake write to the feed (the chokepoint), re-read when the mission changed, validated by the feed-changes witness where the vendor lists changes, and re-read after the safety window elsewhere — the memo decides *when*, pending stays posted − receipted from the feed. A source whose read is refused defers the drain as before, but the sources already read are memoized, so the next cycle resumes rather than restarts. The dispatch itself already runs as a critical call with a bounded wait. Live reads stay where a **write** is decided on the strength of a scan: the sweep's label drop and `to=-` close, and the steward run's own apply.

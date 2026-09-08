@@ -130,7 +130,10 @@ host deploys a release by checking out its tag and running `devcake up`
    a `v*` tag whose name differs from `VERSION` on the tagged commit. When
    the CLI was bumped, also push `cli-v<version>` on the same commit — that
    tag publishes to PyPI.
-3. Hosts: `git checkout vX.Y.Z && devcake up --bake all`. Nothing to edit.
+3. Hosts: `devcake up --release` (or `--release vX.Y.Z`); by hand,
+   `git checkout vX.Y.Z && devcake up --bake all`. Nothing to edit. When the
+   release bumped the CLI, `uv tool upgrade devcake-cli` first — `--release`
+   refuses an older CLI.
    `devcake status` and `devcake doctor` report a drift between the
    checkout's pin and the tag the stack runs under, with that command as
    the remedy.

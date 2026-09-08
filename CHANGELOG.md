@@ -13,6 +13,17 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Added — `devcake up --release [TAG]` and `devcake prune`.** A host
+  re-pin is one command: fetch tags, check the newest release (or the
+  one named) out, bake all, bring the stack up in the safe order, and
+  remove stale control-plane images and dangling leftovers. It refuses
+  before touching anything when the tree has modified tracked files,
+  when the CLI runs from inside the checkout, or when the release ships
+  a newer CLI than the one running. `devcake prune` does the tidy-up on
+  demand; `--devs` asks the app for the host baker's Dev-image prune,
+  the admin button's chokepoint — the CLI never removes a Dev image
+  itself. Ships as `devcake-cli` 0.1.6.
+
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 

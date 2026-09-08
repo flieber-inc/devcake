@@ -23,6 +23,10 @@ class UpOptions:
     no_hello_smoke: bool = False
     compose_services: list[str] = field(default_factory=list)
     as_json: bool = False
+    # --release [TAG]: check the release out first (None = not requested);
+    # implies --bake all unless --bake was given, and a stale-image tidy-up
+    # after a successful bring-up (never Dev images — the baker's)
+    release: str | None = None
 
 
 @dataclass
@@ -38,6 +42,7 @@ class UpPlan:
     no_hello_smoke: bool
     env_seeded: bool
     env_generated: list[str]
+    release_requested: bool = False
 
 
 def discover_docker_gid(repo: Path, sock: str) -> tuple[str, str]:
@@ -235,6 +240,7 @@ def prepare_env(
         no_hello_smoke=opts.no_hello_smoke,
         env_seeded=env_seeded,
         env_generated=env_generated,
+        release_requested=opts.release is not None,
     )
     return plan, gid_line
 
@@ -287,6 +293,9 @@ def _print_dry_run(plan: UpPlan, *, as_json: bool) -> None:
             as_json=False,
         )
     _log(f"── would: docker compose up -d {services}".rstrip(), as_json=False)
+    if plan.release_requested:
+        _log(f"── would: remove stale control-plane images not on {plan.tag} and "
+             "dangling leftovers (never Dev images)", as_json=False)
     if plan.foreground_baker:
         _log(
             "── would: run host baker in foreground (exec `devcake baker run`; no supervisor)",
@@ -543,6 +552,14 @@ def _hello_smoke(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
         raise SystemExit(4)
 
 
+def _prune_after_release(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
+    from .prune import prune_images
+    try:
+        prune_images(repo, tag=plan.tag, as_json=as_json)
+    except RuntimeError as exc:   # a failed listing never fails the bring-up
+        _log(f"── image tidy-up skipped: {exc}", as_json=as_json)
+
+
 def _start_baker(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
     factory = repo / ".factory"
     factory.mkdir(parents=True, exist_ok=True)
@@ -667,6 +684,20 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
         sys.stderr.write(f"devcake up: {exc}\n")
         return 3
 
+    if opts.release is not None:
+        # before anything else: the tag resolution below reads the
+        # checkout's VERSION, so the release must be checked out first
+        from . import release as release_mod
+        try:
+            release_mod.checkout_release(root, opts.release, dry_run=opts.dry_run,
+                                         as_json=opts.as_json)
+        except release_mod.ReleaseRefused as exc:
+            sys.stderr.write(f"devcake up --release: {exc}\n")
+            return 6
+        if not opts.bake:
+            opts.bake = True
+            opts.bake_targets = ["all"]
+
     try:
         plan, _ = prepare_env(root, opts, mutate=not opts.dry_run)
     except SystemExit as exc:
@@ -697,6 +728,10 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
         _health_gate(root, plan, as_json=opts.as_json)
         if plan.bake:
             _hello_smoke(root, plan, as_json=opts.as_json)
+        if opts.release is not None:
+            # only after a successful bring-up: stale control-plane images
+            # and dangling leftovers; Dev images stay the baker's
+            _prune_after_release(root, plan, as_json=opts.as_json)
         if plan.foreground_baker:
             _start_baker(root, plan, as_json=opts.as_json)
     except SystemExit as exc:

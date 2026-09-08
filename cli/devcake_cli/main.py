@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from typing import Sequence
 
-from . import baker, doctor, down, setup, status, up
+from . import baker, doctor, down, prune, setup, status, up
 
 
 _USAGE = """\
@@ -19,8 +19,9 @@ usage: devcake [--json] <verb> …
 Implemented:
   baker run     Host baker foreground / supervisor entry
                 (same loop as python -m dev_factory)
-  up            Bring up the compose stack (+ optional --bake)
+  up            Bring up the compose stack (+ optional --bake; --release [TAG])
   down          Stop the compose stack (no volume wipe)
+  prune         Remove stale DevCake images (--devs: ask the baker for Dev images)
   status        Compose + baker readiness snapshot
   doctor        Named preflight checks (+ remedies; --json)
   setup         First-setup / connections / settings-bundle import
@@ -36,10 +37,14 @@ Docs:    docs/adr/0038-devcake-cli-scope-command-surface-and-agent-operability.m
 """
 
 _UP_HELP = """\
-usage: devcake up [--bake [targets…]] [--dry-run] [--foreground-baker]
-                  [--no-hello-smoke] [--] [service…]
+usage: devcake up [--release [TAG]] [--bake [targets…]] [--dry-run]
+                  [--foreground-baker] [--no-hello-smoke] [--] [service…]
 
 Bring up the DevCake stack with discovered DOCKER_GID.
+  --release [TAG]        check the release out first (newest v* tag, or TAG),
+                         then bake all + up, then remove stale control-plane
+                         and dangling images; refuses a dirty tree or a CLI
+                         older than the release ships
   --bake [targets…]     bake before up (default targets: app admin hello)
   --dry-run              print discovered GID + planned actions
   --foreground-baker     up, then run baker in foreground (no supervisor)
@@ -48,7 +53,7 @@ Bring up the DevCake stack with discovered DOCKER_GID.
 """
 
 _VERBS = frozenset(
-    {"baker", "up", "down", "status", "doctor", "bake", "setup", "mcp"}
+    {"baker", "up", "down", "status", "doctor", "bake", "setup", "mcp", "prune"}
 )
 
 
@@ -63,6 +68,7 @@ def parse_up_flags(argv: Sequence[str]) -> up.UpOptions | int:
     do_bake = False
     bake_targets: list[str] = []
     compose_args: list[str] = []
+    release: str | None = None
     tokens = list(argv)
 
     i = 0
@@ -90,6 +96,13 @@ def parse_up_flags(argv: Sequence[str]) -> up.UpOptions | int:
                 bake_targets.append(tokens[i])
                 i += 1
             continue
+        if tok == "--release":
+            release = "latest"
+            i += 1
+            if i < len(tokens) and not tokens[i].startswith("--"):
+                release = tokens[i]
+                i += 1
+            continue
         if tok == "--":
             compose_args.extend(tokens[i + 1 :])
             break
@@ -102,6 +115,7 @@ def parse_up_flags(argv: Sequence[str]) -> up.UpOptions | int:
     return up.UpOptions(
         bake=do_bake,
         bake_targets=bake_targets,
+        release=release,
         dry_run=dry_run,
         foreground_baker=foreground,
         no_hello_smoke=no_hello,
@@ -166,6 +180,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stderr.write(f"devcake down: unknown option {rest[0]!r}\n")
             return 2
         return down.run_down(as_json=as_json)
+
+    if verb == "prune":
+        if rest and rest[0] in ("-h", "--help"):
+            sys.stdout.write(
+                "usage: devcake prune [--devs] [--dry-run] [--json]\n"
+                "Remove stale DevCake control-plane images (app/admin/app-test/hello "
+                "not on the current tag) and dangling build leftovers. Never a Dev "
+                "image: --devs asks the app for the host baker's Dev-image prune "
+                "(the admin button's chokepoint).\n"
+            )
+            return 0
+        devs = "--devs" in rest
+        dry = "--dry-run" in rest
+        extra = [a for a in rest if a not in ("--devs", "--dry-run")]
+        if extra:
+            sys.stderr.write(f"devcake prune: unknown option {extra[0]!r}\n")
+            return 2
+        return prune.run_prune(devs=devs, dry_run=dry, as_json=as_json)
 
     if verb == "status":
         if rest and rest[0] in ("-h", "--help"):

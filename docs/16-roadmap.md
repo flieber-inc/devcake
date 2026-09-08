@@ -859,6 +859,13 @@ until that run exists, field evidence below stays operator-self-reported.
   Now the baker is replaced first, a tag move is itself a bake order
   (dropped pins with an image under another tag are rebaked), and `devcake
   status` prints the staffing with the remedy. CLI 0.1.5. Docs 13.
+- **One-command re-pin** (2026-09-08, founder ask, ADR-0038 addendum):
+  `devcake up --release [TAG]` fetches tags, checks the release out, bakes
+  all, brings the stack up in the safe order and removes stale
+  control-plane and dangling images; refuses a dirty tree, an editable
+  CLI, or a CLI older than the release ships. `devcake prune [--devs]`
+  tidies on demand, Dev images only through the baker's own prune
+  request. CLI 0.1.6. Docs 13, CONTRIBUTING, AGENTS.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

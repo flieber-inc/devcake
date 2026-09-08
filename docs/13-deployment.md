@@ -333,11 +333,16 @@ DAG's `name:` keys (ADR-0025), with the human-readable run id format of
 The release pin is **the checkout's `VERSION` file** (a release tag such as `v0.5.9`), bumped together with the changelog when a release is cut (`CONTRIBUTING.md`, "Cutting a release"; CI refuses a drift between the two). `devcake up` resolves the tag once — a `DEVCAKE_TAG` in the process environment for development builds, else `VERSION`, else `latest` — exports it for bake + compose, and **writes it into `.env`** so a later plain `docker compose up -d` stays lockstep. `.env` is never a source for it: a value set there by hand is rewritten on the next `devcake up`, and `up` says so. Deploying a release is therefore:
 
 ```bash
+devcake up --release           # newest v* tag: fetch tags, check it out, bake all, up, tidy images
+devcake up --release v0.5.9    # a specific release
+# by hand (what --release does):
 git checkout v0.5.9            # the release checkout carries its own pin
 devcake up --bake all          # bake + compose under that tag; .env updated
 # without the CLI:
 export DEVCAKE_TAG=$(cat VERSION); docker buildx bake all; docker compose up -d
 ```
+
+`--release` refuses before touching anything when the tree has modified tracked files, when the CLI runs from inside the checkout (an editable install would swap its own source mid-run), or when the release ships a newer `devcake-cli` than the one running — the bring-up order that makes a re-pin safe lives in the CLI, so upgrade it first (`uv tool upgrade devcake-cli`). After a successful bring-up it removes DevCake's stale control-plane images (app, admin, app-test, hello not on the new tag) and dangling build leftovers; Dev images are the baker's and are never touched. `devcake prune [--devs] [--dry-run]` does the same tidy-up on demand, and `--devs` asks the app for the host baker's Dev-image prune — the admin button's chokepoint — so the baker removes Dev images outside the keep-set on its next tick.
 
 A development build tags itself explicitly: `DEVCAKE_TAG=$(git rev-parse --short HEAD) devcake up --bake all`.
 

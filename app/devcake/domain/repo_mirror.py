@@ -376,6 +376,21 @@ class RepoCache:
     # ── sync ─────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _remote_identity(url: str) -> str:
+        """The remote WITHOUT its authority user: what makes two origin URLs
+        the same repository. A credential that failed to load renders a
+        different clone user (2026-09 field incident: a descriptor shortage
+        made 53 mirrors read as "remote changed" and rebuild); a rotated
+        credential renders one too. Neither is a different repository."""
+        if "://" not in url:
+            return url
+        scheme, rest = url.split("://", 1)
+        authority, _, path = rest.partition("/")
+        if "@" in authority:
+            authority = authority.rsplit("@", 1)[1]
+        return f"{scheme}://{authority}/{path}" if path or rest.endswith("/") else f"{scheme}://{authority}"
+
+    @staticmethod
     def _origin_url(url: str, clone_user: str) -> str:
         """Embed ``clone_user@`` after the scheme for http(s) remotes that
         lack an authority user. Shared by ``sync_one`` and ``remote_head``
@@ -438,7 +453,20 @@ class RepoCache:
         else:
             r = await self.git(["-C", str(p), "remote", "get-url", "origin"],
                                env=env)
-            if r.returncode != 0 or r.stdout.strip() != expected_url:
+            stored = r.stdout.strip()
+            if (r.returncode == 0 and stored != expected_url
+                    and self._remote_identity(stored)
+                    == self._remote_identity(expected_url)):
+                # same repository, different authority user: point origin
+                # at the expected URL — never delete a mirror for a
+                # credential that failed to load or was rotated
+                log.info("mirror %s: origin user changed — updating the "
+                         "remote URL", name)
+                r2 = await self.git(["-C", str(p), "remote", "set-url",
+                                     "origin", expected_url], env=env)
+                if r2.returncode != 0:
+                    return await fail(f"remote set-url: {r2.stderr}")
+            elif r.returncode != 0 or stored != expected_url:
                 # URL changed (or corrupt config): the mirror is for a
                 # DIFFERENT repo now — rebuild rather than fetch into it
                 log.info("mirror %s: remote changed — re-initializing", name)

@@ -16,6 +16,19 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — one shared HTTP pool; the app no longer runs at its
+  descriptor ceiling.** One connection pool per repository card held
+  hundreds of idle keep-alive sockets on a large host, and every boot
+  fan-out (the forge probe of every card, the mirror warm-up) then
+  failed for minutes with "too many open files": git spawns refused,
+  secret files read as corrupt, mirrors deleted and re-cloned, the
+  health probe resetting behind the proxy. Every adapter now shares one
+  bounded pool per timeout, closed once at shutdown; the compose `app`
+  service raises its open-files limit; a mirror whose origin differs
+  only in the authority user (a credential that failed to load, or was
+  rotated) gets its remote URL updated instead of being rebuilt; and the
+  secrets reader logs the actual reason a file was unreadable.
+
 ## v0.5.14 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.7.

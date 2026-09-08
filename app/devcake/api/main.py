@@ -252,6 +252,12 @@ async def lifespan(app: FastAPI):
     for t in tasks:
         with contextlib.suppress(asyncio.CancelledError):
             await t
+    # the process-wide HTTP pool (adapters/http): adapters never close it
+    try:
+        from ..adapters.http import aclose_shared
+        await aclose_shared()
+    except Exception:  # noqa: BLE001 — shutdown must proceed
+        log.exception("closing the shared HTTP pool on shutdown")
 
 
 def _operation_id(route, _seen: dict[str, int] = {}) -> str:  # noqa: B006 — the registration-order memo IS the point

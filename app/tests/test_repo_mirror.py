@@ -1246,3 +1246,45 @@ def test_invalidation_moment_follows_rename_and_leaves_with_delete(tmp_path):
     assert "beta" in cache._invalidated_at and "alpha" not in cache._invalidated_at
     cache.delete_mirror("beta")
     assert "beta" not in cache._invalidated_at
+
+
+# ── a changed authority user is never a rebuild (2026-09 field incident) ──
+
+def test_origin_user_change_updates_the_remote_url_instead_of_rebuilding(tmp_path):
+    """A credential that failed to load (or was rotated) renders a different
+    clone user in the origin URL; the mirror is the same repository and must
+    be kept — set-url, no delete, no re-init."""
+    from devcake.domain.repo_mirror import RepoCache
+
+    def script(args):
+        if "get-url" in args:
+            return GitResult(0, "https://someone-else@gitlab.com/o/alpha.git\n", "")
+        return None
+    cache, calls, forges = make_cache(tmp_path, [R1], script=script)
+    mirror = cache.mirror_path("alpha")
+    mirror.mkdir(parents=True, exist_ok=True)
+    (mirror / "HEAD").write_text("ref: refs/heads/main\n")
+    st = run_coro(cache.sync_one("alpha"))
+    assert st.ok, st.detail
+    expected = RepoCache._origin_url(R1.url, FakeForge.descriptor.clone_user)
+    assert any(c[:4] == ["-C", str(mirror), "remote", "set-url"] and c[-1] == expected
+               for c in calls)
+    assert not any(c[:1] == ["init"] for c in calls)
+    assert mirror.is_dir()
+    assert RepoCache._remote_identity("https://u@h/o/r.git") == "https://h/o/r.git"
+    assert RepoCache._remote_identity("https://h/o/r.git") == "https://h/o/r.git"
+    assert RepoCache._remote_identity("git@h:o/r.git") == "git@h:o/r.git"
+
+
+def test_a_different_repository_still_rebuilds_the_mirror(tmp_path):
+    def script(args):
+        if "get-url" in args:
+            return GitResult(0, "https://gitlab.com/o/beta.git\n", "")
+        return None
+    cache, calls, forges = make_cache(tmp_path, [R1], script=script)
+    mirror = cache.mirror_path("alpha")
+    mirror.mkdir(parents=True, exist_ok=True)
+    run_coro(cache.sync_one("alpha"))
+    assert any(c[:1] == ["init"] for c in calls)
+    assert not any("set-url" in c for c in calls)
+

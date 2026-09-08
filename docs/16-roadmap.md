@@ -882,6 +882,18 @@ until that run exists, field evidence below stays operator-self-reported.
   on while the baker built the two pinned ones. `--bake` now accepts the
   control plane only and refuses harness targets; `--release` implies the
   control-plane bake. CLI 0.1.7. Docs 13, AGENTS, CONTRIBUTING.
+- **One shared HTTP pool; the descriptor ceiling** (2026-09-08, field
+  incident): after a re-pin the backend read "unreachable" for two
+  minutes — the app held 984 idle keep-alive sockets (one pool per
+  repository card, 325 cards) against the container's 1,024 soft cap, and
+  the boot fan-out failed with EMFILE 1,413 times: 51 git spawns refused,
+  7,993 secret reads logged as "unreadable" (the reader hid the errno),
+  53 mirrors deleted and re-cloned as "remote changed" because a
+  credential that failed to load renders a different clone user, and the
+  health probe's accept() resetting behind nginx. Now one bounded pool per
+  timeout shared by every adapter (closed at shutdown), `ulimits.nofile`
+  65,536 on the app service, a set-url instead of a rebuild when only the
+  origin's authority user differs, and the reader names the exception.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

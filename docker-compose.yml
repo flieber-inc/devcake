@@ -44,6 +44,15 @@ services:
       # (live-verified 2026-07-17) — same default as the gitea service below
       GITEA_ADMIN_USER: ${GITEA_ADMIN_USER:-devcakeadmin}
     restart: unless-stopped
+    # the container default (1,024 open files, soft) starved every boot
+    # fan-out into "too many open files" once the forge pools sat near it
+    # (2026-09 field incident); the hard cap is far higher, this is free.
+    # The shared HTTP pool (adapters/http) keeps the steady state small —
+    # this is the belt for the next fan-out nobody predicted.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
       # ADR-0024: bare source mirrors, app-writable; the dev-run PROVISION

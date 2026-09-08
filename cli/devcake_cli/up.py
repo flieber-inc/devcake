@@ -279,16 +279,17 @@ def _print_dry_run(plan: UpPlan, *, as_json: bool) -> None:
         else:
             _log("── would: hello dispatch smoke (scripts/ci_dispatch_hello.sh)", as_json=False)
     services = " ".join(plan.compose_services) if plan.compose_services else ""
+    if not plan.foreground_baker:
+        _log(
+            "── would: replace host baker detached (launchd / systemd --user / flock respawn; "
+            ".factory/watch.pid) — before the app is recreated, so it claims the "
+            "app's bake order — not a compose service",
+            as_json=False,
+        )
     _log(f"── would: docker compose up -d {services}".rstrip(), as_json=False)
     if plan.foreground_baker:
         _log(
             "── would: run host baker in foreground (exec `devcake baker run`; no supervisor)",
-            as_json=False,
-        )
-    else:
-        _log(
-            "── would: start host baker detached (launchd / systemd --user / flock respawn; "
-            ".factory/watch.pid) — not a compose service",
             as_json=False,
         )
 
@@ -678,11 +679,26 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
     try:
         if plan.bake:
             _bake(root, plan, as_json=opts.as_json)
+        # The host baker is replaced BEFORE the app is recreated. The app
+        # publishes its one-shot bake order (the keep-set) at boot; with
+        # the baker replaced afterwards, the outgoing baker — still ticking
+        # under the previous tag — claimed that order, and the incoming one
+        # found an empty inbox, dropped the previous tag's receipts (their
+        # images are named with that tag) and had nothing to rebuild: every
+        # Dev Type "waiting — no receipt" until someone re-saved a Dev Type.
+        # Replaced first, the incoming baker is the one that claims the
+        # order; the inbox is durable until then, and the baker tolerates
+        # the app being down or on the previous digest for minutes (docs/13).
+        # The foreground variant execs the baker and never returns, so it
+        # stays last.
+        if not plan.foreground_baker:
+            _start_baker(root, plan, as_json=opts.as_json)
         _compose_up(root, plan, as_json=opts.as_json)
         _health_gate(root, plan, as_json=opts.as_json)
         if plan.bake:
             _hello_smoke(root, plan, as_json=opts.as_json)
-        _start_baker(root, plan, as_json=opts.as_json)
+        if plan.foreground_baker:
+            _start_baker(root, plan, as_json=opts.as_json)
     except SystemExit as exc:
         return int(exc.code or 1)
 

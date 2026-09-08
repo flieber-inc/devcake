@@ -94,6 +94,71 @@ def test_up_dry_run_bake_plan(monkeypatch, tmp_path, capsys):
     assert "would upsert DOCKER_GID=4242" in text
 
 
+def test_up_replaces_the_baker_before_the_app_is_recreated(monkeypatch, tmp_path):
+    """The app publishes its one-shot bake order at boot; a baker replaced
+    only afterwards lets the outgoing one claim it (field, 2026-09). The
+    detached baker is replaced before compose up; the foreground variant
+    execs and so stays last."""
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+
+    sock = _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKER_SOCK", str(sock))
+    order = []
+    for name in ("_bake", "_compose_up", "_health_gate", "_hello_smoke", "_start_baker"):
+        monkeypatch.setattr(up_mod, name,
+                            lambda *a, _n=name, **k: order.append(_n))
+    assert up_mod.run_up(up_mod.UpOptions(bake=True), repo=tmp_path) == 0
+    assert order == ["_bake", "_start_baker", "_compose_up", "_health_gate",
+                     "_hello_smoke"]
+    order.clear()
+    assert up_mod.run_up(up_mod.UpOptions(bake=True, foreground_baker=True),
+                         repo=tmp_path) == 0
+    assert order == ["_bake", "_compose_up", "_health_gate", "_hello_smoke",
+                     "_start_baker"]
+
+
+def test_status_reports_harness_pins_and_the_lost_order_remedy(monkeypatch, tmp_path, capsys):
+    """Every pin waiting while the baker is idle with no job means the app's
+    bake order was lost: `devcake status` names the remedy."""
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+    import devcake_cli.status as status_mod
+    _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def _fake_run(argv, **kwargs):
+        if argv[:3] == ["docker", "compose", "ps"]:
+            return subprocess.CompletedProcess(argv, 0, stdout='{"Name":"app"}\n')
+        return subprocess.CompletedProcess(argv, 1, stderr="no")
+    health = {
+        "harness_pins": {"templates": {
+            "grok-build": {"cli_version": "1.0.13", "ok": False, "state": "waiting",
+                           "reason": "no receipt for grok-build 1.0.13"},
+            "claude-code": {"cli_version": "2.1.258", "ok": True, "state": "ready",
+                            "reason": ""}}},
+        "bake_status": {"state": "ready", "jobs": [], "baker_alive": True},
+    }
+    monkeypatch.setattr(status_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(status_mod, "_fetch_health",
+                        lambda root, **kw: (health, None))
+    rc = cli_main.main(["status"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "  claude-code 2.1.258: staffed" in out
+    assert "  grok-build 1.0.13: waiting — no receipt for grok-build 1.0.13" in out
+    assert "the baker is idle with no bake order in flight" in out
+    # a baking baker is not a lost order
+    health["bake_status"] = {"state": "baking", "jobs": ["grok-build@1.0.13"]}
+    cli_main.main(["status"])
+    assert "no bake order in flight" not in capsys.readouterr().out
+    rc = cli_main.main(["status", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["harness_pins"] == health["harness_pins"]["templates"]
+    assert payload["bake_status"] == health["bake_status"]
+
+
 def test_down_invokes_compose_without_volume_wipe(monkeypatch, tmp_path, capsys):
     _ensure_cli_importable()
     import devcake_cli.main as cli_main

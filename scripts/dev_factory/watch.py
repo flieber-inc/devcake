@@ -26,6 +26,7 @@ from .core import (
     claim_inbox,
     drop_receipts_missing_images,
     house_from_dockerfile,
+    pins_moved_with_tag,
     image_ref,
     load_keep_set,
     plan_prune,
@@ -465,6 +466,24 @@ def once(*, work: Path, tag: str, house: dict[str, str],
             compose_rm(f"{RECEIPTS}/{stem}.json")
         except Exception:  # noqa: BLE001 — gone-image receipt must not block the tick
             pass
+    # A tag move is a bake order: a dropped receipt whose pin still has an
+    # image under another tag was wanted, and nothing may be left to say so
+    # (the app's boot-time order can be claimed by the outgoing baker during
+    # a deploy). Only when no order is in the inbox — a real order wins.
+    synthesized: Path | None = None
+    if claimed is None:
+        moved = pins_moved_with_tag(
+            dropped, local_images=images, tag=tag, house=house)
+        if moved:
+            synthesized = work / (KEEP_SET + ".rebake")
+            synthesized.write_text(json.dumps({"pins": [
+                {"template": p.template, "cli_version": p.cli_version}
+                for p in moved]}, indent=2) + "\n")
+            claimed = synthesized
+            print("dev_factory: tag moved to "
+                  f"{tag} — rebaking {len(moved)} receipted pin(s): "
+                  + ", ".join(f"{p.template}@{p.cli_version}" for p in moved),
+                  flush=True)
 
     keep_set = None
     trace_id, root_id = "", ""
@@ -534,8 +553,10 @@ def once(*, work: Path, tag: str, house: dict[str, str],
         release_inbox(claimed)
         # Only the claimed generation (`.taking`) may be removed. A file at
         # KEEP_SET after claim is a newer app publication for the next tick —
-        # never delete the live publication path.
-        compose_rm(taking_name)
+        # never delete the live publication path. A synthesized order never
+        # existed in the container.
+        if synthesized is None:
+            compose_rm(taking_name)
         emit_event(work, span_record(
             name="baker.reconcile",
             trace_id=trace_id, span_id=root_id, parent="",

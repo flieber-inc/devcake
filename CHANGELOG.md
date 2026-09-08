@@ -22,6 +22,17 @@ See the living log and open candidates in
   thousand requests an hour and no dispatch. The drain now decides on
   the same memoized, witnessed scan the sweep made this cycle, and a
   refused read resumes next cycle instead of restarting.
+- **Fixed — a release re-pin no longer leaves every Dev Type waiting for
+  a receipt.** `devcake up` replaces the host baker before the app is
+  recreated, so the incoming baker is the one that claims the bake
+  order the app publishes at boot; the outgoing baker used to claim it
+  and the incoming one then dropped the previous tag's receipts with
+  nothing to rebuild, freezing dispatch until a Dev Type was re-saved.
+  The baker also treats a tag move as a bake order: a dropped receipt
+  whose pin still has an image under another tag is rebaked under the
+  new one. `devcake status` prints each harness template's staffing and
+  names the remedy when pins wait with an idle baker. Ships as
+  `devcake-cli` 0.1.5.
 
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).

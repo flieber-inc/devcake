@@ -253,6 +253,54 @@ def test_ok_receipt_for_a_gone_image_is_dropped_and_the_pin_rebakes(tmp_path):
             store=FileReceiptStore(receipts),
             baker_alive=True)
 
+def test_tag_move_turns_a_dropped_explicit_pin_into_a_bake_order():
+    """The release tag moved (v1 → v2): the pin's image exists under the
+    previous tag, its receipt was dropped (images are the registrar), and
+    nothing may be left to order the rebake — the drop IS the order."""
+    factory = _load_factory()
+    moved = factory.pins_moved_with_tag(
+        ("grok-build@1.0.13", "claude-code@2.1.258"),
+        local_images=("devcake/dev-grok-build:v1-1.0.13",
+                      "devcake/dev-claude-code:v1-2.1.258",
+                      "devcake/dev-hello:v2"),
+        tag="v2", house={"grok-build": "0.2.112", "claude-code": "2.1.229"})
+    assert moved == (factory.Pin("grok-build", "1.0.13"),
+                     factory.Pin("claude-code", "2.1.258"))
+
+
+def test_tag_move_recognizes_a_house_pin_by_its_bare_tag_image():
+    factory = _load_factory()
+    moved = factory.pins_moved_with_tag(
+        ("grok-build@0.2.112",),
+        local_images=("devcake/dev-grok-build:v1",),
+        tag="v2", house={"grok-build": "0.2.112"})
+    assert moved == (factory.Pin("grok-build", "0.2.112"),)
+
+
+def test_removed_pin_stays_dropped_without_evidence_of_another_tag():
+    """docker rmi / the prune verb leave no image under any tag: the
+    receipt stays dropped, nothing is rebaked behind the operator's back."""
+    factory = _load_factory()
+    assert factory.pins_moved_with_tag(
+        ("grok-build@1.0.13",),
+        local_images=("devcake/dev-claude-code:v2-2.1.258", "devcake/dev-hello:v2"),
+        tag="v2", house={"grok-build": "0.2.112"}) == ()
+    # the current tag's image alone is no evidence of a move either
+    assert factory.pins_moved_with_tag(
+        ("grok-build@1.0.13",),
+        local_images=("devcake/dev-grok-build:v2-1.0.13",),
+        tag="v2", house={"grok-build": "0.2.112"}) == ()
+    # a house-pin receipt is not vouched for by a versioned image of another pin
+    assert factory.pins_moved_with_tag(
+        ("grok-build@0.2.112",),
+        local_images=("devcake/dev-grok-build:v1-1.0.13",),
+        tag="v2", house={"grok-build": "0.2.112"}) == ()
+    # unknown templates and a failed image listing never order anything
+    assert factory.pins_moved_with_tag(
+        ("nginx@1.0.0", "grok-build@1.0.13"), local_images=None,
+        tag="v2", house={"grok-build": "0.2.112"}) == ()
+
+
 def test_receipt_stays_when_the_named_image_is_still_local(tmp_path):
     factory = _load_factory()
     receipts = tmp_path / "harness_receipts"

@@ -246,10 +246,20 @@ class StewardService:
             pending: dict[str, list[tuple[int, int]]] = {}
             for s in group:
                 try:
-                    state = await discovery.scan_source(mgr, s, memo=False)   # a dispatch decides on a live read
+                    # the same memoized scan the sweep made this cycle
+                    # (ADR-0033 addendum: witnessed where the vendor lists
+                    # feed changes, invalidated by every DevCake write).
+                    # Re-reading the family live here cost a full feed read
+                    # per pending source per cycle and starved the very
+                    # dispatch it was meant to protect (field: ~100 reads
+                    # a cycle, refused mid-family at the budget floor, then
+                    # restarted from scratch the next cycle).
+                    state = await discovery.scan_source(mgr, s)
                 except PMOTransient as e:
                     # rate limit / thin budget: keep the pending ids, the
-                    # sweep re-drives next cycle — never abort the segment
+                    # sweep re-drives next cycle — never abort the segment.
+                    # Sources scanned so far are memoized, so the next
+                    # cycle resumes where this one stopped
                     log.warning("discovery lane deferred for %s: %s", s.key, e)
                     return
                 if state.truncated:

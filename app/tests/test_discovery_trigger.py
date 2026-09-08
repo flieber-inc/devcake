@@ -101,6 +101,107 @@ def test_off_snapshot_pending_ids_are_dropped(tmp_path):
     assert calls == [] and mgr._discoveries_pending == set()
 
 
+# ── the drain decides on the memoized scan (ADR-0033 addendum) ───────────────
+
+def _family_setup(tmp_path):
+    """Three pending sources in ONE family (blocked_by edges), each feed
+    carrying one unrouted discovery batch."""
+    src = m("src", "T-S", status="in_progress")
+    src2 = m("src2", "T-S2", status="in_progress", blocked_by=["src"])
+    src3 = m("src3", "T-S3", status="in_progress", blocked_by=["src"])
+    other = m("oth", "T-O")
+    pmo = RoutePMO([src, src2, src3, other])
+    for s_ in (src, src2, src3):
+        pmo.feeds[s_.pmo_id] = Activity(
+            mission=s_, entries=[_ae(discovery_marker(2, 1))], truncated=False)
+    mgr = make_mgr(tmp_path, pmo)
+    mgr.instance.discovery_routing = True
+    mgr.steward_repo = lambda: "home"
+    # one finished EXECUTE run per source (distinct ids — the shared helper
+    # hard-codes one run id, which would make the runs overwrite each other)
+    from devcake.domain.run import Run
+    for s_ in (src, src2, src3):
+        r = Run(run_id=f"L-{s_.key}-2-EXECUTE-AAAAAA", mission_key=s_.key,
+                mission_pmo_id=s_.pmo_id, mission_type="EXECUTE",
+                dev_type="senior-dev", seq=2, state="finished",
+                pmo_ref=mgr.instance_name)
+        r.result = {"outcome": "executed", "summary": "s", "discoveries": [
+            {"finding": f"finding about {s_.key}", "evidence": "src/x.py:1; repro: pytest -k f1",
+             "scope": "scope 1"}]}
+        mgr.runs.store.save(r)
+    dt = DevType(name="steward", harness_template="claude-code")
+    svc = StewardService(AppConfig(), {"steward": dt}, mgr)
+    calls = []
+
+    async def fake_dispatch(dt_, fam, pending, **kw):
+        calls.append((sorted(fam.by_id), dict(pending), kw))
+        return object()
+    mgr.dispatch_steward_discovery = fake_dispatch
+    return pmo, mgr, svc, calls, [src, src2, src3, other]
+
+
+def _reads(pmo):
+    return [pid for pid, _full in pmo.activity_calls]
+
+
+def test_drain_reuses_the_sweeps_memoized_scan_and_reads_nothing(tmp_path):
+    # the sweep scanned the labelled sources through the memo this cycle;
+    # the drain's decision costs zero further feed reads
+    pmo, mgr, svc, calls, missions = _family_setup(tmp_path)
+    for s_ in missions[:3]:
+        s_.labels = s_.labels | {"DEVCAKE-DISCOVERY"}
+        run_coro(discovery.discovery_sweep(mgr, s_))
+    assert mgr._discoveries_pending == {"src", "src2", "src3"}
+    n = len(pmo.activity_calls)
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert len(pmo.activity_calls) == n                 # memo hits only
+    assert len(calls) == 1
+    assert calls[0][1] == {"src": [(2, 1)], "src2": [(2, 1)], "src3": [(2, 1)]}
+    assert mgr._discoveries_pending == set()
+
+
+def test_refused_read_defers_and_the_next_cycle_resumes_where_it_stopped(tmp_path):
+    from devcake.ports.pmo import PMOBudgetExceeded
+    pmo, mgr, svc, calls, missions = _family_setup(tmp_path)
+    mgr._discoveries_pending |= {"src", "src2", "src3"}
+    real = pmo.get_activity
+    refuse = {"src3"}
+
+    async def budgeted(ref, full=False):
+        if ref.pmo_id in refuse:
+            refuse.discard(ref.pmo_id)
+            raise PMOBudgetExceeded("remaining quota is reserved for critical calls")
+        return await real(ref, full=full)
+    pmo.get_activity = budgeted
+    # cycle 1: two sources read, the third refused → deferred, nothing served
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert calls == []
+    assert mgr._discoveries_pending == {"src", "src2", "src3"}
+    first = _reads(pmo)
+    assert sorted(first) == ["src", "src2"]           # src3 raised before the read counted
+    # cycle 2: only the refused source is read — the other two are memoized
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert _reads(pmo)[len(first):] == ["src3"]
+    assert len(calls) == 1
+    assert calls[0][1] == {"src": [(2, 1)], "src2": [(2, 1)], "src3": [(2, 1)]}
+    assert mgr._discoveries_pending == set()
+
+
+def test_own_write_still_forces_the_drain_to_read_live(tmp_path):
+    # the memo is invalidated by every DevCake write to a feed: a source
+    # DevCake wrote to since the sweep is read again before the dispatch
+    from devcake.domain.orchestrator.feed import feed_written
+    pmo, mgr, svc, calls, missions = _family_setup(tmp_path)
+    for s_ in missions[:3]:
+        s_.labels = s_.labels | {"DEVCAKE-DISCOVERY"}
+        run_coro(discovery.discovery_sweep(mgr, s_))
+    feed_written(mgr, "src2")
+    n = len(pmo.activity_calls)
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert _reads(pmo)[n:] == ["src2"]
+    assert len(calls) == 1
+
+
 # ── the label-gated sweep arm ────────────────────────────────────────────────
 
 def test_sweep_reseeds_pending_from_the_board(tmp_path):

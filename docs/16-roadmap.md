@@ -839,6 +839,17 @@ until that run exists, field evidence below stays operator-self-reported.
   anchor so a redelivered finalize threads the same way. Docs 03 §8, 05,
   07.
 
+- **The discovery drain decides on the memoized scan** (2026-09-08, ADR-0033
+  addendum): before dispatching, the drain re-read every pending source of
+  the family live, bypassing the memo. Field receipt from a board whose
+  pending sources form one large decomposition family: about a hundred
+  feed reads a cycle, the shared credential at the budget's critical floor
+  part-way through, the next read refused, the drain deferred and restarted
+  the family a cycle later — two thousand requests an hour on that
+  instance and no dispatch, while the sweep's scans of the same missions
+  were memo hits. Unlatching the steward's degradation (v0.5.9) exposed
+  it. The drain now reuses the sweep's witnessed scan and resumes after a
+  refusal; the dispatch was already critical-class.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

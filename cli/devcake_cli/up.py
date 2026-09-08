@@ -14,6 +14,27 @@ from . import envfile
 from .paths import read_version_pin, require_checkout_root
 
 
+# What `devcake up --bake` may build: the control plane (and the CI test
+# image). Dev images are the host baker's alone — the keep-set is the order,
+# receipts are the registrar — and `up` never bakes one, not on request:
+# a bake here would race the baker's own build of the same pin and burn
+# minutes on house-pin images no Dev Type dispatches on (ADR-0038 addendum).
+CONTROL_PLANE_TARGETS = ("app", "admin", "hello", "app-test")
+DEFAULT_BAKE_TARGETS = ("app", "admin", "hello")
+
+
+def refused_bake_targets(targets) -> str | None:
+    """The refusal line when `targets` names anything but the control
+    plane (a harness, `all`, `images`), else None."""
+    bad = [t for t in targets if t not in CONTROL_PLANE_TARGETS]
+    if not bad:
+        return None
+    return (f"--bake {' '.join(bad)}: devcake up bakes the control plane only "
+            f"({' '.join(DEFAULT_BAKE_TARGETS)}; app-test for CI). Dev images are "
+            "the host baker's — save a Dev Type to order one, or run "
+            "`docker buildx bake <target>` by hand for a development build")
+
+
 @dataclass
 class UpOptions:
     bake: bool = False
@@ -24,8 +45,9 @@ class UpOptions:
     compose_services: list[str] = field(default_factory=list)
     as_json: bool = False
     # --release [TAG]: check the release out first (None = not requested);
-    # implies --bake all unless --bake was given, and a stale-image tidy-up
-    # after a successful bring-up (never Dev images — the baker's)
+    # implies --bake (the control plane) unless --bake was given, and a
+    # stale-image tidy-up after a successful bring-up (never Dev images —
+    # the baker's, which rebuilds the pinned ones itself on a tag move)
     release: str | None = None
 
 
@@ -255,7 +277,7 @@ def _print_dry_run(plan: UpPlan, *, as_json: bool) -> None:
             "devcake_ws_host": plan.ws_host,
             "devcake_tag": plan.tag,
             "bake": plan.bake,
-            "bake_targets": plan.bake_targets or ["app", "admin", "hello"],
+            "bake_targets": plan.bake_targets or list(DEFAULT_BAKE_TARGETS),
             "compose_services": plan.compose_services,
             "foreground_baker": plan.foreground_baker,
             "no_hello_smoke": plan.no_hello_smoke,
@@ -278,7 +300,7 @@ def _print_dry_run(plan: UpPlan, *, as_json: bool) -> None:
     if plan.bake:
         _log("── would: docker compose stop dagu (deploy window — ADR-0025 R9)", as_json=False)
         _log("── would: compute DEVCAKE_APP_DIGEST from scripts/app_digest.py", as_json=False)
-        targets = " ".join(plan.bake_targets) if plan.bake_targets else "app admin hello"
+        targets = " ".join(plan.bake_targets or DEFAULT_BAKE_TARGETS)
         _log(f"── would: DEVCAKE_TAG={plan.tag} docker buildx bake {targets}", as_json=False)
         if plan.no_hello_smoke:
             _log("── would: skip hello dispatch smoke (--no-hello-smoke)", as_json=False)
@@ -374,7 +396,7 @@ def _bake(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
         digest = (digest_proc.stdout or "").strip()
         env["DEVCAKE_APP_DIGEST"] = digest
         _log(f"── DEVCAKE_APP_DIGEST={digest}", as_json=as_json)
-        targets = plan.bake_targets or ["app", "admin", "hello"]
+        targets = plan.bake_targets or list(DEFAULT_BAKE_TARGETS)
         _log(f"── docker buildx bake {' '.join(targets)}", as_json=as_json)
         bake = subprocess.run(
             ["docker", "buildx", "bake", *targets],
@@ -684,6 +706,13 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
         sys.stderr.write(f"devcake up: {exc}\n")
         return 3
 
+    # before anything moves — including the release checkout: Dev images
+    # are the host baker's, `up` bakes the control plane only
+    refused = refused_bake_targets(opts.bake_targets) if opts.bake else None
+    if refused:
+        sys.stderr.write(f"devcake up: {refused}\n")
+        return 2
+
     if opts.release is not None:
         # before anything else: the tag resolution below reads the
         # checkout's VERSION, so the release must be checked out first
@@ -695,8 +724,8 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
             sys.stderr.write(f"devcake up --release: {exc}\n")
             return 6
         if not opts.bake:
-            opts.bake = True
-            opts.bake_targets = ["all"]
+            opts.bake = True          # the control plane; never a Dev image
+            opts.bake_targets = []
 
     try:
         plan, _ = prepare_env(root, opts, mutate=not opts.dry_run)

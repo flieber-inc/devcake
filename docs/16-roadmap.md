@@ -876,6 +876,12 @@ until that run exists, field evidence below stays operator-self-reported.
   naming what was left out), served-only discard so the backlog drains in
   runs, and exit 17 `DEV_PROMPT_TOO_LARGE` refused before launch with the
   numbers. Follow-up: prompt via `--prompt-file`/stdin (docs/08).
+- **`devcake up` never bakes a Dev image** (2026-09-08, founder ruling,
+  ADR-0038 addendum): the first `--release` implied `--bake all` and a host
+  spent minutes rebuilding six house-pin harness images it never dispatches
+  on while the baker built the two pinned ones. `--bake` now accepts the
+  control plane only and refuses harness targets; `--release` implies the
+  control-plane bake. CLI 0.1.7. Docs 13, AGENTS, CONTRIBUTING.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

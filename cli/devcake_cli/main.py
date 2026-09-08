@@ -42,10 +42,12 @@ usage: devcake up [--release [TAG]] [--bake [targets…]] [--dry-run]
 
 Bring up the DevCake stack with discovered DOCKER_GID.
   --release [TAG]        check the release out first (newest v* tag, or TAG),
-                         then bake all + up, then remove stale control-plane
-                         and dangling images; refuses a dirty tree or a CLI
-                         older than the release ships
-  --bake [targets…]     bake before up (default targets: app admin hello)
+                         then bake the control plane + up, then remove stale
+                         control-plane and dangling images; refuses a dirty
+                         tree or a CLI older than the release ships
+  --bake [targets…]     bake the control plane before up (default: app admin
+                         hello; app-test for CI). Never a Dev image: those are
+                         the host baker's (save a Dev Type to order one)
   --dry-run              print discovered GID + planned actions
   --foreground-baker     up, then run baker in foreground (no supervisor)
   --no-hello-smoke       with --bake, skip hello dispatch smoke

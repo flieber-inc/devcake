@@ -16,6 +16,11 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.13 (2026-09-08)
+
+Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.6.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.13).
+
 - **Fixed — the discovery steward no longer dies on a large backlog.**
   Its prompt rides the harness command line as one argument, and the
   package's findings section grew with the pending set until it crossed

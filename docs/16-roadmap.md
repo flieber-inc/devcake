@@ -900,6 +900,13 @@ until that run exists, field evidence below stays operator-self-reported.
   the `prune` block was visible for one tick. The outcome now rides every
   status with its `at` time (core.carry_last_prune); the modal shows it
   and the baker's blocked reason; `devcake status` prints the last prune.
+- **Receipts re-pushed every tick** (2026-09-08, field incident on the
+  v0.5.15 re-pin): with every layer cached the tag-move rebuild finished
+  in under a second, inside the window where compose recreated the app;
+  the receipt's container write failed, the job was marked error, and the
+  plan then saw the local receipt and never retried — the pin stayed "no
+  receipt". The baker now re-pushes local receipts for the current digest
+  the container lacks on every tick; a failed write is not a failed bake.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

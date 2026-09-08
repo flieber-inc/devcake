@@ -29,6 +29,7 @@ from .core import (
     pins_moved_with_tag,
     carry_last_prune,
     prune_outcome,
+    receipts_to_push,
     image_ref,
     load_keep_set,
     plan_prune,
@@ -466,7 +467,8 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     claimed = claim_inbox(keep_path)
     receipts = work / RECEIPTS
     receipts.mkdir(parents=True, exist_ok=True)
-    for name in compose_ls(RECEIPTS):
+    present = set(compose_ls(RECEIPTS))
+    for name in present:
         if not name.endswith(".json"):
             continue
         body = compose_read(f"{RECEIPTS}/{name}")
@@ -483,6 +485,16 @@ def once(*, work: Path, tag: str, house: dict[str, str],
             compose_rm(f"{RECEIPTS}/{stem}.json")
         except Exception:  # noqa: BLE001 — gone-image receipt must not block the tick
             pass
+    # the container copy is a projection: re-push any local receipt for
+    # this digest the container lacks (a write that failed while the app
+    # was being recreated lands on a later tick — the bake itself was fine)
+    for path in receipts_to_push(receipts, present=present, digest=digest):
+        try:
+            compose_write(f"{RECEIPTS}/{path.name}", path.read_text())
+            print(f"dev_factory: receipt pushed to the app: {path.name}", flush=True)
+        except (OSError, RuntimeError) as exc:
+            print(f"dev_factory: receipt {path.name} not yet in the app "
+                  f"({exc}) — retrying next tick", flush=True)
     # A tag move is a bake order: a dropped receipt whose pin still has an
     # image under another tag was wanted, and nothing may be left to say so
     # (the app's boot-time order can be claimed by the outgoing baker during
@@ -538,7 +550,14 @@ def once(*, work: Path, tag: str, house: dict[str, str],
             finally:
                 local = receipt_path(receipts, job)
                 if local.is_file():
-                    compose_write(f"{RECEIPTS}/{local.name}", local.read_text())
+                    try:
+                        compose_write(f"{RECEIPTS}/{local.name}", local.read_text())
+                    except (OSError, RuntimeError) as exc:
+                        # the bake and probe are done and recorded locally;
+                        # the container copy is pushed on the next tick
+                        print(f"dev_factory: receipt {local.name} written locally; "
+                              f"the app copy waits for the next tick ({exc})",
+                              flush=True)
                     try:
                         loaded = json.loads(local.read_text())
                     except (OSError, json.JSONDecodeError):

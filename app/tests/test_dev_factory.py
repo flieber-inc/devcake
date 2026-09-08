@@ -324,6 +324,31 @@ def test_prune_outcome_is_stamped_and_carried_until_the_next_prune():
     assert "prune" not in factory.carry_last_prune(None, {"state": "ready"})
 
 
+def test_receipts_to_push_names_this_digests_receipts_the_container_lacks(tmp_path):
+    """The container copy of a receipt is a projection; a write that failed
+    while the app was being recreated must be retried, or the pin stays
+    "no receipt" although the bake and probe succeeded (field, 2026-09)."""
+    factory = _load_factory()
+    receipts = tmp_path / "harness_receipts"
+    receipts.mkdir()
+    (receipts / "claude-code@2.1.258.json").write_text(json.dumps(
+        {"ok": True, "digest": "sha256:now", "gated": True}))
+    (receipts / "grok-build@1.0.13.json").write_text(json.dumps(
+        {"ok": True, "digest": "sha256:now", "gated": True}))
+    (receipts / "codex@0.147.0.json").write_text(json.dumps(
+        {"ok": True, "digest": "sha256:old", "gated": True}))   # previous tree
+    (receipts / "broken@1.json").write_text("{not json")
+    # the container already has grok-build; claude-code is missing
+    missing = factory.receipts_to_push(
+        receipts, present={"grok-build@1.0.13.json"}, digest="sha256:now")
+    assert [p.name for p in missing] == ["claude-code@2.1.258.json"]
+    # nothing when the container has everything; nothing for a stale digest
+    assert factory.receipts_to_push(
+        receipts, present={"grok-build@1.0.13.json", "claude-code@2.1.258.json"},
+        digest="sha256:now") == []
+    assert factory.receipts_to_push(tmp_path / "absent", present=set(), digest="x") == []
+
+
 def test_receipt_stays_when_the_named_image_is_still_local(tmp_path):
     factory = _load_factory()
     receipts = tmp_path / "harness_receipts"

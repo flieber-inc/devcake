@@ -16,6 +16,15 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — a receipt the app never received is pushed again.** The
+  host baker writes a receipt locally, then into the app container;
+  when that write landed while compose was recreating the app (a
+  cached rebuild now finishes inside that window), the bake was marked
+  failed and never retried, and the pin stayed "no receipt" although
+  the image and its probe were fine. The baker now re-pushes any local
+  receipt for the current digest the container lacks on every tick,
+  and a failed container write no longer fails the bake.
+
 ## v0.5.15 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.8.

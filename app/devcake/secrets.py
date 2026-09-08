@@ -155,8 +155,11 @@ def _read(path: Path) -> dict:
         if not isinstance(data, dict):
             raise ValueError("not a JSON object")
         return data
-    except Exception:  # noqa: BLE001 — lenient-read contract: corrupt file reads as absent (logged); redaction scanner alarms separately
-        log.error("unreadable secret file %s", path)
+    except Exception as e:  # noqa: BLE001 — lenient-read contract: corrupt file reads as absent (logged); redaction scanner alarms separately
+        # the reason matters: a descriptor shortage (EMFILE) reads exactly
+        # like a corrupt file without it (2026-09 field incident)
+        log.error("unreadable secret file %s: %s: %s", path,
+                  type(e).__name__, str(e)[:200])
         return {}
 
 

@@ -38,7 +38,11 @@ from inside the Dev container.
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,
   `fluentbit`, `gitea` (internal fallback forge). Long-lived services carry
   `restart: unless-stopped` in compose — a compose fact, not an app knob
-  (there is deliberately no UI control for it).
+  (there is deliberately no UI control for it). The `app` service raises
+  its open-files limit to 65,536 (another compose fact): the app keeps one
+  shared, bounded HTTP pool for every forge and tracker call, and a boot
+  fan-out over hundreds of repositories must never hit the container's
+  1,024 default.
 - Volumes: `devcake_data` (→ `app:/data` — **secrets + config + state**),
   `devcake_mirrors` (→ `app:/mirrors` rw + the Dev **provision** container
   `:ro` — ADR-0024 source mirrors; DISPOSABLE cache, excluded from backups,

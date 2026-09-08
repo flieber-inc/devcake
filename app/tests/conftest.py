@@ -55,3 +55,14 @@ def _default_live_baker_for_staffing(monkeypatch):
         "devcake.domain.orchestrator.steward.require_staffed", _wrapped)
     monkeypatch.setattr(
         "devcake.domain.oauth.require_staffed", _wrapped)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_shared_http_pool():
+    """adapters/http keeps one shared client per timeout for the process;
+    a test that monkeypatches httpx.AsyncClient (or leaves a client open)
+    must not hand its double to the next test."""
+    yield
+    from devcake.adapters import http as http_mod
+    http_mod._SHARED.clear()
+

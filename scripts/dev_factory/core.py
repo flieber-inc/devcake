@@ -329,6 +329,47 @@ def drop_receipts_missing_images(
     return tuple(dropped)
 
 
+_LOCAL_IMAGE = re.compile(r"^devcake/dev-(?P<template>[a-z0-9-]+):(?P<rest>[A-Za-z0-9._-]+)$")
+_VERSION_SUFFIX = re.compile(r"-\d+\.\d+\.\d+$")
+
+
+def pins_moved_with_tag(
+    dropped: tuple[str, ...] | list[str],
+    *,
+    local_images: tuple[str, ...] | list[str] | None,
+    tag: str,
+    house: Mapping[str, str],
+) -> tuple[Pin, ...]:
+    """Which dropped receipts describe a pin whose image exists under ANOTHER
+    image tag — the release tag moved, the pin was wanted, and nothing
+    ordered its rebake (the app's boot-time order may have been claimed by
+    the outgoing baker). Such a pin is a bake order in itself. A pin with
+    no image under any other tag was removed on purpose (docker rmi, the
+    prune verb) and stays dropped: images are the registrar."""
+    if not dropped or not local_images:
+        return ()
+    seen: dict[str, set[str]] = {}
+    for ref in local_images:
+        m = _LOCAL_IMAGE.match(str(ref))
+        if m:
+            seen.setdefault(m.group("template"), set()).add(m.group("rest"))
+    out: list[Pin] = []
+    for stem in dropped:
+        if "@" not in stem:
+            continue
+        template, version = stem.split("@", 1)
+        if template not in KNOWN_TEMPLATES:
+            continue
+        rests = seen.get(template, set())
+        explicit = any(r.endswith(f"-{version}") and r != f"{tag}-{version}"
+                       for r in rests)
+        house_pin = version == house.get(template) and any(
+            r != tag and not _VERSION_SUFFIX.search(r) for r in rests)
+        if explicit or house_pin:
+            out.append(Pin(template, version))
+    return tuple(out)
+
+
 def load_receipts(receipts_dir: Path | str) -> dict[tuple[str, str], dict]:
     root = Path(receipts_dir)
     if not root.is_dir():

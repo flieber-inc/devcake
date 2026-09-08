@@ -84,6 +84,30 @@ def budget_lines(health: dict | None) -> list[str]:
     return out
 
 
+def harness_lines(health: dict | None) -> list[str]:
+    """One line per harness template: staffed, baking, or waiting — and,
+    when pins wait while the baker is idle with no order in flight, the
+    remedy (the app's one-shot bake order was lost)."""
+    pins = ((health or {}).get("harness_pins") or {}).get("templates") or {}
+    bake = (health or {}).get("bake_status") or {}
+    out: list[str] = []
+    for template, row in sorted(pins.items()):
+        version = row.get("cli_version") or "?"
+        if row.get("ok"):
+            out.append(f"  {template} {version}: staffed")
+            continue
+        state = row.get("state") or "waiting"
+        reason = row.get("reason") or "no receipt"
+        out.append(f"  {template} {version}: {state} — {reason}")
+    waiting = [t for t, r in pins.items() if not r.get("ok")]
+    idle = (bake.get("state") == "ready" and not bake.get("jobs")
+            and bake.get("baker_alive", True))
+    if waiting and idle:
+        out.append("    ! the baker is idle with no bake order in flight — save any "
+                   "Dev Type in the admin UI (or restart the app) to reissue it")
+    return out
+
+
 def _compose_ps(repo: Path) -> tuple[bool, str]:
     try:
         proc = subprocess.run(
@@ -146,6 +170,10 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
         "pmo_budget": (health or {}).get("pmo_budget") if health else None,
         "pmo_rate_limited": ((health or {}).get("pmo_rate_limited") or {}
                              if health else None),
+        # staffing: per-template receipt state and the baker's status
+        "harness_pins": ((health or {}).get("harness_pins") or {}).get("templates")
+        if health else None,
+        "bake_status": (health or {}).get("bake_status") if health else None,
     }
 
     if as_json:
@@ -166,5 +194,9 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
             sys.stdout.write("pmo_budget:" + ("" if lines else " (no PMO "
                              "connection has made a request yet)") + "\n")
             for line in lines:
+                sys.stdout.write(line + "\n")
+            hl = harness_lines(health)
+            sys.stdout.write("harness:" + ("" if hl else " (no Dev Types configured)") + "\n")
+            for line in hl:
                 sys.stdout.write(line + "\n")
     return 0 if compose_ok else 4

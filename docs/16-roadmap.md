@@ -850,6 +850,15 @@ until that run exists, field evidence below stays operator-self-reported.
   were memo hits. Unlatching the steward's degradation (v0.5.9) exposed
   it. The drain now reuses the sweep's witnessed scan and resumes after a
   refusal; the dispatch was already critical-class.
+- **A re-pin froze dispatch: the baker is replaced before the app** (2026-09-08,
+  field incident): after a release re-pin every Dev Type read "waiting — no
+  receipt" for a day. `devcake up` recreated the app (which publishes its
+  one-shot bake order at boot) and only then replaced the baker: the
+  outgoing baker claimed the order, the incoming one dropped the previous
+  tag's receipts (their images carry that tag) and had nothing to rebuild.
+  Now the baker is replaced first, a tag move is itself a bake order
+  (dropped pins with an image under another tag are rebaked), and `devcake
+  status` prints the staffing with the remedy. CLI 0.1.5. Docs 13.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

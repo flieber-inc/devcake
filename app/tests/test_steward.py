@@ -726,6 +726,99 @@ def test_build_discovery_package_curates_not_accumulates(tmp_path):
     assert "Evidence: src/x.py:0" in package   # full fidelity, not excerpts
 
 
+def _big_family(tmp_path, *, sources=6, finished=6, entries=3):
+    """`sources` in-progress sources each with one pending batch of
+    `entries` findings, plus `finished` terminal members with handoffs."""
+    from devcake.domain.orchestrator.markers import HANDOFF_MARKER
+    members = []
+    pending = {}
+    for i in range(sources):
+        src = m(f"src{i}", f"T-S{i}", status="in_progress")
+        src.description = f"implement part {i} " + "detail " * 20
+        members.append(src)
+        pending[f"src{i}"] = [(2, entries)]
+    for i in range(finished):
+        d = m(f"d{i}", f"T-D{i}", status="done")
+        d.description = (f"built piece {i}\n\n---\n{HANDOFF_MARKER}\n"
+                         + "renamed things " * 10)
+        members.append(d)
+    mgr = make_mgr(tmp_path, MapPMO(members))
+    for i in range(sources):
+        r = Run(run_id=f"L-T-S{i}-2-EXECUTE-AAAAAA", mission_key=f"T-S{i}",
+                mission_pmo_id=f"src{i}", mission_type="EXECUTE",
+                dev_type="senior-dev", seq=2, state="finished",
+                pmo_ref=mgr.instance_name)
+        r.result = {"outcome": "executed", "summary": "s", "discoveries": [
+            {"finding": f"finding {j} of source {i} " + "x" * 700,
+             "evidence": f"src/f{i}.py:{j}; repro: pytest -k f{j}",
+             "scope": f"scope {j}"} for j in range(entries)]}
+        mgr.runs.store.save(r)
+    return mgr, _fam(*members), pending
+
+
+def test_package_without_a_budget_carries_everything(tmp_path):
+    mgr, fam, pending = _big_family(tmp_path)
+    package, included = steward.build_discovery_package(
+        mgr, fam, pending, mgr.runs.store.all())
+    assert len(included) == 6
+    assert package.count("Handoff:") == 6
+    assert "(prompt budget:" not in package
+
+
+def test_package_budget_keeps_open_members_then_findings_then_terminal_rows(tmp_path):
+    """ADR-0033 addendum: the prompt is one argv element with a hard kernel
+    ceiling. Under a budget the routing targets (open members) always ride,
+    findings fill source by source, terminal rows take what is left, and the
+    package says what it left out."""
+    mgr, fam, pending = _big_family(tmp_path)
+    full, _ = steward.build_discovery_package(mgr, fam, pending, mgr.runs.store.all())
+    budget = int(len(full.encode()) * 0.45)
+    package, included = steward.build_discovery_package(
+        mgr, fam, pending, mgr.runs.store.all(), budget_bytes=budget)
+    assert len(package.encode()) <= budget + 400        # headings + the note
+    assert 1 <= len(included) < 6
+    assert included == [("src%d" % i, 2) for i in range(len(included))]  # stable order
+    for i in range(6):
+        assert f"**T-S{i}**" in package                  # every open member listed
+    assert package.count("Handoff:") < 6                # terminal rows trimmed first
+    assert f"{6 - len(included)} more source(s) with findings wait for the next run" in package
+    assert "finished member(s) omitted from the family map" in package
+
+
+def test_package_budget_always_carries_at_least_one_source(tmp_path):
+    mgr, fam, pending = _big_family(tmp_path, sources=2, finished=0)
+    package, included = steward.build_discovery_package(
+        mgr, fam, pending, mgr.runs.store.all(), budget_bytes=1)
+    assert included == [("src0", 2)]
+    assert "finding 0 of source 0" in package
+    assert "1 more source(s) with findings wait for the next run" in package
+
+
+def test_dispatch_builds_the_package_to_the_prompt_budget(tmp_path, monkeypatch):
+    """The launched prompt — identity + playbook + package — stays under
+    STEWARD_PROMPT_MAX_BYTES; the run carries only the batches it serves."""
+    from devcake.domain.orchestrator import family_graph
+    from devcake.prompts import STEWARD_PROMPT_MAX_BYTES
+    mgr, fam, pending = _big_family(tmp_path, sources=40, finished=40, entries=5)
+    captured = {}
+
+    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None, context_stale=frozenset(), context_omit=frozenset()):
+        captured.update(prompt=prompt_text, batches=batches)
+        return "RUN-SENTINEL"
+    monkeypatch.setattr(steward, "_launch_steward", fake_launch)
+    monkeypatch.setattr(steward.dispatch, "steward_repo", lambda m_: "home")
+    monkeypatch.setattr(family_graph, "blocker_read_credential",
+                        lambda mgr_, name: ("configured", None, None, "tok"))
+    dt = DevType(name="steward", harness_template="claude-code")
+    out = asyncio.new_event_loop().run_until_complete(
+        steward.dispatch_steward_discovery(mgr, dt, fam, pending))
+    assert out == "RUN-SENTINEL"
+    assert len(captured["prompt"].encode()) <= STEWARD_PROMPT_MAX_BYTES
+    served = {b["pmo_id"] for b in captured["batches"]}
+    assert 1 <= len(served) < 40
+    assert "more source(s) with findings wait for the next run" in captured["prompt"]
+
+
 def test_build_discovery_package_skips_gone_run_records(tmp_path):
     src = m("src", "T-S")
     mgr = make_mgr(tmp_path, MapPMO([src]))

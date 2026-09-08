@@ -202,6 +202,25 @@ def test_own_write_still_forces_the_drain_to_read_live(tmp_path):
     assert len(calls) == 1
 
 
+def test_drain_discards_only_the_sources_the_run_carries(tmp_path):
+    """The package is built to a prompt budget: a run may serve part of the
+    family; the rest stays pending for the next run instead of being
+    dropped and re-detected a cycle later."""
+    pmo, mgr, svc, calls, missions = _family_setup(tmp_path)
+    mgr._discoveries_pending |= {"src", "src2", "src3"}
+
+    class Served:
+        steward_batches = [{"pmo_id": "src", "key": "T-S", "step": 2}]
+
+    async def partial(dt_, fam, pending, **kw):
+        calls.append((sorted(fam.by_id), dict(pending), kw))
+        return Served()
+    mgr.dispatch_steward_discovery = partial
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert len(calls) == 1
+    assert mgr._discoveries_pending == {"src2", "src3"}
+
+
 # ── the label-gated sweep arm ────────────────────────────────────────────────
 
 def test_sweep_reseeds_pending_from_the_board(tmp_path):

@@ -193,14 +193,21 @@ async def dispatch_steward_discovery(mgr, dev_type: DevType, family,
         raise RuntimeError("no repository configured — steward runs need the "
                            "forge dialect in their run spec")
     runs = mgr.runs.store.all()
-    package, included = build_discovery_package(mgr, family, pending, runs)
+    identifying = dispatch._identifying_prompt(mgr, dev_type)
+    # the package gets what is left of the prompt budget once the fixed
+    # text (identity + playbook) is accounted for — the prompt is one argv
+    # element with a hard kernel ceiling (prompts.STEWARD_PROMPT_MAX_BYTES)
+    from ...prompts import STEWARD_PROMPT_MAX_BYTES
+    overhead = len(steward_discovery_prompt(identifying, "").encode())
+    package, included = build_discovery_package(
+        mgr, family, pending, runs,
+        budget_bytes=max(STEWARD_PROMPT_MAX_BYTES - overhead, 8 * 1024))
     if not included:
         return None
     by_id = family.by_id
     return await _launch_steward(
         mgr, dev_type, duty="discovery",
-        prompt_text=steward_discovery_prompt(
-            dispatch._identifying_prompt(mgr, dev_type), package),
+        prompt_text=steward_discovery_prompt(identifying, package),
         blocker_work=family_work_repos(mgr, family, runs,
                                        exclude=frozenset({primary})),
         batches=[{"pmo_id": pid, "key": by_id[pid].key, "step": step}
@@ -208,8 +215,9 @@ async def dispatch_steward_discovery(mgr, dev_type: DevType, family,
         context_stale=context_stale, context_omit=context_omit)
 
 
-def build_discovery_package(mgr, family, pending: dict,
-                            runs: list) -> tuple[str, list[tuple[str, int]]]:
+def build_discovery_package(mgr, family, pending: dict, runs: list, *,
+                            budget_bytes: int | None = None,
+                            ) -> tuple[str, list[tuple[str, int]]]:
     """The curated context package (ADR-0033 D4 — curated, not accumulated):
     the family map with statuses; finished/canceled members contribute a
     description head + handoff excerpt; open members description heads; the
@@ -217,30 +225,40 @@ def build_discovery_package(mgr, family, pending: dict,
     Returns (sections text, included (pmo_id, step) batches). Entries are
     re-derived from the source run's stored result — the same normalization
     harvest used, truncated to the marker's n — so the package transports
-    exactly what the board memorialized."""
+    exactly what the board memorialized.
+
+    `budget_bytes` bounds the rendered package (ADR-0033 addendum: the
+    prompt is one argv element with a hard kernel ceiling, and a context the
+    model can reason over). Priority inside the budget: the OPEN members
+    (the routing targets), then the findings source by source — at least
+    one source always, the rest stay pending for the next run — then the
+    terminal members' rows, as many as still fit. The package ends with a
+    line saying what was left out, so the steward never mistakes a partial
+    family for the whole one."""
     from ...prompts import STEWARD_DESC_HEAD_CHARS, STEWARD_MISSION_CAP
     from .discovery import harvest_run_index, valid_entries
-    from .markers import handoff_of
+    from .markers import HANDOFF_EXCERPT_MAX, handoff_of
 
     def head(m) -> str:
         return (" ".join((m.description or "").split())
                 [:STEWARD_DESC_HEAD_CHARS] or "(no description)")
 
-    by_id = family.by_id
-    rows = []
-    for m in family.members[:STEWARD_MISSION_CAP]:
+    def row(m) -> str:
         blockers = ", ".join(by_id[b].key for b in (m.blocked_by or [])
                              if b in by_id) or "(none)"
-        rows.append(f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
-                    f"  {m.title} — {head(m)}")
+        text = (f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
+                f"  {m.title} — {head(m)}")
         if m.status in ("done", "canceled"):
             note = handoff_of(m.description)
             if note:
-                from .markers import HANDOFF_EXCERPT_MAX
-                rows.append(f"  Handoff: {note[:HANDOFF_EXCERPT_MAX]}")
-
-    finds: list[str] = []
-    included: list[tuple[str, int]] = []
+                text += f"\n  Handoff: {note[:HANDOFF_EXCERPT_MAX]}"
+        return text
+    by_id = family.by_id
+    members = family.members[:STEWARD_MISSION_CAP]
+    open_rows = [row(m) for m in members if m.status not in ("done", "canceled")]
+    terminal = [m for m in members if m.status in ("done", "canceled")]
+    # findings: one block per (source, step) batch, in a stable order
+    blocks: list[tuple[tuple[str, int], str]] = []
     run_ix = harvest_run_index(mgr, runs)
     for pmo_id, batches in sorted(pending.items()):
         src = by_id.get(pmo_id)
@@ -252,17 +270,49 @@ def build_discovery_package(mgr, family, pending: dict,
             if not entries:
                 continue        # record gone or still closing — the sweep
                                 # terminates or re-drives it
-            included.append((pmo_id, step))
-            finds.append(f"From **{src.key}** step {step} — mission: "
-                         f"{head(src)}")
+            lines = [f"From **{src.key}** step {step} — mission: {head(src)}"]
             for i, e in enumerate(entries, 1):
-                finds.append(f"{i}. Finding: {e['finding']}\n"
+                lines.append(f"{i}. Finding: {e['finding']}\n"
                              f"   Evidence: {e['evidence']}\n"
                              f"   Scope: {e['scope']}")
+            blocks.append(((pmo_id, step), "\n".join(lines)))
+    budget = budget_bytes if budget_bytes is not None else float("inf")
+    used = len("\n".join(open_rows).encode()) + 200   # headings + the note
+    included: list[tuple[str, int]] = []
+    finds: list[str] = []
+    for key, text in blocks:
+        cost = len(text.encode()) + 1
+        if included and used + cost > budget:
+            break                         # the rest stays pending
+        included.append(key)
+        finds.append(text)
+        used += cost
+    term_rows: list[str] = []
+    for m in terminal:
+        text = row(m)
+        cost = len(text.encode()) + 1
+        if used + cost > budget:
+            break
+        term_rows.append(text)
+        used += cost
+    left_sources = len(blocks) - len(included)
+    left_terminal = len(terminal) - len(term_rows)
+    note = ""
+    if left_sources or left_terminal:
+        bits = []
+        if left_sources:
+            bits.append(f"{left_sources} more source(s) with findings wait for the next run")
+        if left_terminal:
+            bits.append(f"{left_terminal} finished member(s) omitted from the family map")
+        note = "\n\n(prompt budget: " + "; ".join(bits) + ")"
+        log.info("discovery package trimmed to the prompt budget: %d of %d "
+                 "sources, %d of %d finished members",
+                 len(included), len(blocks), len(term_rows), len(terminal))
     package = ("### The family (key · status · blocked by · title)\n"
-               + "\n".join(rows)
+               + "\n".join(open_rows + term_rows)
                + "\n\n### New discoveries to route\n"
-               + ("\n".join(finds) if finds else "(none)"))
+               + ("\n".join(finds) if finds else "(none)")
+               + note)
     return package, included
 
 

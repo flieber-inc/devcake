@@ -36,6 +36,7 @@ DEV_FORGE_AUTH = "DEV_FORGE_AUTH"
 DEV_MCP_SETUP = "DEV_MCP_SETUP"
 DEV_HARNESS_FAULT = "DEV_HARNESS_FAULT"
 DEV_TURN_BUDGET = "DEV_TURN_BUDGET"
+DEV_PROMPT_TOO_LARGE = "DEV_PROMPT_TOO_LARGE"
 DEV_TIMEOUT = "DEV_TIMEOUT"
 DEV_ORPHANED = "DEV_ORPHANED"
 DEV_KILLED = "DEV_KILLED"
@@ -112,6 +113,12 @@ TABLE: tuple[FailureRow, ...] = (
     FailureRow(DEV_TURN_BUDGET, (16,), False, "always", None, False, "never",
                True,
                default_detail="harness stopped at its configured turn cap"),
+    # the entrypoint refused to launch: the prompt (one argv element) is past
+    # the kernel's per-argument ceiling — deterministic, an app-side sizing
+    # bug, never a backend signal; counted so it cannot loop
+    FailureRow(DEV_PROMPT_TOO_LARGE, (17,), False, "always", None, False,
+               "never", False,   # always ships its artifact: no post-mortem needed
+               default_detail="prompt too large for the harness command line"),
     FailureRow(DEV_TIMEOUT, (), False, "always", None, False, "never", False,
                kill_state="timed_out"),
     FailureRow(DEV_ORPHANED, (), False, "always", None, False, "never", False,

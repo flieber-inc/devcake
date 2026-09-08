@@ -866,6 +866,16 @@ until that run exists, field evidence below stays operator-self-reported.
   CLI, or a CLI older than the release ships. `devcake prune [--devs]`
   tidies on demand, Dev images only through the baker's own prune
   request. CLI 0.1.6. Docs 13, CONTRIBUTING, AGENTS.
+- **Discovery steward: package built to a prompt budget** (2026-09-08,
+  field incident, ADR-0033 addendum): every discovery-steward run on one
+  instance had died at launch since 2026-09-04 — `Argument list too long`:
+  the prompt is one argv element, the findings section was unbounded, and
+  the package reached 1.1 MB against a 131,072-byte ceiling; the app saw
+  only "dagu run dead". Now: byte-budgeted package (open members, then
+  findings by source, then finished rows; at least one source; a note
+  naming what was left out), served-only discard so the backlog drains in
+  runs, and exit 17 `DEV_PROMPT_TOO_LARGE` refused before launch with the
+  numbers. Follow-up: prompt via `--prompt-file`/stdin (docs/08).
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

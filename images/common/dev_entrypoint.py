@@ -332,6 +332,56 @@ def _fail_20(stop: threading.Event | None, headline: str, detail: str) -> None:
     sys.exit(20)
 
 
+# Linux caps ONE execve argument at MAX_ARG_STRLEN (32 pages — 131,072 bytes
+# on 4 KiB pages; containers see the host kernel's page size) and the whole
+# argv + environment at ARG_MAX. The prompt rides the harness command line as
+# one element (docs/08 §2), so past the per-argument cap the launch dies at
+# execve with E2BIG before any heartbeat — the app could only record "dagu
+# run dead". Refuse first, with the numbers, as its own class (docs/07 §4).
+def _arg_strlen_max() -> int:
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE")) * 32
+    except (ValueError, OSError, AttributeError):
+        return 131072
+
+
+ARG_TOTAL_MAX = 2 * 1024 * 1024 - 64 * 1024     # ARG_MAX less environment headroom
+
+
+def argv_too_large(argv) -> str | None:
+    """The refusal detail when `argv` cannot be exec'd, else None."""
+    sizes = [len(str(a).encode("utf-8", "replace")) for a in argv]
+    if not sizes:
+        return None
+    biggest, cap = max(sizes), _arg_strlen_max()
+    if biggest > cap:
+        return (f"one command-line argument is {biggest} bytes (the prompt); "
+                f"the kernel allows {cap} per argument — the run cannot launch. "
+                "Shrink what the prompt carries (a steward package is built to "
+                "its budget; a mission brief this large belongs in an attachment)")
+    total = sum(sizes) + len(sizes)
+    if total > ARG_TOTAL_MAX:
+        return (f"the command line is {total} bytes in total; the kernel allows "
+                f"about {ARG_TOTAL_MAX} with the environment — the run cannot launch")
+    return None
+
+
+def _fail_prompt_too_large(stop: threading.Event | None, detail: str) -> None:
+    """Exit 17 WITH artifacts (docs/07 §4): deterministic, app-side sizing —
+    never a backend signal, never a crash the watchdog has to discover."""
+    print(f"prompt too large for the harness command line: {detail}",
+          file=sys.stderr)
+    send_artifacts({"result": None, "exit_code": 17,
+                    "error_class": "DEV_PROMPT_TOO_LARGE",
+                    "error_detail": detail[-500:],
+                    "transcript_md": ("Prompt too large for the harness command "
+                                      f"line:\n\n{detail}\n"),
+                    "token_report": unavailable_report()})
+    if stop is not None:
+        stop.set()
+    sys.exit(17)
+
+
 def _on_term(signum, frame):
     """Dagu stop is SIGTERM → 30s → SIGKILL. Flush a classified artifact
     so the run does not die as an unclassified crash (live drill on PR 7)."""
@@ -696,6 +746,9 @@ def harness_main() -> None:
                 "token_report": unavailable_report()})
             sys.exit(14)
         _fail_20(stop, "unknown harness", str(e))
+    oversized = argv_too_large(cmd)
+    if oversized:
+        _fail_prompt_too_large(stop, oversized)
     inv_prompt = prompt   # THIS invocation's prompt — the nudge on relaunches;
     #                       it is what anchors grok_export_activity honestly
 

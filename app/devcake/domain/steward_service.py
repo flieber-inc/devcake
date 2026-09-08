@@ -312,7 +312,11 @@ class StewardService:
                         else:
                             # served — finalize receipts them; a crash is
                             # re-detected from the board by the sweep
-                            for pid in pending:
+                            # Only the sources the run carries: the package is built to
+                            # a prompt budget; the rest stay pending for the next run
+                            served = {b.get("pmo_id") for b in
+                                      (getattr(run, "steward_batches", None) or [])}
+                            for pid in (served or set(pending)):
                                 mgr._discoveries_pending.discard(pid)
                             outcome = "dispatched"
         if outcome and (outcome == "dispatched"

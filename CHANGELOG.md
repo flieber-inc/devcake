@@ -16,6 +16,18 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — the discovery steward no longer dies on a large backlog.**
+  Its prompt rides the harness command line as one argument, and the
+  package's findings section grew with the pending set until it crossed
+  the kernel's per-argument ceiling; every run then died at launch and
+  was recorded as a dead run. The package is now built to a prompt
+  budget (open members first, then findings source by source, then
+  finished members as room allows, with a line naming what was left
+  out), the run carries only the sources it serves and the rest stay
+  pending for the next run, and the entrypoint refuses a prompt past the
+  ceiling before launch as its own class (exit 17,
+  `DEV_PROMPT_TOO_LARGE`) with the byte counts.
+
 ## v0.5.12 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.6.

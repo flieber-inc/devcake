@@ -30,6 +30,7 @@ PRODUCED = frozenset({
     (14, "DEV_MCP_SETUP"),
     (15, "DEV_HARNESS_FAULT"),
     (16, "DEV_TURN_BUDGET"),
+    (17, "DEV_PROMPT_TOO_LARGE"),
     (20, "DEV_CRASH"),
 })
 BARE_EXIT_CODES = frozenset({12, 20})

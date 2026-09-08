@@ -598,6 +598,13 @@ def steward_discovery_prompt(identifying_prompt: str, package: str) -> str:
 
 STEWARD_MISSION_CAP = 200          # prompt-size bound; truncation is logged
 STEWARD_DESC_HEAD_CHARS = 300
+# The whole steward prompt rides the harness argv as ONE element, and Linux
+# caps a single argument at 131,072 bytes (MAX_ARG_STRLEN): past it the
+# container dies at execve before the model is called. The discovery
+# package is built to keep the rendered prompt under this budget — also a
+# context the model can actually reason over — and leaves the rest of the
+# pending sources for the next run (ADR-0033 addendum; docs/07 §4 exit 17).
+STEWARD_PROMPT_MAX_BYTES = 96 * 1024
 
 # the canonical (un-doubled) playbook texts — seed source for the stored
 # "default" templates and the fallback when a stored template is broken

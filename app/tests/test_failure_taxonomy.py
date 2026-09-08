@@ -126,7 +126,7 @@ def test_classify_resolves_the_structured_pair():
     # wording/skew can never stamp the breaker-latching class
     assert ft.classify(13, ft.DEV_HARNESS_FAULT).error_class == ft.DEV_FORGE
     assert ft.classify(15, ft.DEV_FORGE_AUTH).error_class == ft.DEV_HARNESS_FAULT
-    assert ft.classify(17, "") is None          # emitted by nothing
+    assert ft.classify(18, "") is None          # emitted by nothing
     assert ft.classify(None, "") is None        # payload without exit_code
 
 
@@ -262,3 +262,17 @@ def test_no_bare_dev_class_literals_outside_the_table():
     assert not offenders, (
         "bare DEV_* literals (import failure_taxonomy constants instead):\n"
         + "\n".join(offenders))
+
+
+def test_prompt_too_large_is_exit_17_counted_and_never_a_backend_signal():
+    """docs/07 §4: the entrypoint's pre-launch refusal — deterministic app-side
+    sizing, never brake evidence, no breaker (nothing to latch: the fix is the
+    prompt), counted so a too-large prompt cannot re-dispatch forever."""
+    from devcake.domain import failure_taxonomy as ft
+    row = ft.classify(17, "")
+    assert row is not None and row.error_class == ft.DEV_PROMPT_TOO_LARGE
+    assert row.counting == "always" and row.breaker is None
+    assert row.brake_evidence == "never"
+    assert row.orphan_recoverable is False      # the artifact always ships first
+    assert "prompt too large" in row.default_detail
+

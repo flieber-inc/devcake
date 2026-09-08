@@ -28,6 +28,7 @@ prose.
 | `FORGE_PERMANENT` | auth failure, branch protection blocks merge | config problem |
 | `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint — incl. the ADR-0025 sentinel/marker family: provision found the wrong bind dir, or the harness step found no/mismatched `provisioned` marker — the artifact carries owner/mode/listing forensics); orphan post-mortem enrichment of those codes | counted attempt |
 | `DEV_MCP_SETUP` | exit 14: additive **entrypoint** setup line failed or hit the 300 s per-command cap (`run.error` names the command + stderr/timeout tail), or **override** script aborted (`set -e` / non-zero; hangs are `DEV_TIMEOUT` via the run watchdog, not this class) | counted attempt |
+| `DEV_PROMPT_TOO_LARGE` | exit 17: the entrypoint refused to launch because the prompt, one command-line argument, is past the kernel's per-argument ceiling (`07-dev-runtime.md` §4); `run.error` carries the byte counts | counted attempt (deterministic; never brake evidence, no breaker — the fix is the prompt) |
 | `DEV_TIMEOUT` | app watchdog kill via Dagu stop → Run `timed_out` (not an entrypoint exit code) | counted attempt |
 | `DEV_ORPHANED` | reconciliation found the Dagu run dead while the app was away → Run `orphaned` (post-mortem enrichment may then upgrade `run.error` to a classified exit — §2 note); also stamped by the multi-instance router on a run whose PMO instance is no longer configured (state `failed`, deliberately — the condition is a genuine orphan) | counted attempt |
 | `DEV_KILLED` | the kill-chokepoint **catch-all** (`_kill_inner`): any kill path that names no more specific state/class lands here, so a future kill site cannot produce an unclassified run | counted attempt |
@@ -54,6 +55,7 @@ prose.
 | `FORGE_PERMANENT` | no | no | — | PMO comment + health strip (e.g. merge blocked, `06-forge-adapter.md` §5) |
 | `DEV_CRASH` | yes — by natural rescheduling (INV-3) | **yes** | scheduler (next cycle) | after cap: `DEVCAKE-FAILED` (§3) |
 | `DEV_MCP_SETUP` | yes — same (a transient install/network failure deserves retries; the deterministic missing-secret case never dispatches at all, `14` §8) | **yes** | scheduler | same |
+| `DEV_PROMPT_TOO_LARGE` | yes — same (the steward's next package is built to the budget; a mission brief needs an operator edit) | **yes** | scheduler | same |
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_ORPHANED` | yes — same (the mission's label never advanced) | **yes** | scheduler | same |
 | `DEV_KILLED` | yes — same | **yes** | scheduler | same |

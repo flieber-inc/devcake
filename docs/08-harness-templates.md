@@ -108,6 +108,10 @@ The entrypoint pumps the harness's stdout line-by-line instead of buffering it (
 ### `grok-build`
 ```bash
 grok -p "$PROMPT" --output-format streaming-json --always-approve
+# The prompt is ONE argv element: Linux caps it at MAX_ARG_STRLEN (131,072 bytes
+# on 4 KiB pages); the entrypoint refuses past it (docs/07 §4 exit 17). The grok
+# CLI also takes --prompt-file <PATH>; moving the prompt off argv is the
+# adaptor-contract follow-up (ADR-0033 addendum).
 ```
 - **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output). Of these only `--max-turns` has been exercised at 0.2.112; the rest are unverified there.
 - **Headless resume verified at 0.2.117 (ADR-0022, `grok_resume_nudge_*` captures):** `grok -p "$NUDGE" -r <sessionId> --output-format streaming-json --always-approve` composes; the resumed `end` event carries the SAME `sessionId` (no fork), the stream carries only the new turn's events (no history replay), and `usage`/`num_turns` are per-invocation, not cumulative. Same capture also recorded stream drift vs 0.2.112: `stopReason` is now `"end_turn"` (was `"EndTurn"`) and new `available_commands`/`usage` event types appear — nothing branches on either (the stopReason enum is annotate-only by design; unknown event types are skipped). That drift was observed while the image still floated; house is now pinned at 0.2.112.

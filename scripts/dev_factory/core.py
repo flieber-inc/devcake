@@ -370,6 +370,29 @@ def pins_moved_with_tag(
     return tuple(out)
 
 
+def prune_outcome(*, removed, kept: int, detail: str = "",
+                  receipts_dropped=(), now: datetime | None = None) -> dict:
+    """The status block a prune leaves behind — stamped with its time, so
+    the panel and `devcake status` can say WHEN the last prune ran."""
+    return {"removed": list(removed), "kept": int(kept), "detail": detail,
+            "receipts_dropped": list(receipts_dropped),
+            "at": (now or datetime.now(timezone.utc)).isoformat()}
+
+
+def carry_last_prune(previous, status: dict) -> dict:
+    """A tick that did not prune republishes the last prune's outcome; a
+    tick that pruned wins. The baker rebuilds its status from scratch every
+    tick, so without this the outcome of a prune was visible for one tick
+    (five seconds) and the panel, polling every ten, almost never saw it
+    (2026-09 field report: "the button does not respond")."""
+    if isinstance(status.get("prune"), Mapping):
+        return status
+    prev = previous.get("prune") if isinstance(previous, Mapping) else None
+    if isinstance(prev, Mapping) and prev:
+        return {**status, "prune": dict(prev)}
+    return status
+
+
 def load_receipts(receipts_dir: Path | str) -> dict[tuple[str, str], dict]:
     root = Path(receipts_dir)
     if not root.is_dir():

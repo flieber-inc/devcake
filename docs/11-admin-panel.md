@@ -150,7 +150,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `repo_mirror` | ADR-0024 mirror surface: `{lfs, sync_max_age_seconds, volume_error, mirrors, disk}`. `mirrors` is per-name sync state (`ok`/`detail`/…); `volume_error` non-null freezes dispatch (non-dismissable Overview alert); `disk` is `{total_bytes, free_bytes}` or `null` |
 | `workspaces` | ADR-0025 host-bind surface: `{volume_error, leaked, disk}`. `volume_error` freezes dispatch (critical alert); `leaked > 0` means terminal runs left dirs the sweep could not remove (warning); `disk` matches the mirror shape |
 | `harness_pins` | staffing view for configured Dev Types / harness templates (`staffing.receipt_summary`): `{digest, sentinel, templates, dev_types}` — per pin `cli_version` / `ok` / `state` (`ready`/`baking`/`waiting`/`error`) / `reason`. Powers Dev Types roster + editor pin copy |
-| `bake_status` | host baker status from `/data/harness_bake_status.json`, annotated with `baker_alive` / `baker_detail` (heartbeat liveness). Includes `state`, `jobs`, `detail`, and optional `prune` after an operator prune. Dead baker → critical Overview alert; compile `error` → warning |
+| `bake_status` | host baker status from `/data/harness_bake_status.json`, annotated with `baker_alive` / `baker_detail` (heartbeat liveness). Includes `state`, `jobs`, `detail`, and optional `prune` after an operator prune. Dead baker → critical Overview alert; compile `error` → warning — the `prune` block (removed, kept, detail, receipts_dropped, `at`) is the LAST prune's outcome and rides every status the baker publishes until the next prune, so the panel and `devcake status` can always say what it did and when |
 
 ## 2. Overview page
 

@@ -393,6 +393,31 @@ def carry_last_prune(previous, status: dict) -> dict:
     return status
 
 
+def receipts_to_push(receipts_dir: Path | str, *, present: set[str] | frozenset[str],
+                     digest: str) -> list[Path]:
+    """The local receipts for THIS app digest whose container copy is
+    missing. The container copy is a projection of the baker's local
+    receipt — written after the probe, and lost when the write lands while
+    the app container is being recreated (a cached rebuild finishes in
+    under a second, inside the compose window). The baker re-pushes them
+    every tick until they land; without this the pin stayed "no receipt"
+    for good, because the plan read the local copy and saw the bake done."""
+    root = Path(receipts_dir)
+    if not root.is_dir():
+        return []
+    out: list[Path] = []
+    for path in sorted(root.glob("*.json")):
+        if path.name in present:
+            continue
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(rec, dict) and rec.get("digest") == digest:
+            out.append(path)
+    return out
+
+
 def load_receipts(receipts_dir: Path | str) -> dict[tuple[str, str], dict]:
     root = Path(receipts_dir)
     if not root.is_dir():

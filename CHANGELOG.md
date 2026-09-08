@@ -13,6 +13,9 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+Community surface added for public-repo hygiene (no LICENSE change in this
+track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
+
 ## v0.5.11 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.5.
@@ -39,8 +42,6 @@ Patch release in the v0.5 "Java Lava" line. Ships with `devcake-cli` 0.1.5.
   names the remedy when pins wait with an idle baker. Ships as
   `devcake-cli` 0.1.5.
 
-Community surface added for public-repo hygiene (no LICENSE change in this
-track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
 ## v0.5.10 (2026-09-07)
 

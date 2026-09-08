@@ -16,6 +16,14 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — `devcake up` never bakes a Dev image.** `--bake` accepts the
+  control plane only (app, admin, hello; app-test for CI) and refuses a
+  harness target or `all` with the remedy; `--release` implies the
+  control-plane bake instead of the full matrix, which had a host
+  rebuilding six house-pin harness images it never dispatches on. Dev
+  images are the host baker's alone, and a tag move is a bake order it
+  honours itself. Ships as `devcake-cli` 0.1.7.
+
 ## v0.5.13 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.6.

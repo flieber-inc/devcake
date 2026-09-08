@@ -126,7 +126,7 @@ def test_dry_run_resolves_a_named_tag_without_fetching_or_checking_out(tmp_path,
 
 # ── up --release: order, implied bake all, tidy-up last ──────────────────────
 
-def test_up_release_checks_out_first_implies_bake_all_and_prunes_last(monkeypatch, tmp_path):
+def test_up_release_checks_out_first_bakes_the_control_plane_and_prunes_last(monkeypatch, tmp_path):
     _ensure_cli_importable()
     import devcake_cli.up as up_mod
     from devcake_cli import release as release_mod
@@ -145,12 +145,39 @@ def test_up_release_checks_out_first_implies_bake_all_and_prunes_last(monkeypatc
     assert order[0] == ("release", "latest")
     assert [n for n, _ in order] == ["release", "_bake", "_start_baker", "_compose_up",
                                      "_health_gate", "_hello_smoke", "_prune_after_release"]
-    assert dict(order)["_bake"] == ["all"]              # implied --bake all
-    # an explicit --bake wins
+    # implied bake = the control plane (the default target list), never `all`
+    assert dict(order)["_bake"] == []
+    # an explicit control-plane --bake wins
     order.clear()
     assert up_mod.run_up(up_mod.UpOptions(release="v0.2.0", bake=True,
                                           bake_targets=["app"]), repo=tmp_path) == 0
     assert dict(order)["_bake"] == ["app"]
+
+
+def test_up_refuses_to_bake_dev_images(monkeypatch, tmp_path, capsys):
+    """ADR-0038 addendum: Dev images are the host baker's alone; `up` bakes
+    the control plane only and refuses a harness target or `all` before
+    touching anything — through the CLI and through UpOptions alike."""
+    _ensure_cli_importable()
+    import devcake_cli.main as cli_main
+    import devcake_cli.up as up_mod
+    sock = _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKER_SOCK", str(sock))
+    for argv in (["up", "--dry-run", "--bake", "all"],
+                 ["up", "--dry-run", "--bake", "grok-build"],
+                 ["up", "--dry-run", "--bake", "app", "images"],
+                 ["up", "--dry-run", "--release", "--bake", "claude-code"]):
+        assert cli_main.main(argv) == 2, argv
+        err = capsys.readouterr().err
+        assert "control plane only" in err and "host baker" in err
+    assert not (tmp_path / ".env").exists()
+    # the control plane is fine, with or without the test image
+    assert cli_main.main(["up", "--dry-run", "--bake", "app", "admin", "hello"]) == 0
+    assert cli_main.main(["up", "--dry-run", "--bake", "app-test"]) == 0
+    assert up_mod.refused_bake_targets([]) is None
+    assert up_mod.refused_bake_targets(["hello"]) is None
+    assert "codex" in (up_mod.refused_bake_targets(["app", "codex"]) or "")
 
 
 def test_up_release_refusal_is_exit_6_and_touches_nothing(monkeypatch, tmp_path):

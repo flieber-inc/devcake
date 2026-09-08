@@ -186,9 +186,9 @@ The tag pin (bake and compose must match) is the checkout's `VERSION` file;
 a development build overrides it from the process environment:
 
 ```bash
-DEVCAKE_TAG=$(git rev-parse --short HEAD) devcake up --bake all   # scratch build
-devcake up --bake all            # a release checkout: VERSION pins the tag
-devcake up --release             # a host re-pin: newest v* tag, bake all, up, image tidy-up
+DEVCAKE_TAG=$(git rev-parse --short HEAD) devcake up --bake   # scratch build (control plane; Dev images are the baker's)
+devcake up --bake                # a release checkout: VERSION pins the tag
+devcake up --release             # a host re-pin: newest v* tag, control plane bake, up, image tidy-up
 # or without devcake up:
 export DEVCAKE_TAG=$(cat VERSION); docker buildx bake all; docker compose up -d
 ```

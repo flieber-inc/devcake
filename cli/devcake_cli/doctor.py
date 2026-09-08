@@ -385,7 +385,7 @@ def check_version_pin(*, repo_root: Path | None) -> CheckResult:
         return CheckResult(
             id="version_pin", ok=True, hard=False,
             detail=f"checkout pins {pinned}; no stack brought up yet "
-                   f"(.env carries no DEVCAKE_TAG) — devcake up --bake all")
+                   f"(.env carries no DEVCAKE_TAG) — devcake up --release")
     if running != pinned:
         override = os.environ.get("DEVCAKE_TAG", "").strip()
         why = (" (a DEVCAKE_TAG override is set in this shell)"
@@ -393,7 +393,7 @@ def check_version_pin(*, repo_root: Path | None) -> CheckResult:
         return CheckResult(
             id="version_pin", ok=False, hard=False,
             detail=(f"checkout pins {pinned} but the stack was brought up under "
-                    f"{running}{why} — run: devcake up --bake all"))
+                    f"{running}{why} — run: devcake up --release"))
     return CheckResult(id="version_pin", ok=True,
                        detail=f"checkout pins {pinned} and the stack runs under it")
 

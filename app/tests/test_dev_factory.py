@@ -808,7 +808,8 @@ def _bringup_text() -> str:
 
 def test_up_default_bake_is_control_plane_and_starts_the_baker():
     text = _bringup_text()
-    assert '["app", "admin", "hello"]' in text or "app admin hello" in text
+    assert ('("app", "admin", "hello")' in text or '["app", "admin", "hello"]' in text
+            or "app admin hello" in text)
     # Host baker entry is the CLI verb (ADR-0038 Decision 5); deprecated
     # `python -m dev_factory` remains importable but is not the ExecStart.
     assert "baker run" in text

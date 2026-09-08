@@ -135,7 +135,7 @@ def test_version_pin_check_reports_drift_between_checkout_and_stack(tmp_path, mo
     drift = doctor.check_version_pin(repo_root=tmp_path)
     assert not drift.ok and not drift.hard
     assert "pins v0.5.9" in drift.detail and "under v0.5.8" in drift.detail
-    assert "devcake up --bake all" in drift.detail
+    assert "devcake up --release" in drift.detail
 
     (tmp_path / ".env").write_text("ADMIN_USER=a\nDEVCAKE_TAG=v0.5.9\n")
     same = doctor.check_version_pin(repo_root=tmp_path)

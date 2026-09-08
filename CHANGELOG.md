@@ -36,6 +36,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   it, says when the baker cannot act (not running, or the checkout moved
   since the app was baked) and that the request waits in the inbox;
   `devcake status` prints the last prune; the baker logs each prune.
+  Ships as `devcake-cli` 0.1.8.
 
 ## v0.5.14 (2026-09-08)
 

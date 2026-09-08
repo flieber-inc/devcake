@@ -894,6 +894,12 @@ until that run exists, field evidence below stays operator-self-reported.
   timeout shared by every adapter (closed at shutdown), `ulimits.nofile`
   65,536 on the app service, a set-url instead of a rebuild when only the
   origin's authority user differs, and the reader names the exception.
+- **Prune outcome persists** (2026-09-08, founder report "the button does
+  not respond"): the prune worked — the old Dev images were gone — but the
+  baker rebuilds its status every 5 s and the panel polls every 10 s, so
+  the `prune` block was visible for one tick. The outcome now rides every
+  status with its `at` time (core.carry_last_prune); the modal shows it
+  and the baker's blocked reason; `devcake status` prints the last prune.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

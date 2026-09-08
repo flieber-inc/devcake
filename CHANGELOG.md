@@ -28,6 +28,15 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   only in the authority user (a credential that failed to load, or was
   rotated) gets its remote URL updated instead of being rebuilt; and the
   secrets reader logs the actual reason a file was unreadable.
+- **Fixed — "Prune unused Dev images" reports its outcome.** The host
+  baker rebuilds its status every tick, so a prune's result was visible
+  for one tick and the panel, polling every ten seconds, almost never
+  showed it — the images were removed, the button looked dead. The last
+  prune's outcome now rides every status with its time; the modal shows
+  it, says when the baker cannot act (not running, or the checkout moved
+  since the app was baked) and that the request waits in the inbox;
+  `devcake status` prints the last prune; the baker logs each prune.
+  Ships as `devcake-cli` 0.1.8.
 
 ## v0.5.14 (2026-09-08)
 

@@ -27,6 +27,8 @@ from .core import (
     drop_receipts_missing_images,
     house_from_dockerfile,
     pins_moved_with_tag,
+    carry_last_prune,
+    prune_outcome,
     image_ref,
     load_keep_set,
     plan_prune,
@@ -188,10 +190,11 @@ def apply_prune(*, work: Path, tag: str, house: dict[str, str],
         release_inbox(claimed)
         compose_rm(taking)
         compose_rm(PRUNE_REQUEST)
-        return {**status, "prune": {
-            "removed": [], "kept": 0,
-            "detail": "refused: no keep-set order this tick",
-        }}
+        print("dev_factory: prune refused: no keep-set order this tick",
+              flush=True)
+        return {**status, "prune": prune_outcome(
+            removed=[], kept=0,
+            detail="refused: no keep-set order this tick")}
     try:
         running = docker_name_list(
             ["docker", "ps", "-a", "--format", "{{.Image}}"])
@@ -214,16 +217,18 @@ def apply_prune(*, work: Path, tag: str, house: dict[str, str],
                 compose_rm(f"{RECEIPTS}/{stem}.json")
             except Exception:  # noqa: BLE001 — projection rewrite is best-effort
                 pass
-        status = {**status, "prune": {
-            "removed": list(gone),
-            "kept": len(keep_images),
-            "detail": "" if gone else "nothing to prune",
-            "receipts_dropped": list(dropped),
-        }}
+        status = {**status, "prune": prune_outcome(
+            removed=gone, kept=len(keep_images),
+            detail="" if gone else "nothing to prune",
+            receipts_dropped=dropped)}
+        print(("dev_factory: prune: removed %d image(s): %s"
+               % (len(gone), ", ".join(gone))) if gone else
+              "dev_factory: prune: nothing to prune (kept %d)" % len(keep_images),
+              flush=True)
     except Exception as exc:  # noqa: BLE001 — prune failure is operator-visible, not a baker crash
-        status = {**status, "prune": {
-            "removed": [], "kept": 0, "detail": str(exc),
-        }}
+        status = {**status, "prune": prune_outcome(
+            removed=[], kept=0, detail=str(exc))}
+        print(f"dev_factory: prune failed: {exc}", flush=True)
     release_inbox(claimed)
     compose_rm(taking)
     compose_rm(PRUNE_REQUEST)
@@ -310,7 +315,18 @@ def emit_event(work: Path, record: dict) -> dict:
     return rec
 
 
+def _read_local_status(work: Path) -> dict:
+    try:
+        body = json.loads((work / STATUS).read_text())
+        return body if isinstance(body, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def publish_status(work: Path, payload: dict) -> dict:
+    # the last prune's outcome rides every status the baker publishes until
+    # the next prune (core.carry_last_prune)
+    payload = carry_last_prune(_read_local_status(work), payload)
     body = write_status(work / STATUS, payload)
     try:
         compose_write(STATUS, json.dumps(body, indent=2) + "\n")
@@ -438,6 +454,7 @@ def rotate_watch_log(path: Path | str, *,
 
 def once(*, work: Path, tag: str, house: dict[str, str],
          digest: str) -> dict:
+    previous = _read_local_status(work)     # the last prune outcome, if any
     compose_claim(KEEP_SET)
     taking_name = KEEP_SET + TAKING_SUFFIX
     text = compose_read(taking_name)
@@ -566,6 +583,9 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     status = apply_prune(
         work=work, tag=tag, house=house, status=status, keep_set=keep_set,
         trace_id=trace_id, parent=root_id)
+    status = carry_last_prune(previous, status)
+    write_status(work / STATUS, status)     # the local copy is what the
+    #                                         heartbeat and the next tick read
     try:
         compose_write(STATUS, json.dumps(status, indent=2) + "\n")
     except RuntimeError as exc:

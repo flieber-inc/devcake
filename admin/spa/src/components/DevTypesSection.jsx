@@ -12,6 +12,7 @@ import DevTypeEditor from "./DevTypeEditor.jsx";
 import NewDevTypeDialog from "./NewDevTypeDialog.jsx";
 import FirstSetupDialog from "./FirstSetupDialog.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
+import { bakerBlockedReason, describePrune } from "../lib/bakeStatus.js";
 
 // ── OAuth wizard (docs/16 M6): device-code flow driven from the UI ──────────
 // Immediate by nature: the credential is stored server-side the moment the
@@ -311,12 +312,15 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
           {pruneMsg && (
             <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">{pruneMsg}</p>
           )}
-          {healthInfo?.bake_status?.prune && (
+          {bakerBlockedReason(healthInfo?.bake_status) && healthInfo?.bake_status?.baker_alive !== false && (
+            <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">
+              {bakerBlockedReason(healthInfo?.bake_status)} The request waits in the
+              baker's inbox until it can act.
+            </p>
+          )}
+          {describePrune(healthInfo?.bake_status) && (
             <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
-              {healthInfo.bake_status.prune.detail
-                || ((healthInfo.bake_status.prune.removed || []).length
-                  ? `Removed ${(healthInfo.bake_status.prune.removed || []).length} image(s).`
-                  : "Nothing to prune.")}
+              {describePrune(healthInfo?.bake_status)}
             </p>
           )}
           <div className="flex justify-end gap-2">
@@ -328,7 +332,8 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
                 setPruneBusy(true); setPruneMsg("");
                 try {
                   await send("POST", "/harness/prune");
-                  setPruneMsg("Asked the host baker to prune.");
+                  setPruneMsg("Asked the host baker to prune — the outcome shows here "
+                    + "within a few seconds, with its time.");
                 } catch (e) {
                   setPruneMsg(String(e.message || e));
                 } finally { setPruneBusy(false); }

@@ -301,6 +301,29 @@ def test_removed_pin_stays_dropped_without_evidence_of_another_tag():
         tag="v2", house={"grok-build": "0.2.112"}) == ()
 
 
+def test_prune_outcome_is_stamped_and_carried_until_the_next_prune():
+    """The baker rebuilds its status every tick; the last prune's outcome
+    rides along (with its time) until a tick prunes again — the panel polls
+    every ten seconds and used to miss the one-tick window entirely."""
+    from datetime import datetime, timezone
+    factory = _load_factory()
+    at = datetime(2026, 9, 8, 18, 7, 12, tzinfo=timezone.utc)
+    done = factory.prune_outcome(removed=["devcake/dev-x:v1-1.0"], kept=3,
+                                 receipts_dropped=["x@1.0"], now=at)
+    assert done["at"] == "2026-09-08T18:07:12+00:00"
+    assert done["removed"] == ["devcake/dev-x:v1-1.0"] and done["kept"] == 3
+    previous = {"state": "ready", "jobs": [], "prune": done}
+    # a tick without a prune keeps it
+    carried = factory.carry_last_prune(previous, {"state": "ready", "jobs": []})
+    assert carried["prune"] == done
+    # a tick that pruned wins
+    fresh = factory.prune_outcome(removed=[], kept=2, detail="nothing to prune", now=at)
+    assert factory.carry_last_prune(previous, {"state": "ready", "prune": fresh})["prune"] == fresh
+    # nothing to carry
+    assert "prune" not in factory.carry_last_prune({"state": "ready"}, {"state": "ready"})
+    assert "prune" not in factory.carry_last_prune(None, {"state": "ready"})
+
+
 def test_receipt_stays_when_the_named_image_is_still_local(tmp_path):
     factory = _load_factory()
     receipts = tmp_path / "harness_receipts"

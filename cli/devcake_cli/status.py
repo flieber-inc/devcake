@@ -105,6 +105,15 @@ def harness_lines(health: dict | None) -> list[str]:
     if waiting and idle:
         out.append("    ! the baker is idle with no bake order in flight — save any "
                    "Dev Type in the admin UI (or restart the app) to reissue it")
+    prune = bake.get("prune")
+    if isinstance(prune, dict):
+        when = str(prune.get("at") or "")[11:16]
+        head = f"  last prune ({when} UTC): " if when else "  last prune: "
+        if prune.get("detail"):
+            out.append(head + str(prune["detail"]))
+        else:
+            n = len(prune.get("removed") or [])
+            out.append(head + (f"removed {n} image(s)" if n else "nothing to prune"))
     return out
 
 

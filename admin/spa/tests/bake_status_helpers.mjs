@@ -1,0 +1,49 @@
+// Hermetic checks for the Dev Types panel's host-baker readouts: the last
+// prune's sentence (with its time) and the reason the baker cannot act.
+import assert from "node:assert/strict";
+import { bakerBlockedReason, describePrune } from "../src/lib/bakeStatus.js";
+
+let failed = 0;
+const check = (name, fn) => {
+  try {
+    fn();
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    failed += 1;
+    console.log(`  ✗ ${name}: ${e.message}`);
+  }
+};
+
+check("no prune yet → empty", () => {
+  assert.equal(describePrune(null), "");
+  assert.equal(describePrune({ state: "ready" }), "");
+});
+
+check("removed images with the time", () => {
+  assert.equal(
+    describePrune({ prune: { removed: ["devcake/dev-x:v1-1.0", "devcake/dev-y:v1"],
+      kept: 3, detail: "", receipts_dropped: ["x@1.0"], at: "2026-09-08T18:07:12+00:00" } }),
+    "Last prune (18:07 UTC): removed 2 image(s), 1 receipt(s) dropped.");
+});
+
+check("nothing to prune and a refusal keep their detail", () => {
+  assert.equal(describePrune({ prune: { removed: [], kept: 4, detail: "nothing to prune", at: "2026-09-08T18:07:12Z" } }),
+    "Last prune (18:07 UTC): nothing to prune");
+  assert.equal(describePrune({ prune: { removed: [], kept: 0, detail: "refused: no keep-set order this tick" } }),
+    "Last prune: refused: no keep-set order this tick");
+});
+
+check("blocked reasons", () => {
+  assert.equal(bakerBlockedReason({ state: "ready", baker_alive: true }), "");
+  assert.equal(bakerBlockedReason({ state: "baking", baker_alive: true }), "");
+  assert.equal(bakerBlockedReason({ state: "ready", baker_alive: false }), "The host baker is not running.");
+  assert.equal(bakerBlockedReason({ state: "error", detail: "the checkout has moved since the app was baked; run devcake up --bake" }),
+    "The host baker is not acting (error): the checkout has moved since the app was baked; run devcake up --bake");
+  assert.equal(bakerBlockedReason(null), "");
+});
+
+if (failed) {
+  console.error(`${failed} check(s) failed`);
+  process.exit(1);
+}
+console.log("bake_status helpers: all checks passed");

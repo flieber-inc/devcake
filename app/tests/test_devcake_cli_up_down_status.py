@@ -153,6 +153,13 @@ def test_status_reports_harness_pins_and_the_lost_order_remedy(monkeypatch, tmp_
     health["bake_status"] = {"state": "baking", "jobs": ["grok-build@1.0.13"]}
     cli_main.main(["status"])
     assert "no bake order in flight" not in capsys.readouterr().out
+    # the last prune's outcome, with its time
+    health["bake_status"] = {"state": "ready", "jobs": [], "baker_alive": True,
+                             "prune": {"removed": ["devcake/dev-x:v1-1.0", "devcake/dev-y:v1"],
+                                       "kept": 2, "detail": "", "at": "2026-09-08T18:07:12+00:00"}}
+    health["harness_pins"]["templates"]["grok-build"]["ok"] = True
+    cli_main.main(["status"])
+    assert "  last prune (18:07 UTC): removed 2 image(s)" in capsys.readouterr().out
     rc = cli_main.main(["status", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["harness_pins"] == health["harness_pins"]["templates"]

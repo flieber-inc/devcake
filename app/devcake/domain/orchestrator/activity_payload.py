@@ -19,7 +19,8 @@ from pathlib import Path
 
 from ..model import MissionRef
 from . import board, resume
-from .feed import coalesced_step_files, is_devcake_comment, unquoted
+from .feed import (coalesced_step_files, find_status_entry, is_devcake_comment,
+                   unfold_entries, unquoted)
 from .markers import decomposition_parent_ref, discovery_in_keys
 
 log = logging.getLogger("devcake.missions")
@@ -515,7 +516,13 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         lines += ["", "(no project updates yet — the project-native feed is "
                       "mirrored here once updates exist)"]
     by_id = {e.entry_id: e for e in act.entries if e.entry_id}
-    for e in act.entries:
+    # ADR-0042 §8: the mirror is an UNFOLDING projection of the record — a
+    # step card unfolds into the entries the folder carried before the
+    # card, a folded notice into its record, the status comment (a view)
+    # is omitted; everything else passes through. Watermark, replies and
+    # the discovery block keep reading the raw entries above.
+    seen_sources: set[int] = set()
+    for e in unfold_entries(act.entries):
         body = e.body or ""
         # provenance is sentinel-based, never author-based (docs/03 §8a):
         # DevCake may post with the operator's own PMO credentials
@@ -534,7 +541,11 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         lines.append(body)                # full body — the mirror never trims
         for att in e.attachments:
             lines.append(await _materialize(att))
-        fname = step_by_first.get(id(e))
+        # the synthesized step-file line belongs to the FIRST entry unfolded
+        # from a post (a card unfolds into several, one source)
+        first_of_source = id(e.source) not in seen_sources
+        seen_sources.add(id(e.source))
+        fname = step_by_first.get(id(e.source)) if first_of_source else None
         if fname and not any((att.name or "") == fname for att in e.attachments):
             lines.append(f"[attachment: {fname}]")
         lines.append("")
@@ -586,6 +597,9 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     return {"mission_md": mission_md,
             "activity_md": "\n".join(lines), "attachments": attachments,
             "feed_watermark": watermark,
+            # ADR-0042 §5: the status comment's id from the same full read
+            # (a wire-safe extra key; the fallback consumers ignore it)
+            "status_entry_id": find_status_entry(act.entries) or "",
             "upstream_gaps": upstream_gaps,
             "upstream_truncated": upstream_truncated}
 

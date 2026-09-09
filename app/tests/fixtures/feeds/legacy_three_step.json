@@ -1,0 +1,63 @@
+{
+ "entries": [
+  {
+   "body": "🧾 DevCake transcript `1_ONBOARD.md` (run `T-1-1-ONBOARD-AAAAAA`) — attached: [1_ONBOARD.md](https://fake/1_ONBOARD.md)\n\n> Assessment: normal complexity, plan needed.\n>\n> Two files change.\n\n`devcake:v1`",
+   "attachments": [
+    "1_ONBOARD.md"
+   ]
+  },
+  {
+   "body": "<!-- DEVCAKE-REPLY -->\n\n> Assessment: normal complexity, plan needed.\n>\n> Two files change.\n\n`devcake:v1`",
+   "attachments": []
+  },
+  {
+   "body": "🧮 DevCake token report — step 1 (ONBOARD, senior-dev)\nmodel: m · input: — · output: —\ncache read/write: —/—\nextraction: —\nrun: T-1-1-ONBOARD-AAAAAA\n\n`devcake:v1`",
+   "attachments": []
+  },
+  {
+   "body": "🧾 DevCake transcript `2_EXECUTE.md` (run `T-1-2-EXECUTE-AAAAAA`) — attached: [2_EXECUTE.md](https://fake/2_EXECUTE.md)\n\n> Root cause: the skip gate.\n>\n> Fix in the pull request.\n\n`devcake:v1`",
+   "attachments": [
+    "2_EXECUTE.md"
+   ]
+  },
+  {
+   "body": "<!-- DEVCAKE-REPLY -->\n\n> Root cause: the skip gate.\n>\n> Fix in the pull request.\n\n`devcake:v1`",
+   "attachments": []
+  },
+  {
+   "body": "🧮 DevCake token report — step 2 (EXECUTE, senior-dev)\nmodel: m · input: — · output: —\ncache read/write: —/—\nextraction: —\nrun: T-1-2-EXECUTE-AAAAAA\n\n`devcake:v1`",
+   "attachments": []
+  },
+  {
+   "body": "`devcake:discovery:v1 step=2 n=1`\n\n🔎 1 discovery from step 2 (EXECUTE) — leads for related missions, routed separately.\n\n`devcake:finding:v1 sha=5712943820b1`\n\nFull record attached: [DISCOVERY_2.md](https://fake/DISCOVERY_2.md)\n\n**1.**\n\n> the config default changed to 5\n> Evidence: src/config.py:42; repro: pytest -k retries\n\n`devcake:v1`",
+   "attachments": [
+    "DISCOVERY_2.md"
+   ]
+  },
+  {
+   "body": "🔀 DevCake opened/updated the pull request: https://forge/pr/8 — awaiting REVIEW.\n\n`devcake:v1`",
+   "attachments": []
+  },
+  {
+   "body": "🧾 DevCake transcript `3_REVIEW.md` (run `T-1-3-REVIEW-AAAAAA`) — attached: [3_REVIEW.md](https://fake/3_REVIEW.md)\n\n> Verdict: approve. The diff stays inside scope.\n\n`devcake:v1`",
+   "attachments": [
+    "3_REVIEW.md"
+   ]
+  },
+  {
+   "body": "🧮 DevCake token report — step 3 (REVIEW, senior-dev)\nmodel: m · input: — · output: —\ncache read/write: —/—\nextraction: —\nrun: T-1-3-REVIEW-AAAAAA\n\n`devcake:v1`",
+   "attachments": []
+  },
+  {
+   "body": "✅ REVIEW approved (APPROVED-BY-DEVCAKE marker). Awaiting human merge of https://forge/pr/8 — the merge sweep completes this mission once it merges.\n\n---\nfooter\n\n`devcake:v1`",
+   "attachments": []
+  }
+ ],
+ "uploads": [
+  "1_ONBOARD.md",
+  "2_EXECUTE.md",
+  "DISCOVERY_2.md",
+  "3_REVIEW.md"
+ ],
+ "description": ""
+}

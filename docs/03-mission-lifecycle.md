@@ -148,6 +148,40 @@ A **team-scoped run kind** (not a Mission Type — it has no host Mission and no
 
 **The DISCOVERY flavor (ADR-0033).** The steward class's second duty, on the same run kind (`Run.steward_duty = "discovery"`; same `stewarded` outcome). Trigger: event-kicked when harvest memorializes a run's `discoveries`, re-driven by the label-gated sweep; one family's pending batches per run, per-instance single-flight, gated by `pmos[].discovery_routing`. Context is **curated, not accumulated**: the family map (decomposition tree ∪ blocked-by component, statuses included), finished members' handoffs, open members' description heads, the new discovery entries at full fidelity, and the family's work repos cloned read-only (evidence anchoring; clone-capped like blocker mounts). Output is propose-only routes — `{"routes": [{"target", "source", "step", "finding", "because"}], "declined": […]}` — and the app is again the gatekeeper: targets must be family members and non-terminal, `(source, step)` pairs already on a recipient are never re-delivered (this dedup — not a numeric budget — is the fan-out bound, addendum 14), and **finding text is copied from the source run record, never from steward output** (verbatim transport is structural). Delivery is one `` `devcake:discovery-in:v1 src=<KEY> step=<n>` ``-marked comment per recipient (elevated: it trips an in-flight recipient's freshness re-review) plus a MISSION.md closing block ("leads, not truths"); every dispatched batch is receipted on the source (`` `devcake:discovery-routed:v1 step=<n> to=<KEY|->` `` — `-` = deliberately routed nowhere), and the sweep-gate label drops once nothing is pending. A source run record that exists but is not yet terminal is **in flight** (the harvest posts the marker before the close finishes): the sweep holds such a batch — label and pending id kept, nothing posted — and reserves the unroutable `to=-` disposition for a record that is absent or terminal without a usable result; the close also writes the run's `result` onto the record before the harvest posts, so the window is closed from both sides.
 
+## 4c. Step cards, folds and the record (ADR-0042)
+
+Every step end posts **one top-level comment**, the step card, in this
+order: a header line (`{glyph} Step {seq} · {TYPE} · {outcome} · {duration} · ${cost}`,
+the glyph from the vocabulary above — ✅ 🔀 📋 ✋ 🔁 ⚠️ 🧩 🔄), the Dev's last
+message `>`-blockquoted and cut at a paragraph or sentence boundary under
+the inline budget (the full text is the attached transcript), a
+`**Result:**` and a `**Next:**` line saying what now exists and who acts
+next, the `Transcript:` line whose backticked `` `{seq}_{TYPE}.md` `` is the
+seq-derivation token (exactly one per card), then the **fold**: a collapsed
+block holding the record — the answer token `` `devcake:answer:v1 step=N` ``
+(present under the same rule the answer comment followed: issues only, a
+non-empty last message, never REVIEW/`reviewed`), the token report (§8, text
+unchanged), the discovery harvest (`adr/0033`, marker first), the
+transition's PR line, the run id. The fold's wrapper is the vendor's
+collapsible syntax (`PMOCapabilities.feed_collapsible`, `05-pmo-adapter.md`
+§1: `+++ Title … +++` where the vendor renders that, `<details>` elsewhere);
+its inner grammar is the same everywhere — sections open with a
+`▸ **Title**` line, optionally ` · at=YYYY-MM-DDTHH:MM:SSZ` when the section
+was appended later (routing receipts). Every backticked marker a scan reads
+sits on its own unquoted line inside the fold; the provenance sentinel (§8a)
+closes the card AFTER the fold, never inside it. A vendor without
+attachments carries the transcript dump as the fold's `Transcript (inline)`
+section, quoted. A run whose transcript was posted by a pre-card build
+finishes in the pre-card shape (answer comment, threaded token report and
+harvest); nothing else posts those shapes.
+
+**The record rides the fold; the head is for people.** The Dev's
+`ACTIVITY.md` is not a copy of the feed but an **unfolding projection** of
+it (`07-dev-runtime.md` §2): a card unfolds into the entries the folder
+carried before the card — transcript, answer, token report, harvest, PR
+line — byte for byte, so nothing a Dev reads changes; a section appended
+later unfolds at its own time.
+
 ## 5. The approval-command footer (normative)
 
 Every REVIEW PR comment (approve *and* reject — on reject it helps a human short-circuit the loop) ends with the footer supplied by the active forge adapter's `approval_footer()`. Those CLI snippets are addressed to a **human operator** (or the app under `auto_merge`) — never to a Dev. For example:
@@ -244,7 +278,7 @@ Line rules (each optional line appears only when its datum exists):
 
 The `run: {run_id}` footer doubles as the idempotency key for finalization (`04-orchestrator.md` §4).
 
-**Where it lands — one thread per step.** On a vendor that threads comments (`feed_threads`, `05-pmo-adapter.md` §1) the token report and the step's discovery harvest (`adr/0033`) are posted as **replies to the step's transcript comment** (🧾): the transcript stays top level and anchors its own bookkeeping, so a person scrolling the board sees one entry per step with the report and the harvest folded under it. Threading is presentation only, never content: bodies, markers, sentinel and posting order are byte-identical to a flat vendor's; every feed scan reads the same entries (a reply is an ordinary entry of the issue's feed); and the Dev's `ACTIVITY.md` mirror renders DevCake's own replies exactly as top-level entries, so the harness reads the same file either way (`07-dev-runtime.md` §2). The answer comment (ADR-0014 D1), hand-off and baton comments, PR links, steward deliveries and routing receipts stay top level. The anchor is the transcript comment's vendor id, saved on the run with the transcript checkpoint, so a redelivered finalize threads identically; a vendor that returns no id, or none of the above, leaves the step flat.
+**Where it lands — one card per step (ADR-0042, §4c).** The token report is a section of the step card's fold, below the transcript line and the Dev's quoted answer, never a comment of its own; on a vendor without attachments the transcript dump follows it as the `Transcript (inline)` section. Bodies, markers and the sentinel are byte-identical on every vendor — only the fold's wrapper differs — and every feed scan reads the same text through `feed.unquoted`. The Dev's `ACTIVITY.md` unfolds the card into the transcript, answer, token report and harvest entries it always carried (`07-dev-runtime.md` §2). Hand-off and baton comments, steward deliveries and every notice stay top level; routing receipts are appended to the source card's fold. The card's entry id is saved on the run with its checkpoint (the fold anchor); a pre-card run mid-flight at the upgrade finishes in the old thread-per-step shape.
 
 ## 8a. Comment-provenance sentinel (normative)
 
@@ -254,7 +288,7 @@ Every comment the app posts to the PMO System ends with the footer line:
 `devcake:v1`
 ```
 
-appended by the single posting choke-point (`feed._feed` in `domain/orchestrator/feed.py`, delegated as `MissionManager._feed`), after redaction. Classification is **content-based, never author/credential-based** — DevCake may be configured with the operator's own PMO API key, so `author` cannot distinguish DevCake's comments from the operator's. A comment whose body matches ``re.search(r"`devcake:v1`\s*$", body)`` is DevCake's; anything else is treated as a **human comment**.
+appended by the single posting choke-point (`feed._feed` in `domain/orchestrator/feed.py`, delegated as `MissionManager._feed`), after redaction — and re-appended, last, by the edit choke-point (`feed._edit`, ADR-0042) whenever DevCake replaces one of its own entries; a step card's fold closes before it (§4c). Classification is **content-based, never author/credential-based** — DevCake may be configured with the operator's own PMO API key, so `author` cannot distinguish DevCake's comments from the operator's. A comment whose body matches ``re.search(r"`devcake:v1`\s*$", body)`` is DevCake's; anything else is treated as a **human comment**.
 
 Consequences:
 

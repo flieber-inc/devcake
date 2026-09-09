@@ -13,8 +13,12 @@ from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, is_pre_wipe, utcnow
 from . import discovery, steps, transitions
-from .feed import blockquote, post_attachment_comment, stage_of
-from .markers import FEED_INLINE_MAX, REPLY_MARKER
+from .feed import (SECTION_ANSWER, SECTION_DISCOVERIES, SECTION_RUN,
+                   SECTION_TOKEN_REPORT, SECTION_TRANSITION, FoldSection,
+                   StepCardParts, blockquote, collapsible_of,
+                   post_attachment_comment, post_attachments_comment,
+                   render_step_card, stage_of)
+from .markers import FEED_INLINE_MAX, REPLY_MARKER, answer_token
 from ...activity import IN_FLIGHT
 
 log = logging.getLogger("devcake.missions")
@@ -151,45 +155,43 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
         if run.continuations_used:                       # ADR-0022
             span.set_attribute("devcake.continuations", run.continuations_used)
 
-        # 1 — transcript (idempotent via finalized_steps)
-        if steps.TRANSCRIPT not in run.finalized_steps:
-            if _pre_wipe(mgr, run):
-                log.info("abort finalize (transcript) pre-wipe %s", run.run_id)
-                return
-            anchor = await _post_transcript(mgr, run, transcript,
-                                            payload.get("last_message_md"))
-            # the step's bookkeeping threads under this comment (docs/03
-            # §8): saved with the checkpoint so redelivery threads the same
-            run.feed_anchor = anchor or ""
-            run.finalized_steps.append(steps.TRANSCRIPT)
-            mgr.runs.store.save(run)
+        run.token_report = redact_value(token_report)  # persisted cost source
+        # ADR-0033 harvest, the pure half: the entries the card memorializes
+        # (Decision 11: unconditional, even for an outcome the transition
+        # parks or rejects). Bookkeeping commits after the card is on the
+        # feed. Never for a failed run (no outcome).
+        harvest_part = (discovery.harvest_part(mgr, run, result)
+                        if outcome else None)
+        legacy_tail = (steps.TRANSCRIPT in run.finalized_steps
+                       and steps.STEP_CARD not in run.finalized_steps)
 
-        # 1b — the answer as its own marked comment (ADR-0014 D2 quarantine
-        # still applies). Marker first, so downstream feed consumers can find
-        # the answer without parsing our transcript header or opening the zip.
-        # REVIEW/`reviewed` is suppressed (see _post_reply) so a trailing
-        # "LGTM" cannot displace the EXECUTE answer as the newest REPLY.
-        await _checkpoint(mgr, run, steps.REPLY, lambda: _post_reply(
-            mgr, run, payload.get("last_message_md"), outcome,
-        ))
+        # 1 — the step card (ADR-0042 §2): transcript + answer + token report
+        # + harvest + the transition's PR line in ONE comment, idempotent via
+        # finalized_steps. The legacy keys are stamped with it so every
+        # reader of them still sees the step as posted.
+        if not legacy_tail and steps.STEP_CARD not in run.finalized_steps:
+            if _pre_wipe(mgr, run):
+                log.info("abort finalize (step card) pre-wipe %s", run.run_id)
+                return
+            anchor = await _post_step_card(
+                mgr, run, transcript, payload.get("last_message_md"),
+                token_report, harvest_part, result, outcome,
+                exit_code=payload.get("exit_code"))
+            # the card's entry id: late bookkeeping (routing receipts) is
+            # appended to its fold; saved with the checkpoint
+            run.feed_anchor = anchor or ""
+            run.finalized_steps += [steps.STEP_CARD, steps.TRANSCRIPT,
+                                    steps.REPLY, steps.TOKEN_REPORT]
+            mgr.runs.store.save(run)
+        elif legacy_tail:
+            # a run whose transcript was posted by the pre-card build:
+            # finish it in the old shape (answer comment, token report
+            # threaded under the transcript; the harvest below likewise)
+            await _legacy_tail(mgr, run, payload, token_report, outcome)
 
         if _pre_wipe(mgr, run):
             log.info("abort finalize mid-flight pre-wipe %s", run.run_id)
             return
-
-        run.token_report = redact_value(token_report)  # persisted cost source
-        # 2 — token report (INV-5: always)
-        if steps.TOKEN_REPORT not in run.finalized_steps:
-            await mgr._feed(pmo_id, run.pmo_kind,
-                             _token_report_md(run, token_report,
-                                              mgr.config.cost_inputs),
-                             reply_to=run.feed_anchor or None)
-            if _pre_wipe(mgr, run):
-                log.info("abort finalize after token_report pre-wipe %s",
-                         run.run_id)
-                return
-            run.finalized_steps.append(steps.TOKEN_REPORT)
-            mgr.runs.store.save(run)
 
         # failure artifact (docs/07 §4 nonzero exits): evidence posted above,
         # NO transition — and the dispatch-time status write is REVERTED so the
@@ -214,11 +216,18 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
                         run.run_id, exit_code, run.attempt_of_step)
             return
 
-        # 2b — ADR-0033 harvest: unconditional memorialization of the run's
-        # discoveries (Decision 11), BEFORE the transition so even an outcome
-        # the transition parks or rejects keeps its receipts. Best-effort
-        # inside — never wedges the close.
-        harvested = await discovery.harvest(mgr, run, result)
+        # 2b — ADR-0033 harvest bookkeeping (label, pending set, routing
+        # trigger, claims), BEFORE the transition so even an outcome the
+        # transition parks or rejects keeps its receipts. The marker is
+        # already on the feed inside the card; a legacy-tail run posts the
+        # pre-card harvest comment here instead. Best-effort inside —
+        # never wedges the close.
+        if legacy_tail:
+            harvested = await discovery.harvest(mgr, run, result)
+        elif harvest_part is not None:
+            harvested = await discovery.harvest_commit(mgr, run, harvest_part)
+        else:
+            harvested = 0
         if harvested:
             span.set_attribute("devcake.discoveries.harvested", harvested)
 
@@ -436,6 +445,174 @@ async def restore_after_failure(mgr, run: Run) -> None:
                         "backlog (restored after failed attempt)")
     except Exception:
         log.exception("status restore failed for %s", run.run_id)
+
+
+def _card_copy(mgr, run: Run, result: dict, outcome: str, *,
+               harvest_part, exit_code) -> tuple[str, str, str, str]:
+    """(glyph, outcome word, Result line, Next line) for the card head —
+    DevCake-authored prose about the step, from the record it already
+    holds; the docs/03 glyph vocabulary. Model-derived text (a PR url) is
+    a link, never a marker: defanged and bounded."""
+    from .markers import defang
+    mtype = run.mission_type
+    pr_url = defang(str(result.get("pr_url") or run.pr_url or "")).strip()[:500]
+    if not outcome:
+        code = f" (exit {exit_code})" if exit_code is not None else ""
+        return ("⚠️", "failed", f"No result — the run failed{code}.",
+                "DevCake retries under the attempts policy; a give-up posts "
+                "a notice.")
+    if outcome == "human_needed":
+        return ("✋", "handed off", "Blocked on a person.",
+                "You — see the notice below.")
+    if mtype == "ONBOARD" and outcome == "plan_needed":
+        if result.get("plan_md") or result.get("plan"):
+            nxt = ("You — approve the plan (see below)."
+                   if getattr(mgr.instance, "plan_approval", False)
+                   else "DevCake — EXECUTE.")
+            return ("📋", "triaged",
+                    "Opportunistic plan attached (posted below).", nxt)
+        return ("📋", "triaged", "Needs a plan.", "DevCake — PLAN.")
+    if mtype == "ONBOARD" and outcome == "decomposed":
+        n = len(result.get("decomposition") or [])
+        return ("🧩", "decomposed", f"Split into {n} missions.",
+                "DevCake creates them; this mission is canceled in their favour.")
+    if mtype == "PLAN" and outcome == "planned":
+        nxt = ("You — approve the plan (see below)."
+               if getattr(mgr.instance, "plan_approval", False)
+               else "DevCake — EXECUTE.")
+        return ("📋", "planned", "Plan posted below.", nxt)
+    if mtype == "EXECUTE" and outcome == "executed":
+        where = f"Pull request {pr_url}." if pr_url else "Pull request opened."
+        return ("🔀", "executed", where, "DevCake — REVIEW.")
+    if mtype == "REVIEW" and outcome == "reviewed":
+        verdict = str(result.get("verdict") or "").lower()
+        if verdict == "approve":
+            nxt = "DevCake merges."
+            try:
+                from ...config import auto_merge_permitted
+                inst = mgr.forges.instance(run.repo_ref)
+                if not (inst is not None and auto_merge_permitted(
+                        mgr.config, inst, run.repo_ref, mgr.dev_types)):
+                    nxt = (f"You — merge {pr_url} (the command is in the "
+                           "notice below)." if pr_url else
+                           "You — merge the pull request (see the notice below).")
+                elif int(getattr(inst, "merge_settle_minutes", 0) or 0) > 0:
+                    nxt = (f"DevCake waits {inst.merge_settle_minutes} min for "
+                           "sibling discoveries, then merges.")
+            except Exception:  # noqa: BLE001 — the head is prose; a config lookup must never fail a close
+                pass
+            return ("✅", "approved", "Verdict: approve.", nxt)
+        if verdict == "reject":
+            return ("🔁", "rejected", "Verdict: reject — report posted below.",
+                    "DevCake — EXECUTE rework.")
+        return ("⚠️", outcome, f"Verdict: {verdict or '(none)'}.",
+                "You — see the notice below.")
+    return ("⚠️", outcome, "Not a legal outcome for this step.",
+            "You — see the notice below.")
+
+
+def _answer_token_applies(run: Run, last_message: str | None,
+                          outcome: str) -> bool:
+    """The pre-card answer-comment rule (`_post_reply`), carried by the
+    card's Answer section: issues only, a non-empty last message, never on
+    REVIEW/`reviewed` (an approval note must not displace the EXECUTE
+    answer as the newest one)."""
+    if run.pmo_kind != "issue" or not (last_message or "").strip():
+        return False
+    return not (run.mission_type == "REVIEW" and outcome == "reviewed")
+
+
+async def _post_step_card(mgr, run: Run, transcript: str,
+                          last_message: str | None, token_report: dict,
+                          harvest_part, result: dict, outcome: str, *,
+                          exit_code=None) -> str | None:
+    """ADR-0042 §2: ONE comment per step. Transcript attached (the file
+    token on the head's Transcript line is the seq-derivation surface),
+    the answer quoted and cut at a boundary, Result/Next, and the fold
+    with the record: answer token, token report (docs/03 §8, text
+    unchanged), the harvest (marker first), the transition's PR line, the
+    run id. externalize=False always — counted markers ride the comment.
+    Returns the card's entry id (the step's fold anchor), None for
+    projects / vendors that return none."""
+    transcript = redact(transcript)
+    name = f"{run.seq}_{run.mission_type}.md"
+    if run.pmo_kind == "project":
+        await mgr._feed(run.mission_pmo_id, "project",
+                         f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)"
+                         f"\n\n---\n\n{transcript}")
+        return None    # project updates have no comment feed (suppressed)
+    lm = redact(last_message) if last_message else ""
+    glyph, word, result_line, next_line = _card_copy(
+        mgr, run, result, outcome, harvest_part=harvest_part,
+        exit_code=exit_code)
+    duration = None
+    if token_report.get("duration_ms") is not None:
+        duration = float(token_report["duration_ms"]) / 1000
+    elif run.started_at is not None:
+        duration = (utcnow() - run.started_at).total_seconds()
+    cost = token_report.get("cost_usd_native")
+    if cost is None:
+        cost = token_report.get("cost_usd_estimated")
+    files = [(name, transcript)]
+    if harvest_part is not None:
+        files.append((harvest_part.name, harvest_part.md))
+
+    def _comment(urls):
+        sections = []
+        if _answer_token_applies(run, lm, outcome):
+            sections.append(FoldSection(SECTION_ANSWER, answer_token(run.seq)))
+        sections.append(FoldSection(SECTION_TOKEN_REPORT, _token_report_md(
+            run, token_report, mgr.config.cost_inputs)))
+        if harvest_part is not None:
+            sections.append(FoldSection(SECTION_DISCOVERIES, harvest_part.section_body(
+                run, urls.get(harvest_part.name))))
+        if run.mission_type == "EXECUTE" and outcome == "executed":
+            _f = mgr.forges.get(run.repo_ref)
+            noun = _f.descriptor.pr_noun if _f else "pull request"
+            sections.append(FoldSection(SECTION_TRANSITION, (
+                f"🔀 DevCake opened/updated the {noun}: "
+                f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")))
+        sections.append(FoldSection(SECTION_RUN, f"`{run.run_id}`"))
+        parts = StepCardParts(
+            seq=run.seq, mission_type=run.mission_type, glyph=glyph,
+            outcome_word=word, result_line=result_line, next_line=next_line,
+            transcript_name=name, transcript_url=urls.get(name),
+            sections=sections, answer_md=lm or None,
+            transcript_md=transcript, duration_s=duration,
+            cost_usd=float(cost) if cost is not None else None)
+        return render_step_card(parts, collapsible=collapsible_of(mgr)), False
+
+    try:
+        anchor = await post_attachments_comment(
+            mgr, run.mission_pmo_id, "issue", files=files, comment_of=_comment)
+    except Exception as e:  # noqa: BLE001 — audited, then re-raised: a failed card is a failed close, like a failed transcript before it
+        if harvest_part is not None:
+            mgr._audit(run.mission_pmo_id, "discovery_post_failed", str(e)[:200])
+        mgr._audit(run.mission_pmo_id, "step_card_failed", str(e)[:200])
+        raise
+    mgr._audit(run.mission_pmo_id, "transcript", name)
+    return anchor
+
+
+async def _legacy_tail(mgr, run: Run, payload: dict, token_report: dict,
+                       outcome: str) -> None:
+    """A run whose transcript was posted by the pre-card build finishes in
+    the pre-card shape: the answer comment, then the token report threaded
+    under the saved anchor (the harvest follows in `_finalize`). Deleted
+    one release after the card ships."""
+    await _checkpoint(mgr, run, steps.REPLY, lambda: _post_reply(
+        mgr, run, payload.get("last_message_md"), outcome))
+    if _pre_wipe(mgr, run):
+        return
+    if steps.TOKEN_REPORT not in run.finalized_steps:
+        await mgr._feed(run.mission_pmo_id, run.pmo_kind,
+                         _token_report_md(run, token_report,
+                                          mgr.config.cost_inputs),
+                         reply_to=run.feed_anchor or None)
+        if _pre_wipe(mgr, run):
+            return
+        run.finalized_steps.append(steps.TOKEN_REPORT)
+        mgr.runs.store.save(run)
 
 
 async def _post_transcript(mgr, run: Run, transcript: str,

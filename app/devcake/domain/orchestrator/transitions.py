@@ -224,7 +224,14 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
 
         await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_LABELS, _executed_labels)
-        await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_FEED, _executed_feed)
+        if steps.STEP_CARD in run.finalized_steps:
+            # ADR-0042: the PR line is the step card's Transition section;
+            # only a pre-card run mid-flight still posts it on its own
+            if steps.TRANSITION_EXECUTED_FEED not in run.finalized_steps:
+                run.finalized_steps.append(steps.TRANSITION_EXECUTED_FEED)
+                mgr.runs.store.save(run)
+        else:
+            await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_FEED, _executed_feed)
         if steps.TRANSITION_EXECUTED not in run.finalized_steps:
             run.finalized_steps.append(steps.TRANSITION_EXECUTED)
             mgr.runs.store.save(run)

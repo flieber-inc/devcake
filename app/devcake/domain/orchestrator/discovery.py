@@ -136,10 +136,97 @@ def comment_body(run: Run, entries: list[dict], name: str,
     return "\n\n".join(lines), False
 
 
+@dataclass
+class HarvestPart:
+    """A run's discoveries as the step card carries them (ADR-0042): the
+    capped entries, the attachment name and its rendered record. The
+    card's fold section is `section_body(url)`; `harvest_commit` does the
+    bookkeeping once the card is on the feed."""
+    entries: list[dict]
+    name: str
+    md: str
+
+    def section_body(self, run: Run, url: str | None) -> str:
+        return comment_body(run, self.entries, self.name, url)[0]
+
+
+def harvest_part(mgr, run: Run, result: dict) -> HarvestPart | None:
+    """The pure half of the harvest: the gate, the valid entries, the cap
+    (audited). None ⇒ nothing to memorialize."""
+    if run.pmo_kind != "issue" or run.mission_type not in HARVEST_TYPES:
+        return None
+    entries = valid_entries(result)
+    if not entries:
+        return None
+    cap = mgr.config.budgets.discoveries_per_run
+    if cap and len(entries) > cap:
+        mgr._audit(run.mission_pmo_id, "discovery_capped",
+                   f"{len(entries) - cap} of {len(entries)} entries "
+                   f"dropped (budgets.discoveries_per_run={cap})")
+        del entries[cap:]
+    name = f"DISCOVERY_{run.seq}.md"
+    return HarvestPart(entries, name, redact(render_discovery_md(run, entries)))
+
+
+async def harvest_commit(mgr, run: Run, part: HarvestPart) -> int:
+    """The bookkeeping half, once the marker is on the feed (inside the
+    step card): label, pending set, audit, routing trigger, claims
+    conveyor — under the same DISCOVERY_POST checkpoint as before, so a
+    redelivered finalize past the card still commits exactly once.
+    Best-effort: never wedges the close."""
+    pmo_id = run.mission_pmo_id
+    entries = part.entries
+
+    async def _commit():
+        await _after_post(mgr, run, pmo_id, part.name, entries)
+
+    try:
+        await mgr._checkpoint(run, steps.DISCOVERY_POST, _commit)
+    except Exception:  # noqa: BLE001 — harvest must never wedge a close
+        log.exception("discovery harvest commit failed for %s", run.run_id)
+        return 0
+    return len(entries)
+
+
+async def _after_post(mgr, run: Run, pmo_id: str, name: str,
+                      entries: list[dict]) -> None:
+    try:
+        await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                  remove=set(), add={LABEL_DISCOVERY})
+    except Exception as e:  # noqa: BLE001 — the label is a sweep hint; the feed marker is the truth
+        mgr._audit(pmo_id, "discovery_label_failed", str(e)[:200])
+    mgr._discoveries_pending.add(pmo_id)
+    mgr._audit(pmo_id, "discovery_post", f"{name}: {len(entries)} entries")
+    # event trigger for the routing lane (composition root injects the
+    # callable; None in tests / pre-wiring) — best-effort, the sweep is
+    # the durable path
+    notify = getattr(mgr, "discovery_notify", None)
+    if notify is not None:
+        try:
+            notify()
+        except Exception:  # noqa: BLE001 — never let the trigger touch the close
+            log.debug("discovery notify failed", exc_info=True)
+    # PLAN_MEMORY §5.2: copy each entry onto every snapshotted
+    # notebook. Failures stay inside append_from_harvest.
+    writer = getattr(mgr, "claims", None)
+    if writer is not None and entries:
+        from .. import claims as claims_mod
+        try:
+            written = await claims_mod.append_from_harvest(
+                writer, mgr.config, run, entries,
+                audit=mgr._audit)
+            for card, n in (written or {}).items():
+                if n:
+                    mgr.repo_cache.invalidate(card)   # own write
+        except Exception:  # noqa: BLE001 — conveyor must never wedge harvest
+            log.exception("claims conveyor failed for %s", run.run_id)
+
+
 async def harvest(mgr, run: Run, result: dict) -> int:
-    """The finalize hook — ONE call site (finalize.finalize, between the
-    token report and the transition). Returns the harvested entry count;
-    0 = nothing to do, no checkpoint, feed byte-identical to pre-ADR."""
+    """The PRE-CARD harvest: its own comment threaded under the transcript.
+    Kept for runs mid-flight at the ADR-0042 upgrade (finalize's legacy
+    tail); the step card carries the harvest otherwise. Returns the
+    harvested entry count; 0 = nothing to do, no checkpoint."""
     if run.pmo_kind != "issue" or run.mission_type not in HARVEST_TYPES:
         return 0
     entries = valid_entries(result)
@@ -171,36 +258,7 @@ async def harvest(mgr, run: Run, result: dict) -> int:
         except Exception as e:  # noqa: BLE001 — audited; raise so we do not checkpoint
             mgr._audit(pmo_id, "discovery_post_failed", str(e)[:200])
             raise
-        try:
-            await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                      remove=set(), add={LABEL_DISCOVERY})
-        except Exception as e:  # noqa: BLE001 — the label is a sweep hint; the feed marker is the truth
-            mgr._audit(pmo_id, "discovery_label_failed", str(e)[:200])
-        mgr._discoveries_pending.add(pmo_id)
-        mgr._audit(pmo_id, "discovery_post", f"{name}: {len(entries)} entries")
-        # event trigger for the routing lane (composition root injects the
-        # callable; None in tests / pre-wiring) — best-effort, the sweep is
-        # the durable path
-        notify = getattr(mgr, "discovery_notify", None)
-        if notify is not None:
-            try:
-                notify()
-            except Exception:  # noqa: BLE001 — never let the trigger touch the close
-                log.debug("discovery notify failed", exc_info=True)
-        # PLAN_MEMORY §5.2: copy each entry onto every snapshotted
-        # notebook. Failures stay inside append_from_harvest.
-        writer = getattr(mgr, "claims", None)
-        if writer is not None and entries:
-            from .. import claims as claims_mod
-            try:
-                written = await claims_mod.append_from_harvest(
-                    writer, mgr.config, run, entries,
-                    audit=mgr._audit)
-                for card, n in (written or {}).items():
-                    if n:
-                        mgr.repo_cache.invalidate(card)   # own write
-            except Exception:  # noqa: BLE001 — conveyor must never wedge harvest
-                log.exception("claims conveyor failed for %s", run.run_id)
+        await _after_post(mgr, run, pmo_id, name, entries)
 
     try:
         await mgr._checkpoint(run, steps.DISCOVERY_POST, _post)

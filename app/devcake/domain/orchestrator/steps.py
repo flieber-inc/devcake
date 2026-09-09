@@ -50,6 +50,12 @@ TRANSCRIPT = "transcript"
 REPLY = "reply"
 TOKEN_REPORT = "token_report"
 TRANSITION = "transition"
+# ADR-0042: the fused step card (transcript + answer + token report +
+# harvest in ONE comment). Stamped together with the three legacy keys
+# above, so every reader of the old keys still sees the step as posted; a
+# run carrying TRANSCRIPT without STEP_CARD is a pre-card run mid-flight
+# (finalize finishes it in the old shape).
+STEP_CARD = "step_card"
 
 # ── transitions.py ───────────────────────────────────────────────────────────
 TRANSITION_ILLEGAL = "transition:illegal"
@@ -130,6 +136,7 @@ REGISTRY: tuple[Step, ...] = (
     Step(TRANSCRIPT),
     Step(REPLY),
     Step(TOKEN_REPORT),
+    Step(STEP_CARD),
     Step(TRANSITION),
     Step(TRANSITION_ILLEGAL),
     Step(TRANSITION_PROJECT_PARK),

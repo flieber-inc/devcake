@@ -936,6 +936,18 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **The feed for readers: step cards** (2026-09-09, ADR-0042 PR-1..4):
+  a three-step mission read as fifteen comments, a third of them
+  markers, the answer posted twice, an HTML marker rendered as text on
+  one vendor. Now one step card per step (header · quoted answer cut at
+  a boundary · Result/Next · transcript · one collapsed fold with the
+  record), `PMOPort.edit_feed` + `PMOCapabilities.feed_collapsible`
+  (syntax family, verified live: `+++` renders as a toggle where
+  `<details>` renders as text), the `_edit` chokepoint, `Run.status_entry_id`
+  / `Run.pr_url`, and the Dev folder as an unfolding projection with a
+  golden test (`fixtures/feeds/legacy_three_step.json` recorded from the
+  pre-card build). Notices, receipts-by-edit and the status comment
+  follow (PR-5/6). Docs 03 §4c/§8/§8a, 04, 05, 07, ADR-0014 addendum.
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54
   self-decomposed tickets, 257 fresh-context runs, and 42 human-merged pull
   requests, with seven independently reproduced security-relevant findings,

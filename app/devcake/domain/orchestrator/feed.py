@@ -51,6 +51,15 @@ def _comment_max_chars(mgr) -> int | None:
     return int(n) if n else None
 
 
+def collapsible_of(mgr) -> str:
+    """The vendor's fold syntax family (`feed_collapsible`). Missing/broken
+    caps ⇒ "" — the fold renders flat; every marker still rides inline."""
+    try:
+        return str(mgr.pmo.capabilities().feed_collapsible or "")
+    except Exception:  # noqa: BLE001 — missing/broken caps must not drop the feed
+        return ""
+
+
 _PART_LABEL_BUDGET = len("Part 999 of 999") + 2  # label + blank line
 # GitHub secondary write limits (~80 content creations / minute). A 50 MB
 # dump at comment_max_chars=65536 is ~800 comments; refuse before we try.
@@ -1011,8 +1020,9 @@ def unfold_notice(group: list, reconstructed: str) -> list[Projected]:
     first = group[0]
     head, inner = strip_fold(reconstructed)
     if inner is None:
-        return [_projected(first, first.body or "")] if len(group) == 1 else [
-            _projected(first, _seal(reconstructed))]
+        # no fold: a pre-card comment (paged or not) passes through page by
+        # page — the folder keeps every legacy body, labels included
+        return [_projected(e, e.body or "") for e in group]
     sections = fold_sections(inner)
     record = next((s for s in sections if s.title == SECTION_RECORD), None)
     out = [_projected(first, _seal(record.body if record is not None else head))]

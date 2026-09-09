@@ -100,3 +100,11 @@ have to be minted and found again on every step (a scan, or a fourth
 persisted id per mission), and a reader loses the pairing between a step
 and its cost. The transcript already exists per step; anchoring on it costs
 nothing new.
+
+## Addendum — superseded in part by ADR-0042
+
+The thread became the card: ADR-0042 posts the transcript, the answer, the
+token report and the harvest as ONE comment whose collapsed fold carries the
+record, and generalises this addendum's flat-mirror rule into a projection —
+the Dev's `ACTIVITY.md` is unfolded from the record, so the entries Decision 3
+promised are the entries the Dev still reads, byte for byte.

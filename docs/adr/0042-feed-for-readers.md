@@ -138,9 +138,16 @@ that a Dev was redirected and why. Their counted markers ride in the fold.
 
 ### 5 — The status comment
 
-Each mission gets **one status comment**, created at first dispatch and
-**edited in place** at every step end, park, hand-off, merge event and
-completion. It carries the step ladder with outcomes and costs, the current
+Each mission gets **one status comment**, **edited in place** at every step
+end, park, hand-off, merge event and completion. It is created by
+**whichever dispatch finds the feed without one** — not by ONBOARD, not by
+"the first step". DevCake has no privileged entry point: a scheduled task
+starts at EXECUTE, a person orders a mission into REVIEW by choosing that
+label, a mission that predates this ADR is next dispatched at whatever
+step it is on, a hand-off resumes mid-pipeline. Every dispatch therefore
+looks for the status comment by its marker and creates it when absent,
+before the run starts; the check is idempotent and needs no stored id, so
+a restart or a second instance neither duplicates nor loses it. It carries the step ladder with outcomes and costs, the current
 state in one sentence (running step 2; parked, waiting on you to approve
 the plan; awaiting merge of the PR; done), the PR link, the cumulative
 cost, and the ancestry link when the mission is a decomposition child. It

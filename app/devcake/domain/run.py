@@ -143,6 +143,15 @@ class Run(BaseModel):
     # vendors with `feed_threads`, so a redelivered finalize threads the
     # same way. "" ⇒ top level (vendor returned no id, or no threads).
     feed_anchor: str = ""
+    # ADR-0042 §5: the PMO entry id of the mission's status comment, learnt
+    # at dispatch (found by marker in the mirror's full read, or created);
+    # finalize edits it without a feed read. "" ⇒ unknown (a project
+    # mission, a vendor that returned no id, or a run that predates it).
+    status_entry_id: str = ""
+    # ADR-0042: the mission's pull request as the record knows it — the
+    # Dev-reported url at EXECUTE finalize, overridden by the forge-verified
+    # url at REVIEW; the status comment's "PR:" line reads it. "" ⇒ none yet.
+    pr_url: str = ""
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on

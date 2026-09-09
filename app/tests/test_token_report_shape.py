@@ -175,6 +175,8 @@ RUN_SCALAR_COLUMNS = {
     # ADR-0014 addendum — the transcript comment's vendor id, the step's
     # thread anchor; TEXT DEFAULT '' in DDL (deliberate widening)
     "feed_anchor",
+    # ADR-0042: the status comment's entry id and the recorded PR url
+    "status_entry_id", "pr_url",
     # steward_duty: ADR-0033 flavor discriminator — deliberate widening
     "steward_duty",
     # CAKE-167: compact steward finalize line for Runs-tab hover

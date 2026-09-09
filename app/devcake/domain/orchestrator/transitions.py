@@ -203,6 +203,13 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             run.finalized_steps.append(steps.TRANSITION_PLANNED)
             mgr.runs.store.save(run)
     elif outcome == "executed":
+        # ADR-0042: the record keeps the PR url (Dev-reported here, the
+        # forge-verified one overrides it at REVIEW); saved with the next
+        # checkpoint. A link, never a marker: redacted and bounded.
+        reported = str(result.get("pr_url") or "").strip()
+        if reported and not run.pr_url:
+            run.pr_url = redact(reported)[:500]
+
         async def _executed_labels():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                        remove={LABEL_EXECUTE}, add={LABEL_REVIEW})

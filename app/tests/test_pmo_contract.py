@@ -12,7 +12,7 @@ import pytest
 
 from devcake.adapters.linear.adapter import LinearAdapter
 from devcake.domain.model import ALL_LABELS, MissionRef
-from devcake.ports.pmo import PMOHealth, PMOPort, PMOTransient
+from devcake.ports.pmo import FOLD_PLUS, PMOHealth, PMOPort, PMOTransient
 
 PORT_METHODS = [n for n, v in vars(PMOPort).items()
                 if callable(v) and not n.startswith("_")]
@@ -27,7 +27,8 @@ def test_port_declares_expected_surface():
     assert sorted(PORT_METHODS) == sorted([
         "list_missions", "list_all", "get", "get_many", "get_activity", "children_of",
         "feed_changes_since",
-        "post_feed", "set_status", "cancel_mission", "swap_labels", "create_mission",
+        "post_feed", "edit_feed", "set_status", "cancel_mission", "swap_labels",
+        "create_mission",
         "create_relation", "ensure_labels", "append_description",
         "upload_attachment", "download_asset", "health_probe", "capabilities"])
 
@@ -110,6 +111,37 @@ def test_post_feed_dispatches_on_kind():
     run(pmo.post_feed(MissionRef("uuid-p1", "project"), "hi"))
     assert any("commentCreate" in q for q in rec.queries)
     assert any("projectUpdateCreate" in q for q in rec.queries)
+
+
+def test_edit_feed_dispatches_on_kind_and_a_refused_edit_is_permanent():
+    """ADR-0042 §3: an issue entry edits through `commentUpdate`, a project
+    entry through `projectUpdateUpdate` — both whole-body, addressed by the
+    entry id the post returned; a falsy `success` is a RuntimeError, never
+    PMOTransient (the caller falls back to a new post, not to a retry)."""
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append((body["query"], body["variables"]))
+        if "commentUpdate" in body["query"]:
+            return httpx.Response(200, json={"data": {"commentUpdate": {
+                "success": True}}})
+        return httpx.Response(200, json={"data": {"projectUpdateUpdate": {
+            "success": True}}})
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(handler))
+    run(pmo.edit_feed(MissionRef("uuid-i1", "issue"), "cm-9", "new `devcake:v1`"))
+    assert "commentUpdate" in seen[-1][0]
+    assert seen[-1][1] == {"id": "cm-9", "b": "new `devcake:v1`"}
+    run(pmo.edit_feed(MissionRef("uuid-p1", "project"), "pu-1", "new `devcake:v1`"))
+    assert "projectUpdateUpdate" in seen[-1][0]
+    assert seen[-1][1] == {"id": "pu-1", "b": "new `devcake:v1`"}
+    assert pmo.capabilities().feed_collapsible == FOLD_PLUS
+
+    rec = Recorder({"commentUpdate": {"commentUpdate": {"success": False}}})
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(rec.handler))
+    with pytest.raises(RuntimeError) as ei:
+        run(pmo.edit_feed(MissionRef("uuid-i1", "issue"), "cm-9", "new"))
+    assert not isinstance(ei.value, PMOTransient)
 
 
 def test_post_feed_reply_carries_parent_and_returns_the_comment_id():

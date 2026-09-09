@@ -33,6 +33,7 @@ class MapPMO:
         self.activity = activity
         self.relations = []
         self.comments = []
+        self.edits = []                   # (pmo_id, entry_id, markdown)
         self.activity_calls = []
         self._relations_supported = relations_supported
 
@@ -48,6 +49,9 @@ class MapPMO:
 
     async def post_feed(self, ref, markdown, *, reply_to=None):
         self.comments.append((ref.pmo_id, markdown))
+
+    async def edit_feed(self, ref, entry_id, markdown):
+        self.edits.append((ref.pmo_id, entry_id, markdown))
 
     async def get_activity(self, ref, full=False):
         self.activity_calls.append(full)
@@ -914,6 +918,13 @@ class RoutePMO(MapPMO):
         ).entries.append(ActivityEntry(
             ts=NOW, author="devcake", kind="comment", body=markdown,
             entry_id=f"e{len(self.comments)}"))
+
+    async def edit_feed(self, ref, entry_id, markdown):
+        await super().edit_feed(ref, entry_id, markdown)
+        feed = self.feeds.get(ref.pmo_id)
+        for e in (feed.entries if feed else []):
+            if e.entry_id == entry_id:
+                e.body = markdown       # in place: same id, same ts (ADR-0042 §3)
 
     async def swap_labels(self, ref, remove, add):
         self.swaps.append((ref.pmo_id, set(remove), set(add)))

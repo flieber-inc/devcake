@@ -115,6 +115,14 @@ class PMOHealth(BaseModel):
     detail: str = ""
 
 
+# ── fold syntax families (ADR-0042 §3) — port-level constants; the domain
+# compares against THESE, never a vendor name (test_agnosticism) ──
+FOLD_NONE = ""            # no collapsible syntax: the fold renders as a plain section
+FOLD_DETAILS = "details"  # HTML <details><summary> … </details>
+FOLD_PLUS = "plus"        # `+++ Title` … `+++` fenced collapsible section
+FoldSyntax = Literal["", "details", "plus"]
+
+
 class PMOCapabilities(BaseModel):
     """Adapter self-description consumed by the feed chokepoint, blocker
     locator, health probe, and admin mission-action paths (attachments,
@@ -160,6 +168,11 @@ class PMOCapabilities(BaseModel):
     # of finished siblings costs a handful of requests, not hundreds. False
     # ⇒ the locator loops `get`.
     batch_get: bool = False
+    # The vendor's collapsible-block syntax for the feed fold (ADR-0042 §3):
+    # the ONE vendor-specific rendering decision, taken by the feed
+    # chokepoint's fold renderer. "" ⇒ the fold renders flat (headed
+    # section, no wrapper) — every marker still rides inline and unquoted.
+    feed_collapsible: FoldSyntax = FOLD_NONE
 
 
 async def get_many_via_get(pmo, refs: list[MissionRef]) -> dict[str, Mission]:
@@ -253,6 +266,21 @@ class PMOPort(Protocol):
         can re-find them. ADF/rich-text PMOs (e.g. Jira) need an explicit
         fidelity strategy — multi-PMO is not “just another adapter” for this
         reason."""
+        ...
+    async def edit_feed(self, ref: MissionRef, entry_id: str, markdown: str) -> None:
+        """Replace the WHOLE body of a feed entry DevCake posted earlier
+        (ADR-0042 §3, §5). `entry_id` is what `post_feed` returned / what
+        `get_activity(full=True)` reports for it; `ref` is the entry's mission
+        (some vendors address an entry by item + entry). Kind-dispatched like
+        `post_feed`: issue → comment edit, project → project-update edit.
+        Markdown fidelity is the same port requirement as `post_feed`
+        (backticked markers must round-trip). The adapter never composes:
+        the domain sends the full new body, so there is no vendor-side
+        read-modify-write window. An entry the vendor no longer has (a
+        person deleted it) is a PERMANENT failure (never PMOTransient) —
+        the caller falls back to a new post. Edits keep the entry's
+        creation time and id: the entry never moves in the feed and never
+        becomes "new" to any watermark reader."""
         ...
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
     async def cancel_mission(self, ref: MissionRef) -> None:

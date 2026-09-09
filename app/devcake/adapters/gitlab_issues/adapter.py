@@ -18,7 +18,8 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...domain.model import FeedDelta
-from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient, get_many_via_get
+from ...ports.pmo import (FOLD_DETAILS, PMOCapabilities, PMOHealth, PMOTransient,
+                          get_many_via_get)
 from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
@@ -383,6 +384,17 @@ class GitLabIssuesAdapter:
         cid = created.get("id") if isinstance(created, dict) else None
         return str(cid) if cid is not None else None
 
+    async def edit_feed(self, ref: MissionRef, entry_id: str, markdown: str) -> None:
+        # whole-body replace of DevCake's own note (ADR-0042 §3): GitLab
+        # addresses a note by project + issue iid + note id — the one vendor
+        # where `ref` is part of the address, which is why the port carries
+        # it; id and created_at survive the edit. A vanished note is a
+        # 404 → GitLabHTTPError (permanent).
+        self._require_issue(ref)
+        await self._req(
+            "PUT", self._proj(f"/issues/{ref.pmo_id}/notes/{entry_id}"),
+            json={"body": markdown})
+
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
         self._require_issue(ref)
         if status in ("done", "canceled"):
@@ -653,4 +665,5 @@ class GitLabIssuesAdapter:
             relations_supported=self._relations_write is not False,
             attachments_supported=True,
             global_ids=False,
+            feed_collapsible=FOLD_DETAILS,  # <details> renders collapsed (ADR-0042 §3)
         )

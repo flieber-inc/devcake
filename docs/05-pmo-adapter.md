@@ -60,6 +60,11 @@ class PMOPort(Protocol):
         # (03 §8: threading is presentation, never content).
         # Feed POLICY (redaction, sentinel, suppression) is the orchestrator's
         # job; transport is the adapter's.
+    async def edit_feed(self, ref: MissionRef, entry_id: str, markdown: str) -> None: ...
+        # whole-body replace of an entry DevCake posted earlier (ADR-0042 §3, §5):
+        # kind-dispatched like post_feed, same markdown fidelity, the adapter
+        # never composes. A vanished entry is a PERMANENT failure (the caller
+        # posts anew); the id and creation time survive, so the entry never moves.
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
     async def cancel_mission(self, ref: MissionRef) -> None: ...
         # terminal cancel/archive — used by decomposition (issue children) and
@@ -121,6 +126,7 @@ class PMOCapabilities(BaseModel):
     updated_at_tracks_comments: bool = False  # the item's updated_at moves when a top-level comment is posted (Linear: True — a threaded reply does not move it; the feed-changes witness lists replies); False keeps the feed memo's safety rescan (04 §1)
     feed_delta: bool = False          # a team-wide feed-changes read exists (Linear, Gitea Issues: True); one read per cycle keeps memoized scans (04 §1)
     feed_threads: bool = False        # post_feed can nest an entry under an earlier one via reply_to (Linear: True); False ⇒ every post lands top level (03 §8)
+    feed_collapsible: FoldSyntax = "" # the feed fold's collapsible syntax family (ADR-0042 §3) — "" flat, "details" (`<details><summary>`: Gitea, GitHub, GitLab Issues), "plus" (`+++ Title … +++`: Linear); the one vendor-specific rendering decision, taken by the feed chokepoint
 
 class FeedChange(BaseModel):          # one changed feed entry — never its text
     pmo_id: str
@@ -167,7 +173,7 @@ One governor (`adapters/budget.py`) sits in front of every PMO adapter's wire ca
 
 ## 3. Normalization tables (normative)
 
-Everything below is **adapter internals behind the port** — the unified `get(ref)` dispatches to `_get_issue`/`_get_project`, `set_status` to `_set_issue_status`/`_set_project_status`, `swap_labels` to `_swap_issue_labels`/`_swap_project_labels`, and `post_feed` to `commentCreate`/`projectUpdateCreate`. The domain only ever sees the port surface of §1.
+Everything below is **adapter internals behind the port** — the unified `get(ref)` dispatches to `_get_issue`/`_get_project`, `set_status` to `_set_issue_status`/`_set_project_status`, `swap_labels` to `_swap_issue_labels`/`_swap_project_labels`, `post_feed` to `commentCreate`/`projectUpdateCreate`, and `edit_feed` to `commentUpdate`/`projectUpdateUpdate`. The domain only ever sees the port surface of §1.
 
 Linear workflow states carry a fixed `type` enum. DevCake maps by **type**, never by display name (teams rename states freely):
 
@@ -208,6 +214,7 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 ## 4. Feed posts, transcripts, and attachments
 
 - `post_feed(ref, markdown, reply_to=)` → issue: `commentCreate(input: {issueId, body[, parentId]})`, returning the created comment's id; project: `projectUpdateCreate(input: {projectId, body})` — Linear's project-native feed, no threads (the keyword is ignored there). Body is Markdown either way. Linear threads are one level deep — a reply is a `Comment` whose `parent` is set, listed in the issue's own comments connection with `parent { id }`, which the full activity read maps to `parent_id` — so `reply_to` always names a top-level comment (`feed_threads=True`).
+- `edit_feed(ref, entry_id, markdown)` → issue: `commentUpdate(id, input: {body})`; project: `projectUpdateUpdate(id, input: {body})` — a whole-body replace of DevCake's own entry (ADR-0042 §3). A falsy `success` raises (permanent); a comment Linear no longer has comes back as a GraphQL error, permanent too. Verified live: the comment keeps its id and `createdAt`, and a `+++ Title … +++` body round-trips byte-identical — Linear renders that fence as a native collapsible section and an HTML `<details>` block as literal text, hence `feed_collapsible="plus"`.
 - **Attachment-first feed policy (feed hygiene):** the activity feed is for *messages* — directives, short specifications, token reports, status notes. Bulk markdown always goes up as `.md` attachments referenced from a short sentinel-signed comment. This policy lives in the **orchestrator**, not the adapter (the port note in §1: policy above, transport below):
   - **Transcripts** (ADR-0014: the FULL session dump — every assistant-visible text block of the run) on the **issue mission-step** finalize path are uploaded as `{seq}_{TYPE}.md` attachments; the step comment keeps the backticked filename (the seq-derivation marker) + asset link **and carries the Dev's last message inline as a `>`-blockquote** (redacted, truncated at 2048 chars with a pointer to the attachment, posted with the externalization opt-out — the full text already rides the attachment). Quoting is the ADR-0014 D2 quarantine: `>`-quoted lines never count in any feed scan. Old-image payloads without a last message post the pointer-only comment. If the attachment upload fails (INV-5 on this path), the dump posts inline — blockquoted, with only the marker header unquoted. Truly FAILED / STEWARD / CURATOR are outside the feed-post requirement (`00-overview.md` INV-5); project-kind feed behavior is unchanged and not newly authorized by that ruling.
   - **Answer comment** (`<!-- DEVCAKE-REPLY -->`, producer half of a public answer-delivery contract for downstream feed consumers — consumers match on `startswith`, so a quoted or relayed copy of the marker never classifies as the real answer): finalize posts the Dev's last message as **its own issue comment**, marker first, body fully `>`-blockquoted (ADR-0014 D2), `externalize=False`, redacted before truncate at 2048 chars. Truncation points at the step transcript (this comment has no attachment of its own — it never claims one exists). Empty/missing last message ⇒ no post. Issues only (the contract is defined on the issue comment feed; project feeds are a different surface). **REVIEW + `reviewed` is suppressed** so a trailing approve/reject "LGTM" cannot displace the EXECUTE answer for consumers that take the newest REPLY as the mission's answer; `human_needed` on any type (including REVIEW) still posts. Intermediate ONBOARD/PLAN/EXECUTE replies are intentional progressive posts consumers may use or ignore. Constants live in `orchestrator/markers.py` (`REPLY_MARKER`) — the marker string is frozen; renaming breaks external consumers.
@@ -286,6 +293,7 @@ docker compose exec -T app python - < scripts/contract_tests_pmo.py
 | 13 | Attachment upload/download round-trip |
 | 14 | `create_relation` + `blocked_by` (duplicate-tolerant) when `relations_supported` |
 | 15 | Project full-mode mirrors the native feed (posted update round-trips; shallow stays `entries=[]`) when `projects_supported` — skips cleanly without a discoverable project |
+| 16 | `edit_feed` replaces DevCake's own entry in place: a posted card edited into one carrying a fold in the vendor's `feed_collapsible` family with a routed marker inside reads back as the same entry (one entry with that id, marker present, sentinel last) and the feed has not grown |
 
 The numbering is historical and stable (test files reference rows by number). The gaps are covered elsewhere: row 6 (attachment-first feed policy, > 2048-char externalization, inline fallback) is orchestrator policy, tested in `app/tests/test_transitions.py`; row 7 (`create_mission` labeling/priority/team scoping) is exercised through the decomposition tests; Linear-specific relation GraphQL parsing also has hermetic coverage in `app/tests/test_linear_relations.py`.
 
@@ -332,6 +340,7 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 - **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified). Gitea pages oldest-first; `paginate_rest_newest` keeps the newest pages at the ceiling (same newest-first survival as Linear).
 - **Feed changes:** `GET …/issues/comments?since=<RFC 3339>` lists the repository's issue comments changed after the moment, walked until an empty page or the header's last page (a server may clamp `limit`; a short page is not the last page) up to the caller's cap (`truncated` past it); pull-request comments are skipped, an unreadable timestamp skips its row, and the mission is the issue index at the end of the comment's `issue_url` (`feed_delta=True`). A removed comment is not listed — the feed memo's safety rescan, which this vendor keeps, catches it.
 - **Threads:** none (`feed_threads=False`) — `post_feed` accepts the port's `reply_to`, posts top level with the same body, and returns the comment id.
+- **Edits:** `PATCH …/issues/comments/{id}` with `{body}` — `edit_feed` replaces the whole body of DevCake's own comment (ADR-0042 §3); the comment is addressed by repository + id, so the issue in `ref` only gates the kind. Id and `created_at` survive; a vanished comment is a 404 → permanent error. `feed_collapsible="details"` (`<details><summary>` renders collapsed).
 - **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
 ### 9.4 The default board (ADR-0030) — and manual setup for external Gitea
@@ -367,7 +376,7 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 
 GitHub Issues and GitLab Issues ship as **launch-supported** forge-issue adapters (same profile: issue-only, label stages, open→backlog, markdown comments, dependency/links). Registry `PMOSystemInfo.experimental=False`; `operator_note` still surfaces vendor API gaps (GitHub attachments; GitLab Premium/EE blocked-by links). Live `scripts/contract_tests_pmo.py` batteries remain useful ops proof but are not a blocker for the admin `experimental` flag. Shared cancel footer lives in `adapters/forge_issue.py` (not a second Issues Port).
 
-Neither declares `feed_delta`: `feed_changes_since` raises and the poll keeps its per-mission feed reads. GitHub exposes a repository-wide `issues/comments?since=` listing that could implement it; GitLab lists notes per issue only. Neither threads issue comments (`feed_threads=False`): `post_feed` accepts `reply_to`, posts top level with the same body, and returns the comment/note id.
+Neither declares `feed_delta`: `feed_changes_since` raises and the poll keeps its per-mission feed reads. GitHub exposes a repository-wide `issues/comments?since=` listing that could implement it; GitLab lists notes per issue only. Neither threads issue comments (`feed_threads=False`): `post_feed` accepts `reply_to`, posts top level with the same body, and returns the comment/note id. Both edit their own entries in place (`edit_feed`, ADR-0042 §3): GitHub `PATCH /repos/{owner}/{repo}/issues/comments/{id}` (repository-scoped id), GitLab `PUT /projects/:id/issues/:iid/notes/:id` (the note's address carries the issue iid — the reason the port takes `ref`). Id and `created_at` survive; a vanished entry is a 404 → permanent error. Both declare `feed_collapsible="details"`.
 
 ### 9.7 GitLab Issues (`gitlab_issues`)
 
@@ -377,7 +386,7 @@ Launch-supported forge-issue adapter — registry `experimental=False`. `team_ke
 |---|---|
 | Status | `opened`→backlog; `closed`→done; cancel footer in description → canceled |
 | Labels | PUT issue `labels=A,B` replaces the set |
-| Feed | issue notes; `` `devcake:v1` `` byte-exact |
+| Feed | issue notes; `` `devcake:v1` `` byte-exact; edit `PUT …/issues/:iid/notes/:id` |
 | Attachments | POST `/projects/:id/uploads`; download `GET /api/v4/projects/:id/uploads/:secret/:filename` (web `/uploads/…` path is **403** with a PAT) |
 | Relations | `blocks` / `is_blocked_by` is **Premium**. Listing links is Free (top-level `iid` + `link_type`). Unprobed starts as "try the write" so the domain gate actually calls `create_relation`. Free gitlab.com → 403: no-op and latch `relations_supported=False`. Health reports `unprobed` / `on` / `off`. Row 14 of the contract battery records SKIP, not a vanished pass. |
 
@@ -391,7 +400,7 @@ Launch-supported forge-issue adapter — registry `experimental=False`. `team_ke
 |---|---|
 | Status | `open`→backlog; `closed`→done; cancel footer in body → canceled |
 | Labels | PUT `/issues/{n}/labels` replaces the set |
-| Feed | issue comments; `` `devcake:v1` `` byte-exact. Oldest-first pages; `paginate_rest_newest` keeps the newest at the ceiling. |
+| Feed | issue comments; `` `devcake:v1` `` byte-exact. Oldest-first pages; `paginate_rest_newest` keeps the newest at the ceiling. Edit `PATCH …/issues/comments/{id}`. |
 | Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. `comment_max_chars=65536`. Feed chokepoint posts the full body as sequential `Part i of n` comments (each ≤ the cap, each sentinel-signed, at most `MAX_VENDOR_COMMENT_PARTS`). startswith-markers stay the first line of part 1. |
 | Relations | Works on personal repos if `issue_id` is the global numeric id. Duplicate → 422 `already been taken`. |
 

@@ -21,6 +21,7 @@ from devcake.domain.run import Run
 from devcake.domain import backend_health
 from devcake.domain.orchestrator import dispatch, feed, sweeps
 from devcake.domain.orchestrator.markers import FEED_INLINE_MAX, REPLY_MARKER
+from devcake.ports.pmo import FOLD_DETAILS
 
 
 class FakePMO:
@@ -43,6 +44,7 @@ class FakePMO:
             comment_max_chars=getattr(self, "comment_max_chars", None),
             feed_delta=getattr(self, "feed_delta", False),
             feed_threads=getattr(self, "feed_threads", False),
+            feed_collapsible=getattr(self, "feed_collapsible", FOLD_DETAILS),
         )
 
     async def feed_changes_since(self, team_ref, since, *, limit_pages):
@@ -93,7 +95,29 @@ class FakePMO:
         cid = f"c{len(self.comments)}"
         self.threads = getattr(self, "threads", [])
         self.threads.append((cid, reply_to))
+        if getattr(self, "record_feed", False):
+            # opt-in: the post ALSO lands on the feed this fake serves, so a
+            # later edit_feed / get_activity(full=True) finds it (ADR-0042)
+            self.activity_entries.append(ActivityEntry(
+                ts=datetime.now(timezone.utc), author="devcake", kind="comment",
+                body=markdown, entry_id=cid, parent_id=reply_to))
         return cid
+
+    async def edit_feed(self, ref, entry_id, markdown):
+        self._check_ref(ref)
+        if ref.kind == "project":
+            self.project_update_edits = getattr(self, "project_update_edits", [])
+            self.project_update_edits.append((ref.pmo_id, entry_id, markdown))
+        else:
+            self.edits = getattr(self, "edits", [])
+            self.edits.append((ref.pmo_id, entry_id, markdown))
+        found = False
+        for e in self.activity_entries:
+            if e.entry_id == entry_id:
+                e.body = markdown       # ts unchanged: an edit never moves the entry
+                found = True
+        if not found and getattr(self, "strict_edits", False):
+            raise RuntimeError("entry not found")
 
     async def swap_labels(self, ref, remove, add):
         self._check_ref(ref)

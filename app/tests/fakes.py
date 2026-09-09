@@ -9,6 +9,7 @@ from typing import Any
 from devcake.config import (AppConfig, CostInputs, DevType, ModelRate,
                             PMOInstance, RepoInstance)
 from devcake.domain.orchestrator import MissionManager
+from devcake.ports.pmo import FOLD_DETAILS
 
 
 # Former shipped DEFAULT_MODEL_RATES (builtin-v2). Production seed is empty
@@ -272,12 +273,13 @@ def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
                           comment_max_chars=None,
                           updated_at_tracks_comments=True,
                           feed_delta=False, feed_threads=False,
-                          batch_get=False):
+                          batch_get=False, feed_collapsible=FOLD_DETAILS):
     """Shared capability row for the test fakes. Default is Linear-shaped
     (global ids ON, so peer-resolution tests exercise the allowed path;
     `updated_at` tracks comments, so the feed memo has no safety rescan);
     colliding-id scenarios pass global_ids=False — the capability replaced
-    GLOBAL_ID_SYSTEMS in the 2026-08 cleanups."""
+    GLOBAL_ID_SYSTEMS in the 2026-08 cleanups. `feed_collapsible` defaults
+    to the issue-vendor fold family (ADR-0042 §3)."""
     from devcake.ports.pmo import PMOCapabilities
     return PMOCapabilities(
         projects_supported=True, project_labels_supported=True,
@@ -288,7 +290,7 @@ def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
         global_ids=global_ids,
         updated_at_tracks_comments=updated_at_tracks_comments,
         feed_delta=feed_delta, feed_threads=feed_threads,
-        batch_get=batch_get)
+        batch_get=batch_get, feed_collapsible=feed_collapsible)
 
 
 # ── ADR-0028: the test-side service graph ────────────────────────────────────

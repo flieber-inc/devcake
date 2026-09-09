@@ -16,7 +16,13 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
-- **Added — one status comment per mission, kept current.** The first
+## v0.6.0 (2026-09-09)
+
+Minor release — "Kentucky Butter" opens the v0.6 line with the feed rebuilt
+for the person reading it (ADR-0042). `devcake-cli` stays at 0.1.8.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.0).
+
+- **Added — one status comment per mission, kept current** (#449). The first
   thing a reader sees: what is happening now, the pull request, the cost
   so far, and the step ladder with outcomes, durations and costs. It is
   created by whichever dispatch finds the feed without one, so a
@@ -26,7 +32,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   at the notice when a person is needed, counts for nothing, and the Dev's
   activity folder omits it.
 
-- **Changed — one step card per step on the mission feed.** A step used
+- **Changed — one step card per step on the mission feed** (#448, on the port operation and primitives of #445, #446, #447). A step used
   to post its transcript, its answer (under an HTML marker one vendor
   renders as text), its token report and its discoveries as separate
   comments, the answer twice. Each step now posts one comment: a header
@@ -39,7 +45,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   folder. Adapters gained an edit-own-comment operation and a fold-syntax
   capability along the way.
 - **Changed — messages to a person open with a fixed lead; receipts stop
-  being comments.** Every comment DevCake writes to a person — a hand-off,
+  being comments** (#450). Every comment DevCake writes to a person — a hand-off,
   an awaiting-merge note, a give-up, a loop or freshness warning, a
   completion, a decomposition note, a re-review or conflict-resolve
   directive, a delivery of leads — now opens with `✋ Needs you.`,

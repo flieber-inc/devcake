@@ -235,7 +235,10 @@ def make_mission_manager(
             "EXECUTE": Assignment(dev_type="implementer"),
             "REVIEW": Assignment(dev_type="judgment"),
         })
-    inst = instance if instance is not None else DEFAULT_INSTANCE
+    # a COPY of the default: a test that flips a knob on its manager's
+    # instance (discovery_routing, plan_approval …) must not leak it into
+    # the next module's manager (order-dependent failures otherwise)
+    inst = instance if instance is not None else DEFAULT_INSTANCE.model_copy(deep=True)
     dts = dev_types if dev_types is not None else {
         "judgment": DevType(name="judgment", harness_template="claude-code"),
         "implementer": DevType(name="implementer", harness_template="grok-build"),

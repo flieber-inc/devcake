@@ -72,6 +72,24 @@ REPLY_MARKER = "<!-- DEVCAKE-REPLY -->"
 # says the zip is the audit copy, not the answer (docs/05 §4).
 DELIVERABLE_MARKER = "<!-- DEVCAKE-DELIVERABLE -->"
 
+# ADR-0042 §7 — no marker rides as an HTML comment (one vendor renders them
+# as text). The answer and the deliverable note are marked by backticked
+# tokens inside the step card's / notice's fold instead; the two HTML
+# markers above survive only as the PROJECTION's legacy shapes (the Dev's
+# ACTIVITY.md is unfolded from the record byte for byte) and on pre-card
+# feeds.
+ANSWER_TOKEN_RE = re.compile(r"`devcake:answer:v1 step=(\d+)`")
+DELIVERABLE_TOKEN = "`devcake:deliverable:v1`"
+# ADR-0042 §5 — the one status comment per mission, found again by this
+# token (oldest marked DevCake entry wins). A VIEW: never elevated, never
+# counted, omitted from the Dev's folder by the projection.
+STATUS_MARKER = "`devcake:status:v1`"
+STATUS_MARKER_RE = re.compile(r"`devcake:status:v1`")
+
+
+def answer_token(seq: int) -> str:
+    return f"`devcake:answer:v1 step={seq}`"
+
 # docs/03 §4.1 — merge-failure state markers, counted/located from the feed
 # so the state stays fully PMO-derivable (no local clocks or counters). The
 # comments carrying them are short by construction (< FEED_INLINE_MAX): the

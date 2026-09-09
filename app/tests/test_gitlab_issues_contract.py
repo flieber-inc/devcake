@@ -13,7 +13,7 @@ import pytest
 from devcake.adapters.gitlab_issues.adapter import GitLabIssuesAdapter
 from devcake.adapters.gitlab_issues.mapping import CANCEL_FOOTER
 from devcake.domain.model import ALL_LABELS, MissionRef
-from devcake.ports.pmo import PMOPort, PMOTransient
+from devcake.ports.pmo import FOLD_DETAILS, PMOPort, PMOTransient
 
 PORT_METHODS = [n for n, v in vars(PMOPort).items()
                 if callable(v) and not n.startswith("_")]
@@ -158,6 +158,14 @@ class Router:
                 self.next_note += 1
                 self.notes.setdefault(iid, []).append(c)
                 return httpx.Response(201, json=c)
+            nm = re.match(r"^/notes/(\d+)$", rest)
+            if nm and method == "PUT":
+                nid = int(nm.group(1))
+                for c in self.notes.get(iid, []):
+                    if c["id"] == nid:
+                        c["body"] = body.get("body") or ""
+                        return httpx.Response(200, json=c)
+                return httpx.Response(404, json={"message": "404 Note Not Found"})
             if rest == "/links" and method == "GET":
                 status = self.links_status.get(iid, 200)
                 if status != 200:
@@ -280,6 +288,32 @@ def test_post_feed_and_activity_marker_body():
     run(pmo.post_feed(MissionRef("1", "issue"), marker))
     act = run(pmo.get_activity(MissionRef("1", "issue")))
     assert act.entries[-1].body == marker
+
+
+def test_edit_feed_replaces_the_body_in_place():
+    """ADR-0042 §3: an edit is a whole-body replace of DevCake's own note
+    through `PUT …/issues/{iid}/notes/{id}` (the note address carries the
+    issue — why the port takes `ref`) — same entry_id, same ts, the feed
+    has no new entry, and a fold with a marker inside round-trips. A
+    vanished note is the adapter's permanent error, never PMOTransient."""
+    r = Router()
+    pmo = make_pmo(r)
+    assert pmo.capabilities().feed_collapsible == FOLD_DETAILS
+    ref = MissionRef("1", "issue")
+    cid = run(pmo.post_feed(ref, "card `devcake:v1`"))
+    before = run(pmo.get_activity(ref, full=True))
+    new = ("card\n\n<details><summary>Details</summary>\n\n"
+           "`devcake:discovery-routed:v1 step=1 to=-`\n\n</details>\n\n`devcake:v1`")
+    run(pmo.edit_feed(ref, cid, new))
+    assert r.calls[-1] == f"PUT /api/v4/projects/o/r/issues/1/notes/{cid}"
+    after = run(pmo.get_activity(ref, full=True))
+    assert len(after.entries) == len(before.entries)
+    (entry,) = [e for e in after.entries if e.entry_id == cid]
+    assert entry.body == new
+    assert entry.ts == before.entries[-1].ts
+    with pytest.raises(RuntimeError) as ei:
+        run(pmo.edit_feed(ref, "999", "gone"))
+    assert not isinstance(ei.value, PMOTransient)
 
 
 def test_create_mission_returns_key_and_id():

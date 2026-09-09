@@ -18,7 +18,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              FeedChange, FeedDelta, Mission, MissionDocument,
                              MissionRef, NormalizedStatus, Priority,
                              canonicalize_labels)
-from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
+from ...ports.pmo import FOLD_PLUS, PMOCapabilities, PMOHealth, PMOTransient
 from .._toolkit import label_write_lock
 from ..budget import (RateSignal, bind_principal, budget_for, header_float,
                       header_int)
@@ -868,6 +868,29 @@ class LinearAdapter:
         return ((data.get("commentCreate") or {})
                 .get("comment") or {}).get("id") or None
 
+    async def edit_feed(self, ref: MissionRef, entry_id: str, markdown: str) -> None:
+        """Issue → `commentUpdate`; project → `projectUpdateUpdate` (ADR-0042
+        §3). Whole-body replace: the id and `createdAt` survive the edit and
+        a `+++ Title … +++` body round-trips byte-identical (verified live).
+        A comment Linear no longer has comes back as a GraphQL error →
+        RuntimeError (permanent, never PMOTransient); so does a falsy
+        `success`, which must not read as a silent no-op."""
+        if ref.kind == "project":
+            data = await self._gql(
+                """mutation($id: String!, $b: String!) {
+                     projectUpdateUpdate(id: $id, input: {body: $b}) { success } }""",
+                {"id": entry_id, "b": markdown})
+            ok = (data.get("projectUpdateUpdate") or {}).get("success")
+        else:
+            data = await self._gql(
+                """mutation($id: String!, $b: String!) {
+                     commentUpdate(id: $id, input: {body: $b}) { success } }""",
+                {"id": entry_id, "b": markdown})
+            ok = (data.get("commentUpdate") or {}).get("success")
+        if not ok:
+            raise RuntimeError(
+                f"linear: edit of {ref.kind} feed entry {entry_id} not applied")
+
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
         if ref.kind == "project":
             await self._set_project_status(ref.pmo_id, status)
@@ -1256,7 +1279,11 @@ class LinearAdapter:
                                # safety rescan here
                                updated_at_tracks_comments=True,
                                feed_delta=True,   # root comments(filter:) read
-                               feed_threads=True)  # commentCreate parentId
+                               feed_threads=True,  # commentCreate parentId
+                               # `+++ Title … +++` renders as a native
+                               # toggle; a <details> block renders as
+                               # literal text (verified live, ADR-0042 §3)
+                               feed_collapsible=FOLD_PLUS)
 
     # ── normalization ────────────────────────────────────────────────────────
 

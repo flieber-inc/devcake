@@ -19,7 +19,8 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...domain.model import FeedDelta
-from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient, get_many_via_get
+from ...ports.pmo import (FOLD_DETAILS, PMOCapabilities, PMOHealth, PMOTransient,
+                          get_many_via_get)
 from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
@@ -320,6 +321,16 @@ class GitHubIssuesAdapter:
         cid = created.get("id") if isinstance(created, dict) else None
         return str(cid) if cid is not None else None
 
+    async def edit_feed(self, ref: MissionRef, entry_id: str, markdown: str) -> None:
+        # whole-body replace of DevCake's own comment (ADR-0042 §3): GitHub
+        # addresses a comment by repository + comment id, so the issue in
+        # `ref` only gates the kind; id and created_at survive the edit. A
+        # vanished comment is a 404 → RuntimeError (permanent).
+        self._require_issue(ref)
+        await self._req(
+            "PATCH", self._repo_path(f"/issues/comments/{entry_id}"),
+            json={"body": markdown})
+
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
         self._require_issue(ref)
         state = "closed" if status in ("done", "canceled") else "open"
@@ -470,4 +481,5 @@ class GitHubIssuesAdapter:
             attachments_supported=False,
             comment_max_chars=65536,
             global_ids=False,
+            feed_collapsible=FOLD_DETAILS,  # <details> renders collapsed (ADR-0042 §3)
         )

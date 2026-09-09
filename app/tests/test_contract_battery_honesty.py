@@ -20,7 +20,7 @@ _SCRIPTS = next((p for p in _SCRIPT_ROOTS if p.is_dir()), None)
 # Documented check-id sets (plan lock). Counts are independent literals —
 # not recomputed from the scripts' check() call sites.
 EXPECTED_FORGE_ROWS = 14  # CAKE-181 adds apply_default_branch_protection round-trip
-EXPECTED_PMO_ROWS = 14  # 1,2,3,4,5,5b,8,9,10,11,12,13,14,15
+EXPECTED_PMO_ROWS = 15  # 1,2,3,4,5,5b,8,9,10,11,12,13,14,15,16
 
 
 def _script(name: str) -> Path:
@@ -57,7 +57,7 @@ def test_forge_expected_rows_pinned_at_14():
     assert ns["EXPECTED_ROWS"] == EXPECTED_FORGE_ROWS
 
 
-def test_pmo_expected_rows_pinned_at_14():
+def test_pmo_expected_rows_pinned_at_15():
     ns = _extract(_script("contract_tests_pmo.py"))
     assert ns["EXPECTED_ROWS"] == EXPECTED_PMO_ROWS
 
@@ -95,6 +95,7 @@ def test_pmo_grader_counts_skips_toward_expected_without_failing():
         ("10", "i", "PASS"), ("11", "j", "PASS"), ("12", "k", "PASS"),
         ("13", "l", "SKIP — attachments_supported=False"),
         ("14", "m", "PASS"), ("15", "n", "SKIP — no project"),
+        ("16", "o", "PASS"),
     ]
     assert len(rows) == EXPECTED_PMO_ROWS
     assert pmo["grade_contract_battery"](rows, EXPECTED_PMO_ROWS) == 0

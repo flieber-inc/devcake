@@ -3,7 +3,8 @@
 System-agnostic: builds the adapter via ``make_pmo``. Fixture create/cleanup
 use **only** port methods (``create_mission`` / ``cancel_mission``).
 
-Tests 1–5 & 8–10 (M2) + 11–14 (cancel, markers, attachments, relations).
+Tests 1–5 & 8–10 (M2) + 11–16 (cancel, markers, attachments, relations,
+project mirror, edit_feed in place).
 Forge-issue systems (``gitea_issues``) use the documented profile variants
 (open→backlog; no projects; priority always medium).
 
@@ -37,10 +38,10 @@ from devcake.domain.model import ALL_LABELS, MissionRef
 from devcake.ports.pmo import PMOTransient
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
-# Pinned check count (ids 1,2,3,4,5,5b,8,9,10,11,12,13,14,15). A vanished
+# Pinned check count (ids 1,2,3,4,5,5b,8,9,10,11,12,13,14,15,16). A vanished
 # check must fail the battery — never self-grade N/N from len(results)
 # alone (CAKE-83). SKIP rows still count toward EXPECTED_ROWS.
-EXPECTED_ROWS = 14
+EXPECTED_ROWS = 15
 results: list[tuple[str, str, str]] = []
 
 GITEA_URL = os.environ.get("DEVCAKE_CONTRACT_GITEA_URL", "http://gitea:3000")
@@ -529,6 +530,39 @@ async def _run_battery(pmo, system: str, team: str) -> int:
                 ok15, note15 = False, str(e)[:160]
             check("15", "project full-mode mirrors the native feed",
                   ok15, note15)
+
+    # ── 16 edit_feed replaces DevCake's own entry in place (ADR-0042 §3) ─
+    # Post a card, edit it into one carrying a fold in the vendor's syntax
+    # family (`capabilities().feed_collapsible`) with a routed marker inside
+    # and the sentinel last; read back full: exactly one entry with that id,
+    # the marker present, the sentinel still the last bytes, and the feed
+    # still one entry long — an edit is never a new entry.
+    eid = await make_temp_issue(pmo, team, "[CONTRACT] edit_feed in place",
+                                {"DEVCAKE"})
+    ok16, note16 = True, ""
+    try:
+        ref16 = MissionRef(eid, "issue")
+        cid16 = await pmo.post_feed(ref16, "card `devcake:v1`")
+        routed = "`devcake:discovery-routed:v1 step=1 to=-`"
+        if caps.feed_collapsible == "details":
+            fold = f"<details><summary>Details</summary>\n\n{routed}\n\n</details>"
+        else:
+            fold = f"+++ Details\n\n{routed}\n\n+++"
+        await pmo.edit_feed(ref16, cid16, f"card\n\n{fold}\n\n`devcake:v1`")
+        act = await pmo.get_activity(ref16, full=True)
+        mine = [e for e in act.entries if e.entry_id == cid16]
+        ok16 = (cid16 is not None and len(mine) == 1 and len(act.entries) == 1
+                and routed in mine[0].body
+                and mine[0].body.rstrip().endswith("`devcake:v1`"))
+        note16 = "" if ok16 else (
+            f"id={cid16!r} matching={len(mine)} entries={len(act.entries)} "
+            f"marker={any(routed in e.body for e in act.entries)}")
+    except Exception as e:
+        ok16, note16 = False, str(e)[:160]
+    finally:
+        await cleanup_issue(pmo, eid)
+    check("16", "edit_feed replaces DevCake's own entry in place",
+          ok16, note16)
 
     width = max((len(n) for _, n, _ in results), default=0)
     failures = skips = 0

@@ -593,6 +593,9 @@ def test_activity_payload_does_not_reimplement_feed_pagination():
         "_join_part_payloads", "_strip_part_and_sentinel", "_part_coords",
         "_substance", "_step_filename", "coalesced_step_files",
         "join_vendor_comments", "split_vendor_comments",
+        # ADR-0042: the unfolding projection is feed.py's too
+        "_page_groups", "strip_fold", "fold_sections", "unfold_card",
+        "unfold_notice", "unfold_entries",
     }
     defined = {n.name for n in tree.body
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}

@@ -736,6 +736,15 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                         mgr.blocked_reasons[live.pmo_id])
             return None
 
+        # ADR-0042 §5 — the status comment: found by marker in the full read
+        # the mirror already paid, created when absent (whichever dispatch
+        # comes first — there is no privileged entry point), never
+        # refreshed here. Best-effort: the run is launched.
+        from . import status_comment
+        run.status_entry_id = await status_comment.ensure(
+            mgr, live, run, found=str(activity.get("status_entry_id") or ""))
+        mgr.runs.store.save(run)
+
         if live.status == "backlog":
             await mgr.pmo.set_status(mission.ref, "in_progress")
             mgr._audit(mission.pmo_id, "set_status", "in_progress")
@@ -1294,22 +1303,31 @@ def mission_cost(mgr, pmo_id: str, *,
     THE one cost-rollup (ADR-0034 PR-3 — review's loop warning carried a
     near-duplicate of this arithmetic): split_estimated=True additionally
     returns the estimated share, named rather than blended away."""
-    from .. import costing
     ci = mgr.config.cost_inputs
     total = est = 0.0
     for r in mgr.runs.store.all():
         if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
             continue
-        tr = r.token_report or {}
-        native = tr.get("cost_usd_native")
-        estimated = tr.get("cost_usd_estimated")
-        eff = costing.effective_cost(native, estimated, ci)
+        eff = run_cost(mgr, r)
         if eff is None:
             continue
+        tr = r.token_report or {}
         total += eff
-        if estimated is not None and (ci.override_native or native is None):
+        if tr.get("cost_usd_estimated") is not None and (
+                ci.override_native or tr.get("cost_usd_native") is None):
             est += eff
     return (total, est) if split_estimated else total
+
+
+def run_cost(mgr, r) -> float | None:
+    """One run's effective cost (ADR-0021 semantics) — the arithmetic
+    `mission_cost` sums, exposed so the status comment's ladder rows use
+    the ONE cost rule."""
+    from .. import costing
+    tr = r.token_report or {}
+    return costing.effective_cost(tr.get("cost_usd_native"),
+                                  tr.get("cost_usd_estimated"),
+                                  mgr.config.cost_inputs)
 
 
 async def _attempt_gate(mgr, mission: Mission, mtype: MissionType,

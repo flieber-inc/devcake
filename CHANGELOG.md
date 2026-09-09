@@ -16,6 +16,16 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Added — one status comment per mission, kept current.** The first
+  thing a reader sees: what is happening now, the pull request, the cost
+  so far, and the step ladder with outcomes, durations and costs. It is
+  created by whichever dispatch finds the feed without one, so a
+  scheduled task starting at EXECUTE or a mission a person ordered into
+  REVIEW gets one too, and it is edited in place at every step end, park,
+  hand-off, merge event and completion. A view, never an ask: it points
+  at the notice when a person is needed, counts for nothing, and the Dev's
+  activity folder omits it.
+
 - **Changed — one step card per step on the mission feed.** A step used
   to post its transcript, its answer (under an HTML marker one vendor
   renders as text), its token report and its discoveries as separate

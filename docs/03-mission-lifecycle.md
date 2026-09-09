@@ -215,6 +215,33 @@ To approve and merge this PR yourself:
 
 rendered with the *concrete* URL/IID substituted — one paste must suffice. Each adapter emits only its own dialect (the `gh` line on GitHub, the `glab` line on GitLab). The same footer is the what-to-do of the `✋ **Needs you.**` notice posted on the mission feed when the merge is a person's (auto-merge off, or auto-merge failed), so one paste from the feed suffices too.
 
+## 5b. The status comment (ADR-0042)
+
+Each issue mission carries **one status comment**, a view the reader opens
+first: `📌 **KEY — status**`, a **Now** line (running step N · TYPE since …;
+✋ parked — needs a person, pointing at the ✋ notice; ⚠️ gave up; ⏸ stopped
+by `DEVCAKE-SKIP`; ⏳ awaiting merge of the PR; ✅ done; 🚫 canceled;
+⏳ queued for STEP), the **PR** as the record knows it, the **cost so far**
+(the one cost rollup, with the estimated share named), the decomposition
+**parent** when there is one, and the step ladder — one row per step from
+the mission's runs, latest attempt per step, glyph · outcome · duration ·
+cost. A mission that entered at REVIEW by label shows one row; the ladder is
+the runs, never the label history.
+
+It is **created by whichever dispatch finds the feed without one** — there
+is no privileged entry point — found again by the `` `devcake:status:v1` ``
+token in its `Record` fold (oldest marked entry wins, so a restart or a
+second instance converges on the same comment), and **edited in place** at
+every step end, park, hand-off, merge event and completion, never at
+dispatch. It carries no counted marker, is immaterial to the Freshness Gate
+(sentinel-signed, not elevated), never contains a file token or a
+`Part i of n` line, and the Dev's folder omits it (its every fact is
+already there; it still counts for the reading watermark). It is never an
+ask — the ✋ notice is. Every write is best-effort: a refused budget, a
+transient or a vanished entry is audited (`status_comment_failed`,
+`status_comment_unknown` once) and never gates a dispatch, a finalize or a
+sweep; a vanished entry is re-created at the next dispatch.
+
 ## 6. `result.json` schema (normative)
 
 ```jsonc

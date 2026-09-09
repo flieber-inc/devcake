@@ -12,7 +12,7 @@ from ...security import redact, redact_value
 from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, is_pre_wipe, utcnow
-from . import discovery, steps, transitions
+from . import discovery, status_comment, steps, transitions
 from .feed import (SECTION_ANSWER, SECTION_DISCOVERIES, SECTION_RUN,
                    SECTION_TOKEN_REPORT, SECTION_TRANSITION, FoldSection,
                    StepCardParts, blockquote, collapsible_of,
@@ -214,6 +214,7 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
                 await restore_after_failure(mgr, run)
             log.warning("run %s failed (exit %s, attempt %d)",
                         run.run_id, exit_code, run.attempt_of_step)
+            await status_comment.refresh(mgr, pmo_id, reason="failed", run=run)
             return
 
         # 2b — ADR-0033 harvest bookkeeping (label, pending set, routing
@@ -262,6 +263,8 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
                     await restore_after_failure(mgr, run)
                 log.warning("run %s failed with DEV_BAD_OUTPUT: %s",
                             run.run_id, e)
+                await status_comment.refresh(mgr, pmo_id, reason="bad_output",
+                                             run=run)
                 return
             if _pre_wipe(mgr, run):
                 return
@@ -280,6 +283,9 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
             span.set_status(Status(StatusCode.ERROR, run.verdict))
             span.add_event("devcake.verdict", {"detail": run.verdict})
         log.info("finalized %s (%s)", run.run_id, outcome)
+        # ADR-0042 §5 — the LAST statement of the close: the status comment
+        # says what the record now says (best-effort, never a gate)
+        await status_comment.refresh(mgr, pmo_id, reason="finalize", run=run)
 
 
 def dev_failure_error(mgr, run: Run, payload: dict) -> str:

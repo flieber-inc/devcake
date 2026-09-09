@@ -246,8 +246,12 @@ async def merge_sweep(mgr, m: Mission) -> None:
                                               add=set())
                     await mgr._feed(
                         m.pmo_id, "issue",
-                        f"🚫 PR {state.url} was closed without merging — "
-                        f"mission canceled (merge sweep).")
+                        feed.notice(
+                            mgr, feed.FOR_THE_RECORD,
+                            f"{state.url} was closed without merging, so the "
+                            f"mission is canceled.",
+                            f"🚫 PR {state.url} was closed without merging — "
+                            f"mission canceled (merge sweep)."))
                 mgr._audit(m.pmo_id, "merge_sweep_canceled", state.url)
     else:
         # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
@@ -344,9 +348,14 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         if window > 0:
             await mgr._feed(
                 m.pmo_id, "issue",
-                f"⏳ Settle complete — DevCake is auto-merging {pr_url}, "
-                f"retrying for up to {window} minutes if the forge is not "
-                f"ready yet. {MERGE_RETRY_MARKER}")
+                feed.notice(
+                    mgr, feed.INFO,
+                    f"The settle window passed — DevCake is merging {pr_url}, "
+                    f"retrying for up to {window} minutes if the forge is not "
+                    f"ready yet.",
+                    f"⏳ Settle complete — DevCake is auto-merging {pr_url}, "
+                    f"retrying for up to {window} minutes if the forge is not "
+                    f"ready yet. {MERGE_RETRY_MARKER}"))
             mgr._audit(m.pmo_id, "merge_settle_complete", pr_url)
             return  # next cycle drives via merge-retry
         # window 0: fall through into a one-shot merge attempt (no retry marker)
@@ -362,9 +371,14 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             # next cycle reads it and drives the merge.
             await mgr._feed(
                 m.pmo_id, "issue",
-                f"⏳ Auto-merge is now ON — DevCake resumes driving the merge "
-                f"of {pr_url}, retrying for up to {window} minutes before "
-                f"handing back to you. {MERGE_RETRY_MARKER}")
+                feed.notice(
+                    mgr, feed.INFO,
+                    f"Auto-merge is on again — DevCake resumes driving the "
+                    f"merge of {pr_url}, retrying for up to {window} minutes "
+                    f"before handing back to you.",
+                    f"⏳ Auto-merge is now ON — DevCake resumes driving the merge "
+                    f"of {pr_url}, retrying for up to {window} minutes before "
+                    f"handing back to you. {MERGE_RETRY_MARKER}"))
             mgr._audit(m.pmo_id, "merge_retry_rearmed", pr_url)
             mgr.merge_handoffs.pop(m.pmo_id, None)
             mgr._rearm_satisfied.add(m.pmo_id)   # AUD-005: window (re)opened
@@ -416,10 +430,17 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                     with completion.write_back_class():
                         await mgr._feed(
                             m.pmo_id, "issue",
-                            f"⚠️ Merge conflict on {pr_url} and auto-resolve "
-                            f"is unavailable (toggle off or attempts "
-                            f"exhausted) — awaiting human merge "
-                            f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+                            feed.notice(
+                                mgr, feed.NEEDS_YOU,
+                                f"{pr_url} has a merge conflict and "
+                                f"auto-resolve is unavailable (toggle off or "
+                                f"attempts exhausted) — the merge is yours.",
+                                f"⚠️ Merge conflict on {pr_url} and auto-resolve "
+                                f"is unavailable (toggle off or attempts "
+                                f"exhausted) — awaiting human merge "
+                                f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}",
+                                todo="Resolve and merge it; the merge sweep "
+                                     "completes the mission once it lands."))
                     mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
                     mgr._merge_window_closed.add(m.pmo_id)
                     mgr.merge_handoffs[m.pmo_id] = (
@@ -459,8 +480,14 @@ async def _hand_off_exhausted(mgr, m: Mission, pr_url: str,
     with completion.write_back_class():
         await mgr._feed(
             m.pmo_id, "issue",
-            f"⚠️ Still unmergeable after {window} min — awaiting human "
-            f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+            feed.notice(
+                mgr, feed.NEEDS_YOU,
+                f"{pr_url} is still unmergeable after {window} min — the "
+                f"merge is yours.",
+                f"⚠️ Still unmergeable after {window} min — awaiting human "
+                f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}",
+                todo="Merge it once the forge allows; the merge sweep "
+                     "completes the mission once it lands."))
     mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
     mgr._merge_window_closed.add(m.pmo_id)
 

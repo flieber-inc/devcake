@@ -8,7 +8,7 @@ from ...security import redact
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import run_branch
-from . import completion, dispatch, steps
+from . import completion, dispatch, feed, steps
 from .freshness import review_freshness_gate
 from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
                       MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
@@ -45,13 +45,22 @@ async def _flag_out_of_pipeline_merge(mgr, run: Run) -> None:
         state = await forge.pr_state(pr.number)
         if not state.merged:
             return
-        await mgr._feed(
-            run.mission_pmo_id, run.pmo_kind,
+        record = (
             f"⚠️ **Out-of-pipeline merge detected:** {state.url} is already "
             f"merged, but this mission is still mid-pipeline "
             f"({run.mission_type}). If you merged it yourself on purpose, "
             f"mark the mission Done (or add `DEVCAKE-SKIP`); otherwise check "
             f"who merged it — DevCake did not.")
+        await mgr._feed(
+            run.mission_pmo_id, run.pmo_kind,
+            feed.notice(
+                mgr, feed.FOR_THE_RECORD,
+                f"{state.url} is already merged while this mission is still "
+                f"mid-pipeline ({run.mission_type}); DevCake did not merge it.",
+                record,
+                todo="If you merged it on purpose, mark the mission Done or "
+                     "add the `DEVCAKE-SKIP` label; otherwise check who "
+                     "merged it."))
         mgr._audit(run.mission_pmo_id, "out_of_pipeline_merge", state.url)
         mgr.anomalies[run.mission_pmo_id] = (
             f"{run.mission_key}: PR merged outside the pipeline ({state.url})")
@@ -170,13 +179,23 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     await mgr.pmo.swap_labels(
                         MissionRef(pmo_id, "issue"),
                         remove={LABEL_REVIEW}, add={LABEL_MERGE})
-                    await mgr._feed(
-                        pmo_id, "issue",
+                    record = (
                         f"⏳ REVIEW approved — waiting up to {settle_min} min "
                         f"for sibling discoveries before auto-merge of "
                         f"{pr_url}. Material that lands in this window can "
                         f"re-open REVIEW. You can merge manually at any time. "
                         f"{MERGE_SETTLE_MARKER}")
+                    await mgr._feed(
+                        pmo_id, "issue",
+                        feed.notice(
+                            mgr, feed.INFO,
+                            f"Approved — DevCake waits up to {settle_min} min "
+                            f"for sibling discoveries before merging "
+                            f"{pr_url}; material landing in that window can "
+                            f"re-open REVIEW.",
+                            record,
+                            todo="Nothing to do; you can merge it yourself "
+                                 "at any time."))
                     mgr._audit(pmo_id, "merge_settle_parked",
                                f"{settle_min}m {pr_url}")
                     mgr._merge_window_closed.discard(pmo_id)
@@ -262,8 +281,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                 remove={LABEL_REVIEW}, add={LABEL_MERGE})
                             if mstate is not False and \
                                     inst.merge_retry_window_minutes > 0:
-                                await mgr._feed(
-                                    pmo_id, "issue",
+                                record = (
                                     f"⏳ REVIEW approved but the merge is not "
                                     f"possible yet ({merge_err}) — DevCake keeps "
                                     f"retrying for up to "
@@ -271,18 +289,38 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                     f"minutes (mergeability computing / CI "
                                     f"pipeline running). You can merge {pr_url} "
                                     f"manually at any time. {MERGE_RETRY_MARKER}")
+                                await mgr._feed(
+                                    pmo_id, "issue",
+                                    feed.notice(
+                                        mgr, feed.INFO,
+                                        f"Approved, but {pr_url} cannot merge "
+                                        f"yet ({merge_err}) — DevCake keeps "
+                                        f"retrying for up to "
+                                        f"{inst.merge_retry_window_minutes} "
+                                        f"minutes.",
+                                        record,
+                                        todo="Nothing to do; you can merge it "
+                                             "yourself at any time."))
                                 mgr._audit(pmo_id, "merge_deferred",
                                             str(merge_err)[:120])
                                 mgr._merge_window_closed.discard(pmo_id)
                                 run.finalized_steps.append(
                                     steps.REVIEW_MERGE_DEFERRED)
                             else:
-                                await mgr._feed(
-                                    pmo_id, "issue",
+                                record = (
                                     f"⚠️ REVIEW approved but auto-merge failed "
                                     f"({merge_err}); awaiting human merge of "
                                     f"{pr_url} (`DEVCAKE-MERGE`). "
                                     f"{MERGE_HANDOFF_MARKER}")
+                                await mgr._feed(
+                                    pmo_id, "issue",
+                                    feed.notice(
+                                        mgr, feed.NEEDS_YOU,
+                                        f"Approved, but auto-merge failed "
+                                        f"({merge_err}) — merging {pr_url} "
+                                        f"is yours; the merge sweep completes "
+                                        f"the mission once it lands.",
+                                        record, todo=footer.strip()))
                                 mgr._audit(pmo_id,
                                             "review_approve_merge_failed",
                                             str(merge_err)[:120])
@@ -305,13 +343,23 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
             async def _defer_missing_pr():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                           remove={LABEL_REVIEW}, add={LABEL_MERGE})
-                await mgr._feed(
-                    pmo_id, "issue",
+                record = (
                     f"⏳ REVIEW approved but the PR isn't visible yet — DevCake "
                     f"will auto-merge it once it appears, retrying for up to "
                     f"{inst.merge_retry_window_minutes} minutes before handing "
                     f"back to you. You can merge {pr_url} manually at any time. "
                     f"{MERGE_RETRY_MARKER}")
+                await mgr._feed(
+                    pmo_id, "issue",
+                    feed.notice(
+                        mgr, feed.INFO,
+                        f"Approved, but the pull request is not visible yet — "
+                        f"DevCake merges it once it appears, retrying for up "
+                        f"to {inst.merge_retry_window_minutes} minutes before "
+                        f"handing back to you.",
+                        record,
+                        todo=f"Nothing to do; you can merge {pr_url} yourself "
+                             f"at any time."))
                 mgr._audit(pmo_id, "review_approve_defer_missing_pr", pr_url)
                 mgr._merge_window_closed.discard(pmo_id)
                 run.finalized_steps.append(steps.REVIEW_MERGE_DEFERRED)
@@ -321,12 +369,20 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
             async def _await_merge():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                            remove={LABEL_REVIEW}, add={LABEL_MERGE})
-                await mgr._feed(
-                    pmo_id, "issue",
+                record = (
                     f"✅ REVIEW approved "
                     f"({'formal approval filed' if formal else 'APPROVED-BY-DEVCAKE marker'}). "
                     f"Awaiting human merge of {pr_url} — the merge sweep completes "
                     f"this mission once it merges." + footer)
+                await mgr._feed(
+                    pmo_id, "issue",
+                    feed.notice(
+                        mgr, feed.NEEDS_YOU,
+                        f"Approved "
+                        f"({'formal approval filed' if formal else 'approval marker posted'}); "
+                        f"merging {pr_url} is yours — the merge sweep completes "
+                        f"the mission once it lands.",
+                        record, todo=footer.strip()))
                 mgr._audit(pmo_id, "review_approve_awaiting_merge", pr_url)
             await mgr._checkpoint(run, steps.REVIEW_AWAITING_MERGE, _await_merge)
     else:  # reject
@@ -382,7 +438,13 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     f"cost so far: ${cost:.2f}{share} (runs with no cost "
                     f"data not included). Add `DEVCAKE-SKIP` to stop "
                     f"DevCake, or intervene on the PR directly.")
-            await mgr._feed(pmo_id, "issue", warn)
+            await mgr._feed(pmo_id, "issue", feed.notice(
+                mgr, feed.FOR_THE_RECORD,
+                f"This mission has been through {rejections} REVIEW "
+                f"rejections; recorded cost so far ${cost:.2f}{share}.",
+                warn,
+                todo="Add the `DEVCAKE-SKIP` label to stop DevCake, or step "
+                     "in on the pull request directly."))
             if pr:
                 await forge.post_pr_comment(pr.number, warn)
             mgr._audit(pmo_id, "loop_warning", f"{rejections} rejections")

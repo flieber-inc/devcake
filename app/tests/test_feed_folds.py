@@ -4,11 +4,15 @@ tests pin the shapes and the two invariants every later PR rests on: the
 sentinel stays the last bytes of every rendered body, and every marker a
 scan reads is found inside a fold on every syntax family."""
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from devcake.domain.model import ActivityEntry, AttachmentRef
-from devcake.domain.orchestrator import feed, freshness
+from devcake.domain.model import ActivityEntry, AttachmentRef, MissionRef
+from devcake.domain.orchestrator import completion, feed, freshness, transitions
+from devcake.ports.forge import mission_branch
+from fakes import assert_notice, notice_record
+from test_transitions import _run, make_mgr, mission, run_coro
 from devcake.domain.orchestrator.feed import (FoldSection, StepCardParts,
                                               append_fold_section,
                                               card_header, cut_at_boundary,
@@ -201,6 +205,74 @@ def test_notice_carries_the_record_and_unfolds_to_it():
     assert unquoted(sealed).count("conflict-resolve:1") == 1   # never doubled
     [proj] = unfold_entries([_entry(sealed)])
     assert proj.body == _seal(legacy)
+
+
+def _baton_site(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.record_feed = True
+    run_coro(transitions.transition(
+        mgr, _run(), {"outcome": "human_needed",
+                      "summary": "Need the deploy key.\n\nSee the log."}, None))
+    legacy = ("✋ **DevCake needs a human.** Need the deploy key.\n\nSee the log."
+              "\n\nWhen resolved, remove the `DEVCAKE-NEEDS-HUMAN` label and "
+              "DevCake resumes where it left off.")
+    return fake, legacy, feed.NEEDS_YOU
+
+
+def _completion_site(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.record_feed = True
+
+    async def no_zip(*a, **kw):
+        pass
+    mgr.deliver_internal_zip_for_mission = no_zip
+    run_coro(completion.complete_merged(
+        mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+        ref=MissionRef("p1", "issue"), mission_key="T-1",
+        pr=SimpleNamespace(url="https://forge.example/pr/8"),
+        pr_url="https://forge.example/pr/8", mission=m))
+    return (fake, "✅ PR https://forge.example/pr/8 merged — mission done (merge sweep).",
+            feed.INFO)
+
+
+def _directive_site(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.record_feed = True
+    inst = SimpleNamespace(auto_resolve_merge_conflicts=True)
+    assert run_coro(completion.route_conflict_to_execute(
+        mgr, "p1", "T-1", "https://forge.example/pr/8", "DEVCAKE-REVIEW", inst))
+    branch = mission_branch(mgr.instance_name, "T-1")
+    legacy = (f"🧩 Auto-merge hit a merge conflict on https://forge.example/pr/8 "
+              f"(auto-resolve attempt 1/2) — back to EXECUTE. Next Dev: sync "
+              f"`{branch}` with the default branch, resolve the conflicts, and "
+              f"push; the PR then returns to REVIEW. `devcake:conflict-resolve:1`")
+    return fake, legacy, feed.directive_lead("🧩", "Conflict-resolve directive")
+
+
+@pytest.mark.parametrize("site", [_baton_site, _completion_site, _directive_site])
+def test_notice_sites_unfold_to_the_byte_identical_legacy_entry(tmp_path, site):
+    """The one rule at three real sites (the hand-off baton, a completion
+    cause, the 🧩 directive): the head opens with the fixed lead and
+    carries no marker; the Record IS today's comment text; the projection
+    hands the Dev the legacy entry byte for byte."""
+    fake, legacy, lead = site(tmp_path)
+    [body] = fake.comments
+    assert assert_notice(body, lead, record_has=[legacy]) == legacy
+    assert is_devcake_comment(body)
+    [proj] = unfold_entries(fake.activity_entries)
+    assert proj.body == _seal(legacy)
+
+
+def test_baton_head_quotes_the_summary_and_the_record_keeps_it_raw(tmp_path):
+    fake, legacy, _lead = _baton_site(tmp_path)
+    [body] = fake.comments
+    head = strip_fold(body)[0]
+    assert "> Need the deploy key.\n>\n> See the log." in head    # model text quarantined
+    assert "remove the `DEVCAKE-NEEDS-HUMAN` label" in head
+    assert notice_record(body).count("Need the deploy key.") == 1
 
 
 # ── the projection ──────────────────────────────────────────────────────────

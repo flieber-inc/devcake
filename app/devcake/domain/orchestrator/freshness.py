@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Literal
 
 from ..model import LABEL_MERGE, LABEL_REVIEW, Mission, MissionRef
-from . import steps
+from . import feed, steps
 from ..run import Run, aware
 from .dispatch import mission_cost
 from .feed import is_devcake_comment, unquoted
@@ -142,6 +142,30 @@ def _directive_body(run: Run, n: int, found: list, cap: int) -> str:
         f"`devcake:freshness-rereview:{n}`")
 
 
+def _directive_notice(mgr, run: Run, n: int, found: list, cap: int) -> str:
+    """The 🔄 directive as a notice (ADR-0042 §4): the counted marker rides
+    the Record only — a second copy in the head would be a second count —
+    and the whole body stays under FEED_INLINE_MAX so the marker is never
+    externalized (the legacy site's guarantee, kept)."""
+    what = (_TRUNCATED if found and found[0] == _TRUNCATED
+            else f"{len(found)} new feed entr{'y' if len(found) == 1 else 'ies'}")
+    return feed.notice(
+        mgr, feed.directive_lead("🔄", f"Freshness re-review {_count_label(n, cap)}"),
+        f"{what} arrived after this review's context was assembled, so the "
+        f"approve verdict is withheld; the next REVIEW judges only whether "
+        f"the newer entries change it — no reply needed.",
+        _directive_body(run, n, found, cap))
+
+
+def _exhaustion_notice(mgr, *, closes: bool, cap: int, body: str) -> str:
+    what = (f"The freshness re-review budget ({cap}) is spent, so the "
+            f"standing approve verdict proceeds with feed activity nobody "
+            f"evaluated." if closes else
+            f"The freshness re-review budget ({cap}) is spent, so the "
+            f"mission stays parked on `DEVCAKE-MERGE` for a person.")
+    return feed.notice(mgr, feed.FOR_THE_RECORD, what, body)
+
+
 def _exhaustion_copy(
         *, closes: bool, key: str, cap: int, names: str, more: str,
         cost: float) -> tuple[str, str]:
@@ -215,7 +239,8 @@ async def review_freshness_gate(mgr, run: Run) -> str:
             more=more, cost=mission_cost(mgr, pmo_id))
 
         async def _disclose():
-            await mgr._feed(pmo_id, "issue", body)
+            await mgr._feed(pmo_id, "issue", _exhaustion_notice(
+                mgr, closes=True, cap=cap, body=body))
             mgr._audit(pmo_id, "freshness_exhausted",
                        f"{len(found)} unread entries at close")
             mgr.anomalies[pmo_id] = anomaly  # transient — pruned once done
@@ -225,7 +250,7 @@ async def review_freshness_gate(mgr, run: Run) -> str:
     n = count + 1
 
     async def _directive():
-        await mgr._feed(pmo_id, "issue", _directive_body(run, n, found, cap))
+        await mgr._feed(pmo_id, "issue", _directive_notice(mgr, run, n, found, cap))
         mgr._audit(pmo_id, "freshness_tripped",
                    f"re-review {_count_label(n, cap)}: "
                    f"{len(found)} unread entries")
@@ -288,14 +313,15 @@ async def recheck_and_maybe_rereview(
         body, anomaly = _exhaustion_copy(
             closes=False, key=mission.key, cap=cap, names=names,
             more=more, cost=mission_cost(mgr, pmo_id))
-        await mgr._feed(pmo_id, "issue", body)
+        await mgr._feed(pmo_id, "issue", _exhaustion_notice(
+            mgr, closes=False, cap=cap, body=body))
         mgr._audit(pmo_id, "freshness_exhausted",
                    f"{reason}: {len(found)} unread entries")
         mgr.anomalies[pmo_id] = anomaly
         return "exhausted"
 
     n = count + 1
-    await mgr._feed(pmo_id, "issue", _directive_body(run, n, found, cap))
+    await mgr._feed(pmo_id, "issue", _directive_notice(mgr, run, n, found, cap))
     ref = MissionRef(pmo_id, mission.pmo_kind)
     await mgr.pmo.swap_labels(ref, remove={LABEL_MERGE}, add={LABEL_REVIEW})
     # mission.labels is mutated by FakePMO; live adapters re-fetch on next poll
@@ -328,11 +354,19 @@ async def disclose_unread_at_close(mgr, mission) -> None:
             return
         names = "; ".join(_describe(found)[:5])
         more = f" (+{len(found) - 5} more)" if len(found) > 5 else ""
-        await mgr._feed(
-            mission.pmo_id, "issue",
+        record = (
             f"⚠️ Merged and closed with feed activity the final review did "
             f"not see: {names}{more}. The merge was already sanctioned "
             f"(deferred-retry window) — disclosure only.")
+        await mgr._feed(
+            mission.pmo_id, "issue",
+            feed.notice(
+                mgr, feed.FOR_THE_RECORD,
+                f"Merged and closed with {len(found)} feed entr"
+                f"{'y' if len(found) == 1 else 'ies'} the final review did "
+                f"not see; the merge was already sanctioned, so this is a "
+                f"disclosure only.",
+                record))
         mgr._audit(mission.pmo_id, "freshness_unread_at_close",
                    f"{len(found)} entries")
     except Exception:  # noqa: BLE001 — disclosure is best-effort by design

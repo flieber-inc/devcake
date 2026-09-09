@@ -157,6 +157,10 @@ def test_give_up_feed_carries_last_error_class_message_and_run_id(
 
     assert any("DEVCAKE-FAILED" in str(add) for _rm, add in fake.swaps)
     body = next(c for c in fake.comments if "gave up" in c.lower())
+    from fakes import assert_notice
+    assert_notice(body, "✋ **Needs you.** DevCake gave up on the EXECUTE step",
+                  record_has=["⚠️ **DevCake gave up on this mission's EXECUTE step**",
+                              "`DEVCAKE-FAILED`"])
     assert "DEV_BAD_OUTPUT" in body
     assert "fixture asserted wrong shape" in body
     assert "2" in body  # attempt count

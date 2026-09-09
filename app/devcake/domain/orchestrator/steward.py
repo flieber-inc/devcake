@@ -18,7 +18,7 @@ from .. import costing
 # receipted — allowlisted in test_structure_guards.
 from ..model import LABEL_DISCOVERY, LABEL_OPTIN, Mission, MissionRef
 from ..workspaces import WorkspaceUnavailable
-from . import dispatch
+from . import dispatch, feed
 from ..run import Run, utcnow
 from .feed import unquoted
 from ...activity import IN_FLIGHT
@@ -410,9 +410,14 @@ async def apply_steward_edges(mgr, edges: list) -> tuple[int, int]:
                     f"steward: blocked by {blocker.key}")
         await mgr._feed(
             blocked.pmo_id, "issue",
-            f"🔗 DevCake mapped a blocking relation: this mission is blocked by "
-            f"**{blocker.key}** and will not start before it finishes. Remove "
-            f"the relation in the PMO if this is wrong.")
+            feed.notice(
+                mgr, feed.INFO,
+                f"DevCake mapped a blocking relation: this mission is blocked "
+                f"by {blocker.key} and will not start before it finishes.",
+                f"🔗 DevCake mapped a blocking relation: this mission is blocked by "
+                f"**{blocker.key}** and will not start before it finishes. Remove "
+                f"the relation in the PMO if this is wrong.",
+                todo="Remove the relation in the PMO if this is wrong."))
         created += 1
     return created, rejected
 
@@ -436,8 +441,8 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     judgment layer. Idempotent against the board: a redelivered finalize
     re-checks the recipient's delivery markers and the source's receipts
     before every write."""
-    from .discovery import (harvest_run_index, render_entry_lines,
-                            scan_source, valid_entries)
+    from .discovery import (harvest_run_index, record_receipts,
+                            render_entry_lines, scan_source, valid_entries)
     from .family_graph import family_of
 
     if not mgr.instance.discovery_routing:          # D11 — delivery too
@@ -564,7 +569,10 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         for x in batch:
             by_pair.setdefault((x["src"].key.upper(), x["step"]),
                                []).append(x)
-        sections: list[str] = []
+        # one (source, step) batch per part: (key, step, head lines —
+        # the pair marker, the pointer, the fingerprints — finding blocks,
+        # the findings that landed)
+        parts: list[tuple[str, int, list[str], list[str], list[dict]]] = []
         landed: list[dict] = []
         for (skey, step), xs in sorted(by_pair.items()):
             src = xs[0]["src"]
@@ -614,16 +622,17 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                     [x["entry"]], cap=DISCOVERY_IN_EXCERPT_MAX)
                 if x["because"]:
                     body_lines.append(f"*— steward: {defang(x['because'])}*")
-            sections.append("\n\n".join(head + body_lines))
+            parts.append((skey, step, head, body_lines, fresh))
             landed.extend(fresh)
-        if not sections:
+        if not parts:
             continue
-        body = "\n\n---\n\n".join(sections)
+        body = _leads_notice(mgr, parts, findings=True)
         if len(body) > FEED_INLINE_MAX:
-            # marker + provenance must stay inline — drop finding bodies,
-            # keep the pointer (never externalize a counted marker)
-            body = "\n\n---\n\n".join(
-                s.split("\n\n**", 1)[0] for s in sections)
+            # marker + provenance must stay inline — re-render from the
+            # parts with the findings dropped from head and record alike;
+            # the marker, pointer and fingerprint lines stay (never
+            # externalize a counted marker)
+            body = _leads_notice(mgr, parts, findings=False)
         try:
             await mgr._feed(tgt_id, "issue", body, externalize=False)
             delivered += len(landed)
@@ -664,17 +673,22 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         pre = getattr(state, "receipted", set())
         new = sorted(p for p in pairs if p not in pre)
         if new:
-            lines = [f"`devcake:discovery-routed:v1 step={s} to={t}`"
-                     for s, t in new]
-            notes = [note for s in sorted({s for s, _t in new})
-                     for note in reasons.get((pid, s), [])]
+            def receipt_body(sel, pid=pid) -> str:
+                """Today's 🧭 receipt comment for these pairs, verbatim —
+                the fold section on the step card, or the fallback
+                notice's Record (ADR-0042 §6)."""
+                lines = [f"`devcake:discovery-routed:v1 step={s} to={t}`"
+                         for s, t in sel]
+                notes = [note for s in sorted({s for s, _t in sel})
+                         for note in reasons.get((pid, s), [])]
+                return ("🧭 Discovery routing receipts (dispositioned batches; "
+                        "`to=-` = routed nowhere):\n" + "\n".join(lines)
+                        + ("\n\n" + "\n".join(notes) if notes else ""))
             try:
-                await mgr._feed(
-                    pid, "issue",
-                    "🧭 Discovery routing receipts (dispositioned batches; "
-                    "`to=-` = routed nowhere):\n" + "\n".join(lines)
-                    + ("\n\n" + "\n".join(notes) if notes else ""),
-                    externalize=False)
+                await record_receipts(
+                    mgr, pid, state, new, run_ix=run_ix, body_of=receipt_body,
+                    what="Routing receipts for this mission's discoveries "
+                         "— bookkeeping only, nothing to do.")
             except Exception as ex:  # noqa: BLE001 — receipts missing ⇒ the sweep re-detects; never fail the finalize
                 mgr._audit(pid, "discovery_receipt_failed", str(ex)[:200])
                 continue
@@ -691,6 +705,43 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         except Exception as ex:  # noqa: BLE001 — label is a hint; the sweep self-heals it later
             mgr._audit(pid, "discovery_label_failed", str(ex)[:200])
     return delivered, rejected
+
+
+def _leads_notice(mgr, parts, *, findings: bool) -> str:
+    """The delivery as a notice (ADR-0042 §6): `📨 Leads from KEY, step N.`
+    with the findings quoted in the head, and the Record the delivery
+    comment as it was — one `---`-separated section per (source, step):
+    the elevated pair marker, the pointer line, the fingerprints, then the
+    finding blocks. `findings=False` is the inline-ceiling fallback: the
+    finding blocks are dropped from head and record alike while every
+    marker line stays, so the elevated marker, the pair dedup and the
+    content dedup all survive a truncated delivery."""
+    record = "\n\n---\n\n".join(
+        "\n\n".join(head + (body_lines if findings else []))
+        for _skey, _step, head, body_lines, _fresh in parts)
+    skey, step = parts[0][0], parts[0][1]
+    others = [f"{s} step {n}" for s, n, _h, _b, _f in parts[1:]]
+    n_leads = sum(len(fresh) for _s, _n, _h, _b, fresh in parts)
+    what = (f"{n_leads} lead{'' if n_leads == 1 else 's'}"
+            + (f", also from {', '.join(others)}" if others else "")
+            + " — leads, not truths: verify against the source before "
+            "relying on them; the full record is the DISCOVERY file on the "
+            "source mission.")
+    if not findings:
+        what += (" The findings were over the inline budget and are not "
+                 "repeated here.")
+    quoted: list[str] = []
+    if findings:
+        for _s, _n, _head, body_lines, _fresh in parts:
+            for block in body_lines:
+                if block.startswith("**"):
+                    continue                    # the numbering line
+                if block.startswith("*— steward:"):
+                    quoted.append(feed.blockquote(block.strip("*")))
+                    continue
+                quoted.append(block)            # already `>`-quoted
+    head_text = what + ("\n\n" + "\n\n".join(quoted) if quoted else "")
+    return feed.notice(mgr, feed.leads_lead(skey, step), head_text, record)
 
 
 def _creates_cycle(graph: dict[str, set[str]], blocker: str, blocked: str) -> bool:

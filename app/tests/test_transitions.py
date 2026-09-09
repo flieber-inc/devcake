@@ -374,6 +374,8 @@ def test_illegal_outcome_parks_never_acts(tmp_path):
     assert "DEVCAKE-SKIP" in m.labels
     assert "DEVCAKE-EXECUTE" in m.labels          # stage untouched, only parked
     assert any("not a legal outcome" in c for c in fake.comments)
+    assert any("not a legal outcome" in c and c.startswith("✋ **Needs you.**")
+               for c in fake.comments)
     # and a PLAN run may only return "planned"
     m2 = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
     mgr2, fake2, _ = make_mgr(tmp_path, m2)
@@ -389,6 +391,13 @@ def test_second_handoff_escalates_warning(tmp_path):
     run_coro(transitions.transition(mgr, _run(), {"outcome": "human_needed", "summary": "s1"},
                              None))
     assert not any("Hand-off #" in c for c in fake.comments)   # first: no warning
+    # the baton is a ✋ notice: the summary quoted in the head, today's
+    # baton verbatim in the Record (ADR-0042 §4)
+    from fakes import assert_notice
+    from devcake.domain.orchestrator.feed import strip_fold
+    assert_notice(fake.comments[-1], "✋ **Needs you.**",
+                  record_has=["✋ **DevCake needs a human.** s1\n\nWhen resolved"])
+    assert "> s1" in strip_fold(fake.comments[-1])[0]
     prior = _run()
     prior.run_id = "T-1-1-EXECUTE-PRIOR1"
     prior.state = "finished"
@@ -399,6 +408,9 @@ def test_second_handoff_escalates_warning(tmp_path):
                              None))
     assert any("Hand-off #2" in c and "DEVCAKE-SKIP" in c for c in fake.comments)
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # warned, never parked
+    assert_notice(fake.comments[-1], "✋ **Needs you.**",
+                  record_has=["⚠️ **Hand-off #2 on this step.**"])
+    assert "hand-off #2 on this step" in strip_fold(fake.comments[-1])[0]
 
 
 def test_malformed_decomposition_fails_run_not_poison(tmp_path):
@@ -619,6 +631,10 @@ def test_unlimited_never_gives_up_and_warns_at_cadence(tmp_path, monkeypatch):
     assert fake.swaps == []                       # DEVCAKE-FAILED never applied
     assert any("Unlimited-attempts mode" in c and "$" in c
                for c in fake.comments)
+    from fakes import assert_notice
+    assert_notice(next(c for c in fake.comments if "Unlimited-attempts" in c),
+                  "⚠️ **For the record.**",
+                  record_has=["⚠️ **Unlimited-attempts mode:**"])
     # Operator chrome must name the live Config surface (Policies), not the
     # retired Limits & Traffic section title (CAKE-161).
     warn_bodies = [c for c in fake.comments if "Unlimited-attempts mode" in c]
@@ -777,6 +793,8 @@ def test_executed_trivially_is_illegal_and_parks(tmp_path):
     assert ({"DEVCAKE-SKIP"} in [add for _, add in fake.swaps])  # parked
     assert "DEVCAKE-REVIEW" not in m.labels
     assert any("not a legal outcome" in c for c in fake.comments)
+    assert any("not a legal outcome" in c and c.startswith("✋ **Needs you.**")
+               for c in fake.comments)
 
 
 def test_onboard_opportunistic_plan_skips_plan_stage(tmp_path):
@@ -2156,6 +2174,15 @@ def test_merge_conflict_cap_falls_back_to_merge(tmp_path):
     assert not any("`devcake:conflict-resolve:3`" in c for c in fake.comments)
     assert any("auto-merge failed" in c and "`devcake:merge-handoff`" in c
                for c in fake.comments)
+    # a ✋ notice: the merge-state marker rides the Record only (the sweep
+    # reads it through `unquoted`), the head carries the footer command
+    from fakes import assert_notice
+    from devcake.domain.orchestrator.feed import unquoted
+    body = next(c for c in fake.comments if "auto-merge failed" in c)
+    assert_notice(body, "✋ **Needs you.** Approved, but auto-merge failed",
+                  record_has=["`devcake:merge-handoff`"])
+    assert unquoted(body).count("`devcake:merge-handoff`") == 1
+    assert "footer" in body.split("<details>", 1)[0]
 
 
 def test_quoted_conflict_marker_does_not_count(tmp_path):

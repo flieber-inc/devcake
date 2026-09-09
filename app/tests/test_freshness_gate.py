@@ -91,6 +91,14 @@ def test_human_comment_after_watermark_trips(tmp_path):
                   if "`devcake:freshness-rereview:1`" in c]
     assert len(directives) == 1
     assert "No reply needed" in directives[0]        # ack-spiral guard
+    # a 🔄 directive notice (ADR-0042 §4): the counted marker in the Record
+    # only, the whole body under the inline ceiling so it never externalizes
+    from devcake.domain.orchestrator.markers import FEED_INLINE_MAX
+    from fakes import assert_notice
+    assert_notice(directives[0], "🔄 **Freshness re-review 1/",
+                  record_has=["🔄 **Freshness re-review 1/", "No reply needed"])
+    assert unquoted(directives[0]).count("freshness-rereview:1") == 1
+    assert len(directives[0]) < FEED_INLINE_MAX
     # decoration must not embed a live STEP_MARKER token (phantom attachment)
     assert STEP_MARKER.search(unquoted(directives[0])) is None
     assert "review:freshness_tripped" in run.finalized_steps

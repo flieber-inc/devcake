@@ -235,7 +235,10 @@ def make_mission_manager(
             "EXECUTE": Assignment(dev_type="implementer"),
             "REVIEW": Assignment(dev_type="judgment"),
         })
-    inst = instance if instance is not None else DEFAULT_INSTANCE
+    # a COPY of the default: a test that flips a knob on its manager's
+    # instance (discovery_routing, plan_approval …) must not leak it into
+    # the next module's manager (order-dependent failures otherwise)
+    inst = instance if instance is not None else DEFAULT_INSTANCE.model_copy(deep=True)
     dts = dev_types if dev_types is not None else {
         "judgment": DevType(name="judgment", harness_template="claude-code"),
         "implementer": DevType(name="implementer", harness_template="grok-build"),
@@ -336,3 +339,34 @@ def make_services(**overrides):
     for name, stub in method_overrides.items():
         setattr(s, name, stub)
     return s
+
+
+# ── ADR-0042 §4 notice asserts (PR-5) ───────────────────────────────────────
+
+def notice_record(body: str) -> str:
+    """The `Record` section of a notice body: today's comment text,
+    verbatim, minus the sentinel — what the Dev's folder unfolds to."""
+    from devcake.domain.orchestrator import feed
+    _head, inner = feed.strip_fold(body)
+    rec = next((s for s in feed.fold_sections(inner)
+                if s.title == feed.SECTION_RECORD), None)
+    return rec.body if rec is not None else ""
+
+
+def assert_notice(body: str, lead: str, *, record_has=()) -> str:
+    """The one rule, as an assertion: `body` opens with `lead`; its head
+    (unquoted) carries no backticked marker, no step-file token, no
+    `Part i of n` line and no line opening with `**`; its Record carries
+    every string in `record_has` verbatim. Returns the Record body."""
+    from devcake.domain.orchestrator import feed
+    from devcake.domain.orchestrator.markers import PART_LINE, STEP_MARKER
+    assert body.startswith(lead), body[:120]
+    head = feed.unquoted(feed.strip_fold(body)[0])
+    assert "`devcake:" not in head, head
+    assert STEP_MARKER.search(head) is None, head
+    for line in head.splitlines():
+        assert not line.startswith("**") and not PART_LINE.match(line), line
+    rec = notice_record(body)
+    for needle in record_has:
+        assert needle in rec, (needle, rec)
+    return rec

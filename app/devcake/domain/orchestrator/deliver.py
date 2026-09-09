@@ -9,6 +9,12 @@ PR is the canonical eng artifact).
 Fired AFTER the Done checkpoint from all three merge sites, guarded by
 its own idempotency key so redelivery never double-posts. A packaging
 failure NEVER un-Dones the mission — it posts a warning instead.
+
+The note is a fold entry on the completion notice (ADR-0042 §6): the
+completion chokepoint hands over the notice's entry id and body, and the
+`Deliverable` section is appended to its fold through the edit chokepoint;
+when the id is unknown (a redelivered completion, a vendor without ids) or
+the edit fails, the same section rides its own ℹ️ notice instead.
 """
 
 from __future__ import annotations
@@ -18,8 +24,10 @@ import logging
 import zipfile
 
 from ...ports.forge import PRFile, run_branch
+from ..run import utcnow
 from . import feed, steps
-from .markers import DELIVERABLE_MARKER
+from .feed import SECTION_DELIVERABLE, FoldSection
+from .markers import DELIVERABLE_TOKEN
 
 log = logging.getLogger("devcake.deliver")
 
@@ -28,12 +36,14 @@ _DELIVER_STEP = steps.DELIVER_ZIP
 _SAFETY = 64 * 1024
 
 
-async def deliver_internal_zip(mgr, run, pr) -> None:
-    """Review-path delivery (auto-merge ON): idempotent on run.finalized_steps."""
+async def deliver_internal_zip(mgr, run, pr, *, anchor=None) -> None:
+    """Review-path delivery (auto-merge ON): idempotent on run.finalized_steps.
+    `anchor` is the completion notice's (entry id, body) when known."""
     if _DELIVER_STEP in run.finalized_steps:
         return
     delivered = await _deliver_core(mgr, run.repo_ref, run.mission_key,
-                                    run.mission_pmo_id, run.pmo_kind, pr)
+                                    run.mission_pmo_id, run.pmo_kind, pr,
+                                    anchor=anchor)
     if delivered:
         run.finalized_steps.append(_DELIVER_STEP)
         mgr.runs.store.save(run)
@@ -50,7 +60,7 @@ def _should_deliver_zip(mgr, repo_ref: str | None) -> bool:
     return bool(getattr(mgr.config, "attach_merged_changeset_to_pmo", False))
 
 
-async def deliver_internal_zip_for_mission(mgr, m, pr) -> None:
+async def deliver_internal_zip_for_mission(mgr, m, pr, *, anchor=None) -> None:
     """Merge-sweep-path delivery (auto-merge OFF, human merged). The
     Done label-swap that precedes this call normally removes the mission from
     future sweep candidates, so it fires once — but a crash between the swap
@@ -68,11 +78,34 @@ async def deliver_internal_zip_for_mission(mgr, m, pr) -> None:
     except Exception:  # noqa: BLE001 — idempotency probe is advisory; failure logged and delivery proceeds (a double attach beats a lost deliverable)
         log.warning("deliverable idempotency check failed for %s — proceeding",
                     m.key)
-    await _deliver_core(mgr, m.repo, m.key, m.pmo_id, m.pmo_kind, pr)
+    await _deliver_core(mgr, m.repo, m.key, m.pmo_id, m.pmo_kind, pr,
+                        anchor=anchor)
 
 
-async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
-                        ) -> bool:
+async def _post_note(mgr, pmo_id, pmo_kind, note: str, *, anchor,
+                     lead: str, what: str) -> None:
+    """The note's one landing rule (ADR-0042 §6): a `Deliverable` fold
+    section appended to the completion notice when its id and body are
+    known — no feed read, the writer holds the last body — else its own
+    notice with that section as the record. The zip filename stays
+    unquoted either way: the sweep's idempotency probe greps it."""
+    section = FoldSection(SECTION_DELIVERABLE, note, at=utcnow())
+    if anchor:
+        entry_id, body = anchor
+        try:
+            await mgr._edit(pmo_id, pmo_kind, entry_id, feed.append_fold_section(
+                body, section, collapsible=feed.collapsible_of(mgr)))
+            return
+        except Exception as e:  # noqa: BLE001 — the note must land somewhere: a failed append is audited, then posted
+            log.warning("deliverable note append failed for %s — posting",
+                        pmo_id, exc_info=True)
+            mgr._audit(pmo_id, "deliverable_fold_failed", str(e)[:200])
+    await mgr._feed(pmo_id, pmo_kind, feed.render_notice(
+        lead, what, sections=[section], collapsible=feed.collapsible_of(mgr)))
+
+
+async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr,
+                        *, anchor=None) -> bool:
     """Zip the merged change set → PMO feed attachment. Returns True on a
     successful delivery (caller may then record its idempotency marker).
     Best-effort: a failure NEVER un-Dones the mission."""
@@ -102,7 +135,7 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         name = f"{mission_key}-deliverable.zip"
         url = await mgr.pmo.upload_attachment(pmo_id, name, zip_bytes)
         is_internal = repo_ref in mgr.forges.internal
-        note = (f"{DELIVERABLE_MARKER}\n"
+        note = (f"{DELIVERABLE_TOKEN}\n"
                 f"📦 For the record: archived the merged change set — "
                 f"{len(files) - len(omitted)} file(s) in [{name}]({url}), "
                 f"attached to this issue. This zip is the audit copy, not "
@@ -119,18 +152,23 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
             note += (f" {len(omitted)} file(s) omitted (too large, or a fetch "
                      f"error — see MANIFEST.txt in the zip); the full change "
                      f"set is in the PR {state.url}.")
-        await mgr._feed(pmo_id, pmo_kind, note)
+        await _post_note(
+            mgr, pmo_id, pmo_kind, note, anchor=anchor, lead=feed.INFO,
+            what=f"Archived the merged change set as {name} — the audit "
+                 f"copy, not the answer.")
         log.info("delivered %s: %s (%d files)", mission_key, name, len(files))
         return True
     except Exception:
         # NEVER un-Done the mission — the merge already landed
         log.exception("deliverable packaging failed for %s", mission_key)
         try:
-            await mgr._feed(
-                pmo_id, pmo_kind,
-                f"{DELIVERABLE_MARKER}\n"
+            await mgr._feed(pmo_id, pmo_kind, feed.notice(
+                mgr, feed.FOR_THE_RECORD,
+                f"Packaging the deliverable failed; the merged files remain "
+                f"in the repository ({repo_ref}).",
+                f"{DELIVERABLE_TOKEN}\n"
                 "⚠️ Deliverable packaging failed — the merged files remain "
-                f"available in the repository ({repo_ref}).")
+                f"available in the repository ({repo_ref})."))
         except Exception:
             log.exception("could not post the delivery-failure notice")
         return False

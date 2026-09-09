@@ -946,8 +946,16 @@ until that run exists, field evidence below stays operator-self-reported.
   `<details>` renders as text), the `_edit` chokepoint, `Run.status_entry_id`
   / `Run.pr_url`, and the Dev folder as an unfolding projection with a
   golden test (`fixtures/feeds/legacy_three_step.json` recorded from the
-  pre-card build). Notices, receipts-by-edit and the status comment
-  follow (PR-5/6). Docs 03 §4c/§8/§8a, 04, 05, 07, ADR-0014 addendum.
+  pre-card build). PR-5: every message to a person is a notice on one
+  template (a fixed lead, one sentence, the what-to-do, the pre-notice
+  comment text verbatim as the fold's `Record` — so the folder stays
+  byte-identical for notices too), the leads notice for discovery
+  deliveries, and routing receipts / the deliverable note appended to
+  the harvesting card's / completion notice's fold by edit (fallback: the
+  old post as a notice; audits `discovery_receipt_fold_failed`,
+  `deliverable_fold_failed`); the HTML deliverable marker retired. The
+  status comment follows (PR-6). Docs 03 §4.1/§4a/§4b/§4c/§5/§8/§8a, 04,
+  05, 07, 15, ADR-0014 addendum.
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54
   self-decomposed tickets, 257 fresh-context runs, and 42 human-merged pull
   requests, with seven independently reproduced security-relevant findings,

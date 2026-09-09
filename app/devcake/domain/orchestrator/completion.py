@@ -42,6 +42,7 @@ from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
 from . import freshness, steps
+from . import feed
 from .feed import unquoted
 from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
 
@@ -72,7 +73,8 @@ class MergedCause(StrEnum):
 @dataclass(frozen=True)
 class _Cause:
     remove_label: str
-    feed: str                 # .format(pr_url=…) — byte-exact legacy copy
+    feed: str                 # .format(pr_url=…) — byte-exact legacy copy, the notice's Record
+    what: str                 # .format(pr_url=…) — the notice head's one sentence (ADR-0042 §4)
     audit_action: str
     disclose_before: bool     # ADR-0031 D1 disclose-only pre-step
 
@@ -81,16 +83,19 @@ _CAUSES: dict[MergedCause, _Cause] = {
     MergedCause.REVIEW_AUTO_MERGE: _Cause(
         remove_label=LABEL_REVIEW,
         feed="✅ REVIEW approved; PR merged ({pr_url}). Mission done.",
+        what="Review approved and {pr_url} merged — the mission is done.",
         audit_action="review_approve_merged",
         disclose_before=False),
     MergedCause.SWEEP_EXTERNAL_MERGE: _Cause(
         remove_label=LABEL_MERGE,
         feed="✅ PR {pr_url} merged — mission done (merge sweep).",
+        what="{pr_url} was merged outside DevCake — the mission is done.",
         audit_action="merge_sweep_done",
         disclose_before=False),
     MergedCause.DEFERRED_RETRY_MERGE: _Cause(
         remove_label=LABEL_MERGE,
         feed="✅ Merged after deferred retry ({pr_url}). Mission done.",
+        what="The deferred retry merged {pr_url} — the mission is done.",
         # ADR-0031 D1 (deferred-merge row): DISCLOSE-ONLY — the finalize-time
         # gate passed minutes-to-hours ago; material landing since still
         # closes (the merge was operator-sanctioned) but never silently
@@ -122,6 +127,11 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
     with tracer.start_as_current_span("mission.complete") as span:
         span.set_attribute("devcake.mission.key", mission_key)
         span.set_attribute("devcake.cause", str(cause))
+        # the completion notice's (entry id, body) for the deliverable note
+        # (ADR-0042 §6: appended to its fold); empty when the core was
+        # checkpointed by an earlier delivery or the vendor returned no id
+        posted: list[tuple[str, str]] = []
+
         async def _core():
             # status FIRST: derive keys on status, the sweep keys on the
             # park label. Swap-then-status stranded a merged PR at row 9
@@ -129,8 +139,11 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
             await mgr.pmo.set_status(ref, "done")
             await mgr.pmo.swap_labels(ref, remove={spec.remove_label},
                                       add=set())
-            await mgr._feed(ref.pmo_id, ref.kind,
-                            spec.feed.format(pr_url=pr_url))
+            body = feed.notice(mgr, feed.INFO, spec.what.format(pr_url=pr_url),
+                               spec.feed.format(pr_url=pr_url))
+            eid = await mgr._feed(ref.pmo_id, ref.kind, body)
+            if eid:
+                posted.append((eid, body))
             mgr._audit(ref.pmo_id, spec.audit_action, pr_url)
 
         # the disclosure pre-step stays in the caller's own context: a
@@ -147,11 +160,13 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
                 await mgr._checkpoint(run, steps.REVIEW_DONE, _core)
             else:
                 await _core()
+        anchor = posted[0] if posted else None
         try:
             if run is not None:
-                await mgr.deliver_internal_zip(run, pr)
+                await mgr.deliver_internal_zip(run, pr, anchor=anchor)
             else:
-                await mgr.deliver_internal_zip_for_mission(mission, pr)
+                await mgr.deliver_internal_zip_for_mission(mission, pr,
+                                                           anchor=anchor)
         except Exception:  # noqa: BLE001 — packaging never un-Dones: zip failure degrades loudly in the log, the mission stays done
             log.exception("deliverable zip failed for %s — mission stays done",
                           mission_key)
@@ -200,14 +215,22 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
         # directive overrides its normal implement-the-mission job (🧩 is
         # reserved for this directive — 🔀 already means "PR opened").
         # a write-back (ADR-0040 §3): critical class from the sweep too
+        record = (
+            f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
+            f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
+            f"Next Dev: sync `{mission_branch(mgr.instance_name, key)}` with the default branch, "
+            f"resolve the conflicts, and push; the PR then returns to "
+            f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
         with write_back_class():
             await mgr._feed(
                 pmo_id, "issue",
-                f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
-                f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
-                f"Next Dev: sync `{mission_branch(mgr.instance_name, key)}` with the default branch, "
-                f"resolve the conflicts, and push; the PR then returns to "
-                f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
+                feed.notice(
+                    mgr, feed.directive_lead("🧩", "Conflict-resolve directive"),
+                    f"Auto-merge hit a conflict on {pr_url} (attempt "
+                    f"{n + 1} of {MAX_CONFLICT_RESOLVES}) — the next Dev syncs "
+                    f"the branch with the default branch, resolves it and "
+                    f"pushes; the pull request then returns to REVIEW.",
+                    record))
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                        remove={from_label}, add={LABEL_EXECUTE})
         mgr._audit(pmo_id, "conflict_resolve_dispatched",

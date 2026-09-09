@@ -10,7 +10,7 @@ from devcake.domain.orchestrator import discovery
 from devcake.domain.orchestrator.markers import discovery_marker
 from devcake.domain.steward_service import StewardService
 
-from test_steward import NOW, RoutePMO, _ae, _src_run, m, make_mgr
+from test_steward import NOW, RoutePMO, _ae, _card_body, _src_run, m, make_mgr
 
 
 def run_coro(c):
@@ -255,6 +255,42 @@ def test_sweep_terminates_unroutable_batches(tmp_path):
     src_posts = [md for pid, md in pmo.comments if pid == "src"]
     assert any("`devcake:discovery-routed:v1 step=7 to=-`" in md
                and "Unroutable" in md for md in src_posts)
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+    assert mgr._discoveries_pending == set()
+    # no card for a cleared run record: the fallback ⚠️ notice, today's
+    # comment in its Record (ADR-0042 §6)
+    from fakes import assert_notice
+    [body] = src_posts
+    rec = assert_notice(body, "⚠️ **For the record.** Some discoveries cannot be routed",
+                        record_has=["`devcake:discovery-routed:v1 step=7 to=-`"])
+    assert rec.startswith("⚠️ Unroutable discoveries — the source run record was cleared")
+
+
+def test_sweep_unroutable_receipts_append_to_the_step_card(tmp_path):
+    """A run record that exists without usable findings is unroutable, but
+    its step card is on the feed: the `to=-` receipt lands in the card's
+    fold by edit (ADR-0042 §6) — no comment — and the gate still drops."""
+    from devcake.domain.orchestrator.feed import fold_sections, strip_fold
+    pmo, mgr, svc, calls, (src, _o) = _svc_setup(tmp_path)
+    r = mgr.runs.store.get("L-T-S-2-EXECUTE-AAAAAA")
+    r.result = {"outcome": "executed", "summary": "s"}     # no usable findings
+    r.feed_anchor = "card1"
+    mgr.runs.store.save(r)
+    pmo.feeds["src"].entries = [ActivityEntry(
+        ts=NOW, author="devcake", kind="comment", body=_card_body(1),
+        entry_id="card1")]
+    src.labels = src.labels | {"DEVCAKE-DISCOVERY"}
+    run_coro(discovery.discovery_sweep(mgr, src))
+    assert not any(pid == "src" for pid, _ in pmo.comments)
+    [(pid, eid, body)] = pmo.edits
+    assert (pid, eid) == ("src", "card1")
+    section = fold_sections(strip_fold(body)[1])[-1]
+    assert section.title == "Routing receipts" and section.at is not None
+    assert section.body == (
+        "⚠️ Unroutable discoveries — the source run record was cleared, so "
+        "verbatim transport is impossible. The full DISCOVERY file above "
+        "remains the record; disposition receipts:\n"
+        "`devcake:discovery-routed:v1 step=2 to=-`")
     assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
     assert mgr._discoveries_pending == set()
 

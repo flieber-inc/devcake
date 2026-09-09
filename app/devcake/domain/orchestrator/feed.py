@@ -17,9 +17,9 @@ from ...security import redact
 from ..model import Mission, MissionRef, STAGE_LABELS
 from ..run import utcnow
 from . import markers
-from .markers import (ANSWER_TOKEN_RE, COMMENT_SENTINEL, DELIVERABLE_MARKER,
-                      FEED_INLINE_MAX, PART_LINE, PLAN_FILE, REPLY_MARKER,
-                      SENTINEL_RE, STATUS_MARKER_RE, STEP_MARKER)
+from .markers import (ANSWER_TOKEN_RE, COMMENT_SENTINEL, FEED_INLINE_MAX,
+                      PART_LINE, PLAN_FILE, REPLY_MARKER, SENTINEL_RE,
+                      STATUS_MARKER_RE, STEP_MARKER)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -95,17 +95,17 @@ def _chunk_text(text: str, room: int) -> list[str]:
 
 
 def _attach_part_label(chunk: str, i: int, n: int) -> str:
-    """`Part i of n` near the top. startswith-markers stay the first line."""
+    """`Part i of n` near the top. The startswith-marker of a pre-card
+    answer comment (`_legacy_tail`) stays the first line."""
     label = _part_label(i, n)
     raw = chunk
-    for marker in (REPLY_MARKER, DELIVERABLE_MARKER):
-        if raw.startswith(marker):
-            rest = raw[len(marker):]
-            if rest.startswith("\n"):
-                rest = rest[1:]
-            if rest.startswith("\n"):
-                rest = rest[1:]
-            return f"{marker}\n\n{label}\n\n{rest}"
+    if raw.startswith(REPLY_MARKER):
+        rest = raw[len(REPLY_MARKER):]
+        if rest.startswith("\n"):
+            rest = rest[1:]
+        if rest.startswith("\n"):
+            rest = rest[1:]
+        return f"{REPLY_MARKER}\n\n{label}\n\n{rest}"
     return f"{label}\n\n{raw}"
 
 
@@ -147,16 +147,14 @@ def strip_vendor_page(body: str) -> str:
             text = text[:-2]
         elif text.endswith("\n"):
             text = text[:-1]
-    for marker in (REPLY_MARKER, DELIVERABLE_MARKER):
-        prefix = marker + "\n\n"
-        if not text.startswith(prefix):
-            continue
+    prefix = REPLY_MARKER + "\n\n"
+    if text.startswith(prefix):
         rest = text[len(prefix):]
         first, sep, after = rest.partition("\n")
         if PART_LINE.match(first):
             if after.startswith("\n"):
                 after = after[1:]
-            return marker + "\n\n" + after
+            return REPLY_MARKER + "\n\n" + after
         return text
     first, sep, after = text.partition("\n")
     if PART_LINE.match(first):
@@ -880,6 +878,23 @@ def render_notice(lead: str, what: str, *, todo: str = "",
     if sections:
         parts.append(render_fold(sections, collapsible=collapsible))
     return "\n\n".join(parts)
+
+
+def notice(mgr, lead: str, what: str, record: str, *, todo: str = "",
+           sections: Sequence[FoldSection] = ()) -> str:
+    """THE notice at every call site (ADR-0042 §4, the one rule): the head
+    — `lead`, one short sentence, an optional what-to-do — is new prose for
+    a person; the fold's `Record` section is `record`, today's comment
+    text exactly as the site built it, markers included on their own
+    lines, so every scan reads what it read and the Dev's ACTIVITY.md
+    unfolds to the byte-identical legacy entry. The head never carries a
+    backticked marker, a step-file token, a `Part i of n` line or a line
+    opening with `**` — a second copy of a marker would double-count a
+    set-valued scan, and the head is not the record. Sentinel-free:
+    `_feed` seals it."""
+    return render_notice(lead, what, todo=todo,
+                         sections=[record_section(record), *sections],
+                         collapsible=collapsible_of(mgr))
 
 
 # ── the status comment (a view) ───────────────────────────────────────────

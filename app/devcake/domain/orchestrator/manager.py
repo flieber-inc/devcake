@@ -149,6 +149,11 @@ class MissionManager:
         # a terminal answer on a memoized number is confirmed by the lookup
         # before the sweep writes.
         self._merge_pr_numbers: dict[str, int] = {}
+        # pmo_id → the mission's status comment entry id (ADR-0042 §5), for
+        # the run-less paths (sweeps); learnt at dispatch/refresh, dropped
+        # on a permanent edit failure. Process-local: the marker on the
+        # feed is the durable truth, found again at the next dispatch.
+        self._status_entries: dict[str, str] = {}
         # pmo_id → admitted attempts past the merge window that did not
         # merge (docs/03 §4.1): the second in a row hands off, so one
         # transient forge error cannot end a mission's automation. Process-

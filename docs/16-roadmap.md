@@ -953,9 +953,17 @@ until that run exists, field evidence below stays operator-self-reported.
   deliveries, and routing receipts / the deliverable note appended to
   the harvesting card's / completion notice's fold by edit (fallback: the
   old post as a notice; audits `discovery_receipt_fold_failed`,
-  `deliverable_fold_failed`); the HTML deliverable marker retired. The
-  status comment follows (PR-6). Docs 03 §4.1/§4a/§4b/§4c/§5/§8/§8a, 04,
+  `deliverable_fold_failed`); the HTML deliverable marker retired. The status comment is PR-6 (below). Docs 03 §4.1/§4a/§4b/§4c/§5/§8/§8a, 04,
   05, 07, 15, ADR-0014 addendum.
+- **The feed for readers: the status comment** (2026-09-09, ADR-0042
+  PR-6): `orchestrator/status_comment.py` — `ensure` at dispatch (found by
+  marker in the mirror's full read, created when absent, never refreshed
+  there), `refresh` at finalize end and both failure branches, after a
+  completion, a conflict route, a merge hand-off and a closed PR (inside
+  the write-back class; every failure audited, never a gate);
+  `Run.status_entry_id` threads the id without a feed read; the ladder is
+  the runs (`dispatch.run_cost` factored out of `mission_cost`). Docs 03
+  §5b, CHANGELOG.
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54
   self-decomposed tickets, 257 fresh-context runs, and 42 human-merged pull
   requests, with seven independently reproduced security-relevant findings,

@@ -41,8 +41,7 @@ from ...ports.pmo import CRITICAL_BOUNDED_WAIT_S, pmo_call, pmo_call_ctx
 from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
-from . import freshness, steps
-from . import feed
+from . import feed, freshness, status_comment, steps
 from .feed import unquoted
 from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
 
@@ -160,6 +159,12 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
                 await mgr._checkpoint(run, steps.REVIEW_DONE, _core)
             else:
                 await _core()
+            # ADR-0042 §5 — the status comment reads "done" (a view; never
+            # a gate; inside the write-back class so a starved key does
+            # not refuse it)
+            await status_comment.refresh(
+                mgr, ref.pmo_id, reason=spec.audit_action, run=run,
+                mission=mission, pr_url=pr_url)
         anchor = posted[0] if posted else None
         try:
             if run is not None:
@@ -235,6 +240,9 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
                                        remove={from_label}, add={LABEL_EXECUTE})
         mgr._audit(pmo_id, "conflict_resolve_dispatched",
                     f"attempt {n + 1} ({pr_url})")
+        with write_back_class():
+            await status_comment.refresh(mgr, pmo_id, reason="conflict_routed",
+                                         pr_url=pr_url)
         return True
     except Exception:  # noqa: BLE001 — degrade with record: conflict routing failure is logged; caller keeps the mission parked for a human
         log.exception("conflict auto-resolve routing failed for %s", key)

@@ -28,6 +28,21 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   a golden test holds the pre-card feed and the card feed to the same
   folder. Adapters gained an edit-own-comment operation and a fold-syntax
   capability along the way.
+- **Changed — messages to a person open with a fixed lead; receipts stop
+  being comments.** Every comment DevCake writes to a person — a hand-off,
+  an awaiting-merge note, a give-up, a loop or freshness warning, a
+  completion, a decomposition note, a re-review or conflict-resolve
+  directive, a delivery of leads — now opens with `✋ Needs you.`,
+  `⚠️ For the record.`, `ℹ️`, a directive lead or `📨 Leads from …`, says
+  what happened in one sentence and what to do, and keeps the comment text
+  of the previous build, markers included, in its collapsed fold as the
+  record; the Dev's activity folder is unfolded from that record and stays
+  byte-identical. Discovery routing receipts and the deliverable-archive
+  note no longer post comments of their own: they are appended to the fold
+  of the step card (or the completion notice) they belong to, and fall
+  back to the old comment shape only when that edit is impossible. The
+  HTML deliverable marker is retired for the `devcake:deliverable:v1`
+  token.
 
 ## v0.5.17 (2026-09-09)
 

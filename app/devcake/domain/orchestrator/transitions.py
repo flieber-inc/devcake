@@ -96,12 +96,21 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
         async def _illegal():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
                                    remove=set(), add={LABEL_SKIP})
-            await mgr._feed(
-                pmo_id, run.pmo_kind,
+            record = (
                 f"⛔ DevCake received outcome `{outcome or '(empty)'}` from a "
                 f"**{run.mission_type}** run — not a legal outcome for that step. "
                 f"No transition was applied; parked with `DEVCAKE-SKIP` for a "
                 f"human to inspect.")
+            await mgr._feed(
+                pmo_id, run.pmo_kind,
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"The {run.mission_type} run reported an outcome that is "
+                    f"not legal for that step, so nothing was applied and the "
+                    f"mission is parked.",
+                    record,
+                    todo="Inspect the run, then remove the `DEVCAKE-SKIP` "
+                         "label to let DevCake continue."))
             mgr._audit(pmo_id, "illegal_outcome",
                         f"{outcome or '(empty)'} from {run.mission_type}")
         await mgr._checkpoint(run, steps.TRANSITION_ILLEGAL, _illegal)
@@ -147,11 +156,18 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
     decomposition_stopped = outcome == "decomposed" and LABEL_SKIP in live.labels
     if review_stopped or decomposition_stopped or feed.stage_of(live) not in expected_stages:
         async def _external():
-            await mgr._feed(
-                pmo_id, run.pmo_kind,
+            record = (
                 f"ℹ️ DevCake completed a **{run.mission_type}** run (`{run.run_id}`), but "
                 f"this mission's state was changed externally while it ran. The output is "
                 f"posted above; **no status or label changes were applied**.")
+            await mgr._feed(
+                pmo_id, run.pmo_kind,
+                feed.notice(
+                    mgr, feed.INFO,
+                    f"The {run.mission_type} run finished, but this mission "
+                    f"was changed while it ran — its output is posted above "
+                    f"and DevCake applied no status or label change.",
+                    record))
             mgr._audit(pmo_id, "external_transition", run.run_id)
         await mgr._checkpoint(run, steps.TRANSITION_EXTERNAL, _external)
         run.verdict = ("skipped: mission state changed externally while the "
@@ -313,11 +329,26 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"⚠️ **Hand-off #{nth} on this step.** If DevCake keeps returning "
                 f"here, the mission may need re-scoping — add `DEVCAKE-SKIP` to "
                 f"stop DevCake on it.\n\n")
+            summary = str(result.get('summary', '(no details reported)'))
             baton = (f"{warn}✋ **DevCake needs a human.** "
-                     f"{result.get('summary', '(no details reported)')}\n\n"
+                     f"{summary}\n\n"
                      f"When resolved, remove the `DEVCAKE-NEEDS-HUMAN` label and "
                      f"DevCake resumes where it left off.")
-            await mgr._feed(pmo_id, run.pmo_kind, baton)
+            # the head quotes the Dev's summary (model text, ADR-0014 D2);
+            # the Record keeps today's baton, summary unquoted, as it was
+            escalation = "" if nth < 2 else (
+                f" This is hand-off #{nth} on this step — if DevCake keeps "
+                f"returning here the mission may need re-scoping; add the "
+                f"`DEVCAKE-SKIP` label to stop it.")
+            await mgr._feed(
+                pmo_id, run.pmo_kind,
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"The Dev stopped on something only a person can clear:"
+                    f"{escalation}\n\n" + feed.blockquote(summary),
+                    baton,
+                    todo="When it is resolved, remove the `DEVCAKE-NEEDS-HUMAN` "
+                         "label and DevCake resumes where it left off."))
             if run.pmo_kind == "project":
                 try:
                     await mgr.pmo.post_feed(
@@ -338,10 +369,18 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
         async def _unknown():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
                                        remove=set(), add={LABEL_SKIP})
-            await mgr._feed(
-                pmo_id, run.pmo_kind,
+            record = (
                 f"ℹ️ DevCake received unknown outcome `{outcome}` — parked with "
                 f"`DEVCAKE-SKIP` for a human to inspect.")
+            await mgr._feed(
+                pmo_id, run.pmo_kind,
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    "The run reported an outcome DevCake does not know, so "
+                    "the mission is parked.",
+                    record,
+                    todo="Inspect the run, then remove the `DEVCAKE-SKIP` "
+                         "label to let DevCake continue."))
             mgr._audit(pmo_id, "label_add",
                         f"{LABEL_SKIP} (unknown outcome {outcome})")
         await mgr._checkpoint(run, steps.TRANSITION_UNKNOWN_PARK, _unknown)

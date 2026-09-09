@@ -27,7 +27,7 @@ MEMORY_MOUNT_SENTENCE = (
 from .. import failure_taxonomy
 from ..model import Activity, LABEL_FAILED, Mission, MissionType, derive
 from ..workspaces import WorkspaceUnavailable
-from . import markers
+from . import feed, markers
 from . import schedule
 from .activity_payload import activity_payload, push_activity_repo
 from ..run import Run, aware, utcnow
@@ -1342,14 +1342,23 @@ async def _unlimited_warn(mgr, mission: Mission, mtype: MissionType,
         return
     _UNLIMITED_WARNED.add(key)
     cost = mission_cost(mgr, mission.pmo_id)
-    await mgr._feed(
-        mission.pmo_id, mission.pmo_kind,
+    record = (
         f"⚠️ **Unlimited-attempts mode:** this mission's {mtype.value} step "
         f"has failed {failures} consecutive times, and `attempt_reset: "
         f"unlimited` means DevCake will keep retrying indefinitely. "
         f"Cumulative recorded cost so far: ${cost:.2f}. Add `DEVCAKE-SKIP` "
         f"to stop this mission, or change Policies → Attempts & retries "
         f"to restore give-up.")
+    await mgr._feed(
+        mission.pmo_id, mission.pmo_kind,
+        feed.notice(
+            mgr, feed.FOR_THE_RECORD,
+            f"The {mtype.value} step has failed {failures} times in a row "
+            f"and the attempts policy is unlimited, so DevCake keeps "
+            f"retrying; recorded cost so far ${cost:.2f}.",
+            record,
+            todo="Add the `DEVCAKE-SKIP` label to stop this mission, or "
+                 "restore give-up under Policies → Attempts & retries."))
     mgr._audit(mission.pmo_id, "unlimited_loop_warning",
                f"{mtype.value} x{failures}")
     log.warning("unlimited-attempts warning for %s (%s): %d failures",
@@ -1435,7 +1444,13 @@ async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> 
         await mgr.pmo.swap_labels(mission.ref, remove=set(), add={LABEL_FAILED})
         await mgr._feed(
             mission.pmo_id, mission.pmo_kind,
-            _give_up_feed_body(mission, mtype, attempts, last))
+            feed.notice(
+                mgr, feed.NEEDS_YOU,
+                f"DevCake gave up on the {mtype.value} step after {attempts} "
+                f"failed attempts; the last error and the final run are in "
+                f"the record below.",
+                _give_up_feed_body(mission, mtype, attempts, last),
+                todo="Remove the `DEVCAKE-FAILED` label to retry."))
         mgr._audit(mission.pmo_id, "devcake_failed", mtype.value)
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 

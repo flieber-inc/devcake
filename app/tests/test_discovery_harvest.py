@@ -376,6 +376,10 @@ def test_truncated_source_is_raised_to_humans_and_retired(tmp_path):
     run_coro(discovery.discovery_sweep(mgr, m))
     assert not any("to=-" in c for c in fake.comments)
     assert any("readable page ceiling" in c for c in fake.comments)
+    from fakes import assert_notice
+    assert_notice(next(c for c in fake.comments if "readable page ceiling" in c),
+                  "⚠️ **For the record.**",
+                  record_has=["⚠️ This mission's feed exceeds the readable page ceiling"])
     assert ({LABEL_DISCOVERY}, set()) in fake.swaps
     assert mgr._discoveries_pending == set()
 

@@ -12,7 +12,8 @@ from devcake.domain.repo_routing import (REASON_ZERO_REPO, marker_repo,
                                          resolve_repo)
 from devcake.domain.run import Run
 from devcake.domain.orchestrator import dispatch, sweeps
-from devcake.domain.orchestrator.markers import DELIVERABLE_MARKER
+from devcake.domain.orchestrator import feed as feed_mod
+from devcake.domain.orchestrator.markers import DELIVERABLE_TOKEN
 
 
 def run_coro(c):
@@ -615,7 +616,7 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
     assert "report/REPORT.md" in names and "report/data.bin" in names
     assert "gone.txt" not in names                 # removed files excluded
     assert z.read("report/data.bin") == b"\x00\x01\x02"   # binary intact
-    assert any(DELIVERABLE_MARKER in f for f in feed)
+    assert any(DELIVERABLE_TOKEN in f for f in feed)
     assert "deliver:zip" in run.finalized_steps    # idempotency recorded
     # idempotent: a second call does nothing
     uploaded.clear()
@@ -679,7 +680,7 @@ def test_mission_zip_delivery_ignores_quoted_deliverable_marker(tmp_path):
         tmp_path, "> attaching `T-1-deliverable.zip` next\n`devcake:v1`")
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert "T-1-deliverable.zip" in uploaded
-    assert any(DELIVERABLE_MARKER in f for f in feed)
+    assert any(DELIVERABLE_TOKEN in f for f in feed)
 
 
 def test_mission_zip_delivery_skips_on_unquoted_marker(tmp_path):
@@ -755,7 +756,7 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
     run_coro(mgr.deliver_internal_zip(run, pr))
     assert "T-1-deliverable.zip" in uploaded
     assert "deliver:zip" in run.finalized_steps
-    assert any(DELIVERABLE_MARKER in f for f in feed)
+    assert any(DELIVERABLE_TOKEN in f for f in feed)
 
 
 def test_external_mission_zip_respects_toggle(tmp_path):
@@ -1080,20 +1081,91 @@ def test_deliver_skips_when_attachments_unsupported(tmp_path):
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert uploaded == {}
     assert not any("packaging failed" in (f or "") for f in feed)
-    assert not any("DEVCAKE-DELIVERABLE" in (f or "") for f in feed)
+    assert not any(DELIVERABLE_TOKEN in (f or "") for f in feed)
+
+
+def _deliverable_section(body):
+    return next(s for s in feed_mod.fold_sections(feed_mod.strip_fold(body)[1])
+                if s.title == feed_mod.SECTION_DELIVERABLE)
 
 
 def test_deliverable_note_is_marked_and_honest(tmp_path):
-    """The feed note opens with DELIVERABLE_MARKER (downstream consumers
-    classify on startswith) and says what the zip IS — the audit copy — so no
-    reader, human or bot, mistakes it for the mission's answer."""
+    """The note is a `Deliverable` fold section whose FIRST line is the
+    backticked deliverable token (ADR-0042 §7 — no HTML marker; downstream
+    consumers classify on the token) and it says what the zip IS — the
+    audit copy — so no reader, human or bot, mistakes it for the mission's
+    answer. With no completion notice to append to, it rides an ℹ️ notice
+    of its own; the zip filename stays unquoted (the probe greps it)."""
     mgr, uploaded, feed, m, pr = _mission_delivery_setup(
         tmp_path, "unrelated earlier comment")
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
-    note = next(f for f in feed if DELIVERABLE_MARKER in f)
-    assert note.startswith(DELIVERABLE_MARKER)
-    assert "T-1-deliverable.zip" in note
-    assert "audit copy, not the answer" in note
+    note = next(f for f in feed if DELIVERABLE_TOKEN in f)
+    assert note.startswith(feed_mod.INFO + " Archived the merged change set")
+    section = _deliverable_section(note)
+    assert section.body.startswith(DELIVERABLE_TOKEN + "\n📦 For the record")
+    assert section.at is not None
+    assert "T-1-deliverable.zip" in feed_mod.unquoted(note)
+    assert "audit copy, not the answer" in section.body
+    assert "<!--" not in note
+
+
+def test_deliverable_note_appends_to_the_completion_notice(tmp_path):
+    """ADR-0042 §6: when the completion chokepoint hands over its notice's
+    (entry id, body), the note is appended to that notice's fold through
+    the edit chokepoint — no new comment, no feed read — and the sweep's
+    idempotency probe still finds the zip filename unquoted in the edited
+    body."""
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
+        tmp_path, "unrelated earlier comment")
+    edits = []
+
+    async def _edit(pmo_id, kind, entry_id, markdown):
+        edits.append((pmo_id, kind, entry_id, markdown))
+    mgr._edit = _edit
+    done = feed_mod.notice(mgr, feed_mod.INFO, "Merged — the mission is done.",
+                           "✅ PR http://gitea/pr/1 merged — mission done (merge sweep).")
+    run_coro(mgr.deliver_internal_zip_for_mission(
+        m, pr, anchor=("c9", done + "\n\n`devcake:v1`")))
+    assert "T-1-deliverable.zip" in uploaded
+    assert feed == [], "appended, never posted"
+    [(pmo_id, kind, entry_id, body)] = edits
+    assert (pmo_id, kind, entry_id) == ("p1", "issue", "c9")
+    titles = [s.title for s in feed_mod.fold_sections(feed_mod.strip_fold(body)[1])]
+    assert titles == ["Record", "Deliverable"]
+    section = _deliverable_section(body)
+    assert section.body.startswith(DELIVERABLE_TOKEN)
+    assert "T-1-deliverable.zip" in feed_mod.unquoted(body)
+    assert "`devcake:v1`" not in body                # _edit re-seals
+
+
+def test_deliverable_note_falls_back_to_a_post_when_the_edit_fails(tmp_path):
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
+        tmp_path, "unrelated earlier comment")
+    audits = []
+    mgr._audit = lambda pmo_id, action, detail="": audits.append(action)
+
+    async def _edit(*a):
+        raise RuntimeError("entity not found")
+    mgr._edit = _edit
+    run_coro(mgr.deliver_internal_zip_for_mission(
+        m, pr, anchor=("gone", "✅ done")))
+    assert "deliverable_fold_failed" in audits
+    note = next(f for f in feed if DELIVERABLE_TOKEN in f)
+    assert _deliverable_section(note).body.startswith(DELIVERABLE_TOKEN)
+
+
+def test_deliverable_probe_finds_the_filename_inside_a_fold(tmp_path):
+    """The idempotency probe reads the appended section like any other
+    unquoted text: a fold is not a quote."""
+    mgr0, _u, _f, m0, _p = _mission_delivery_setup(tmp_path / "a", "x")
+    body = feed_mod.append_fold_section(
+        "✅ done", feed_mod.FoldSection(
+            feed_mod.SECTION_DELIVERABLE,
+            DELIVERABLE_TOKEN + "\n📦 archived [T-1-deliverable.zip](https://x)"),
+        collapsible=feed_mod.FOLD_DETAILS) + "\n\n`devcake:v1`"
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(tmp_path / "b", body)
+    run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
+    assert not uploaded
 
 
 def test_gitea_mission_repo_binding_row(monkeypatch):

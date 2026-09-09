@@ -16,7 +16,7 @@ must never wedge a close.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ...security import redact
 from ..model import LABEL_DISCOVERY, MissionRef
@@ -24,7 +24,10 @@ from ..run import TERMINAL_STATES, Run, utcnow
 from . import board
 from . import feed_memo
 from . import steps
-from .feed import blockquote, post_attachment_comment, unquoted
+from .feed import (FOR_THE_RECORD, SECTION_ROUTING_RECEIPTS, FoldSection,
+                   _part_coords, append_fold_section, blockquote,
+                   collapsible_of, notice, post_attachment_comment,
+                   strip_fold, unquoted)
 from .markers import (DISCOVERY_FIELD_MAX, DISCOVERY_PREVIEW_MAX, defang,
                       discovery_marker, discovery_posts, discovery_receipts,
                       finding_fingerprint)
@@ -275,6 +278,10 @@ class SourceState:
     posted: list[tuple[int, int]]     # (step, n) markers on the source feed
     receipted: set[tuple[int, str]]   # (step, target) routing receipts
     truncated: bool = False           # fail-closed: counts unknown
+    # the LIVE read's entries (memo=False only — never memoized): the
+    # receipt append finds the step card's current body here, so a writer
+    # never pays a second read (ADR-0042 §6)
+    entries: list = field(default_factory=list, repr=False)
 
     @property
     def pending(self) -> list[tuple[int, int]]:
@@ -319,7 +326,67 @@ async def scan_source(mgr, m, *, memo: bool = True) -> SourceState:
     if fm is not None and not state.truncated:
         fm.put("discovery", m, state, gen,
                feed_until=feed_memo.feed_until(act.entries), floor=floor)
+    if not memo:
+        # the live path only: a memoized value must stay a small summary
+        state.entries = list(act.entries)
     return state
+
+
+def _fold_anchor(state, source_run) -> tuple[str, str] | None:
+    """(entry id, current body) of the step card that harvested a batch —
+    the source run's `feed_anchor` — when the live scan holds it as a
+    comment with a fold that is not paged; None otherwise (a pre-card
+    harvest, a paged card, an anchor a person deleted)."""
+    anchor = getattr(source_run, "feed_anchor", "") if source_run else ""
+    if not anchor:
+        return None
+    for e in getattr(state, "entries", None) or ():
+        if e.entry_id != anchor:
+            continue
+        body = e.body or ""
+        if _part_coords(body) is None and strip_fold(body)[1] is not None:
+            return anchor, body
+        return None
+    return None
+
+
+async def record_receipts(mgr, pmo_id: str, state, pairs, *, run_ix,
+                          body_of, what: str) -> None:
+    """Routing receipts never make a new entry when they can help it
+    (ADR-0042 §6): per step, the receipt lines — `body_of(pairs)`, today's
+    receipt comment for exactly those pairs, verbatim — are appended as a
+    `Routing receipts` section (stamped with the append time) to the fold
+    of the step card that harvested them, through the edit chokepoint.
+    Steps without a card in the live scan land together on ONE ⚠️ notice
+    whose Record is today's comment for them; an append that fails for any
+    reason (a paged or over-cap body → ValueError, a transient, a vanished
+    entry) is audited `discovery_receipt_fold_failed` and takes the same
+    fallback, so `pending = posted − receipted` always closes — the scan
+    reads folds and notices alike through `unquoted`. The fallback post's
+    own failure propagates: the caller audits and the sweep re-drives."""
+    by_step: dict[int, list] = {}
+    for s, t in pairs:
+        by_step.setdefault(s, []).append((s, t))
+    fallback: list = []
+    for step in sorted(by_step):
+        found = _fold_anchor(state, run_ix.get((pmo_id, step)))
+        if found is None:
+            fallback += by_step[step]
+            continue
+        entry_id, body = found
+        section = FoldSection(SECTION_ROUTING_RECEIPTS,
+                              body_of(by_step[step]), at=utcnow())
+        try:
+            await mgr._edit(pmo_id, "issue", entry_id, append_fold_section(
+                body, section, collapsible=collapsible_of(mgr)))
+        except Exception as ex:  # noqa: BLE001 — the receipt must land somewhere: audited, then today's post
+            mgr._audit(pmo_id, "discovery_receipt_fold_failed",
+                       f"step {step}: {str(ex)[:160]}")
+            fallback += by_step[step]
+    if fallback:
+        await mgr._feed(pmo_id, "issue",
+                        notice(mgr, FOR_THE_RECORD, what, body_of(fallback)),
+                        externalize=False)
 
 
 async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
@@ -383,11 +450,18 @@ async def discovery_sweep(mgr, m) -> None:
         try:
             await mgr._feed(
                 m.pmo_id, "issue",
-                "⚠️ This mission's feed exceeds the readable page ceiling, "
-                "so discovery-routing bookkeeping (delivery dedup, receipt "
-                "arithmetic) is impossible and now retired for it. The "
-                "DISCOVERY_<n>.md attachments above remain the record — "
-                "carry them to related missions manually if they matter.",
+                notice(
+                    mgr, FOR_THE_RECORD,
+                    "This mission's feed is past the readable page ceiling, "
+                    "so discovery-routing bookkeeping is retired for it; the "
+                    "DISCOVERY files above remain the record.",
+                    "⚠️ This mission's feed exceeds the readable page ceiling, "
+                    "so discovery-routing bookkeeping (delivery dedup, receipt "
+                    "arithmetic) is impossible and now retired for it. The "
+                    "DISCOVERY_<n>.md attachments above remain the record — "
+                    "carry them to related missions manually if they matter.",
+                    todo="Carry them to related missions by hand if they "
+                         "matter."),
                 externalize=False)
             mgr._audit(m.pmo_id, "discovery_unreadable",
                        "feed past the full-read ceiling — routing "
@@ -423,15 +497,21 @@ async def discovery_sweep(mgr, m) -> None:
         return
     gone = _gone_batches(mgr, m, pending)
     if gone:
-        lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
-                 for s, _n in sorted(gone)]
+        def unroutable_body(sel) -> str:
+            """Today's unroutable comment for these (step, `-`) pairs."""
+            lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
+                     for s, _t in sel]
+            return ("⚠️ Unroutable discoveries — the source run record was "
+                    "cleared, so verbatim transport is impossible. The full "
+                    "DISCOVERY file above remains the record; disposition "
+                    "receipts:\n" + "\n".join(lines))
         try:
-            await mgr._feed(
-                m.pmo_id, "issue",
-                "⚠️ Unroutable discoveries — the source run record was "
-                "cleared, so verbatim transport is impossible. The full "
-                "DISCOVERY file above remains the record; disposition "
-                "receipts:\n" + "\n".join(lines), externalize=False)
+            await record_receipts(
+                mgr, m.pmo_id, state, [(s, "-") for s, _n in sorted(gone)],
+                run_ix=harvest_run_index(mgr), body_of=unroutable_body,
+                what="Some discoveries cannot be routed — their source run "
+                     "record was cleared; the DISCOVERY files above remain "
+                     "the record.")
             mgr._audit(m.pmo_id, "discovery_unroutable",
                        f"steps {[s for s, _ in gone]}: run record cleared")
         except Exception as ex:  # noqa: BLE001 — retried next sweep

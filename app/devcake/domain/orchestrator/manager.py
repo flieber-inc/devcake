@@ -301,9 +301,10 @@ class MissionManager:
         return await steward.finalize_steward(self, run, payload)
 
     @with_pmo_call("critical")
-    async def deliver_internal_zip(self, run, pr):
-        return await deliver.deliver_internal_zip(self, run, pr)
+    async def deliver_internal_zip(self, run, pr, *, anchor=None):
+        return await deliver.deliver_internal_zip(self, run, pr, anchor=anchor)
 
     @with_pmo_call("critical")
-    async def deliver_internal_zip_for_mission(self, m, pr):
-        return await deliver.deliver_internal_zip_for_mission(self, m, pr)
+    async def deliver_internal_zip_for_mission(self, m, pr, *, anchor=None):
+        return await deliver.deliver_internal_zip_for_mission(
+            self, m, pr, anchor=anchor)

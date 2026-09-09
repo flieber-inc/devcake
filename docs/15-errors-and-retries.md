@@ -154,7 +154,7 @@ Scenario captures: `grok_loop_*` under `app/tests/fixtures/harness_streams/`
 After `max_attempts` (default 3) counted failures of the **same step** (mission + type):
 
 1. Add the `DEVCAKE-FAILED` label (one of the managed labels in `ALL_LABELS`, `02-domain-model.md` §5 / `domain/model.py`).
-2. Post a comment: last error class + message, attempt count, and the OpenObserve trace link for the final attempt.
+2. Post a `✋ **Needs you.**` notice (`03-mission-lifecycle.md` §4c) whose record carries the last error class + message, attempt count, and the OpenObserve trace link for the final attempt.
 3. Stop scheduling the Mission (derivation row 8).
 4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event **for that PMO instance + `pmo_id`** count toward the next give-up (advisory local state — `10-persistence.md` §5 / §6; bare ids collide across instances).
 
@@ -169,7 +169,7 @@ The counter is **seq-independent** (failed runs post transcripts and advance `se
 The `human_needed` outcome (`03-mission-lifecycle.md` §4a) is a **successful run** — the Dev deliberately reported that only a human can clear an external obstacle. Consequences:
 
 1. The run finishes in state `finished` and **never counts toward `max_attempts`** — no watermark or counter reset is needed.
-2. The app adds `DEVCAKE-NEEDS-HUMAN` (derivation row 11 halts scheduling) and posts a baton-pass comment stating precisely what the human must do; an ONBOARD hand-off also restores the status to `backlog`.
+2. The app adds `DEVCAKE-NEEDS-HUMAN` (derivation row 11 halts scheduling) and posts the baton as a `✋ **Needs you.**` notice stating precisely what the human must do; an ONBOARD hand-off also restores the status to `backlog`.
 3. **Recovery is human:** resolve the obstacle, remove the label → the Mission re-derives its stage next poll and resumes where it left off.
 
 Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = clean hand-off.

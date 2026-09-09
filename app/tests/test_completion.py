@@ -12,11 +12,12 @@ from types import SimpleNamespace
 import pytest
 
 from devcake.domain.model import MissionRef
-from devcake.domain.orchestrator import completion, review
+from devcake.domain.orchestrator import completion, feed, review
 from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
 from devcake.domain.run import Run
 from devcake.ports.forge import ForgeError, PullRequest
 
+from fakes import assert_notice
 from test_transitions import FakeForge, FakePMO, make_mgr, mission, run_coro
 
 
@@ -56,8 +57,8 @@ def test_cause_table_labels_copy_and_disclosure(tmp_path, monkeypatch,
                         fake_disclose)
     zipped = []
 
-    async def fake_zip(*a):
-        zipped.append(a)
+    async def fake_zip(*a, **kw):
+        zipped.append((a, kw))
 
     monkeypatch.setattr(mgr, "deliver_internal_zip", fake_zip)
     monkeypatch.setattr(mgr, "deliver_internal_zip_for_mission", fake_zip)
@@ -73,9 +74,16 @@ def test_cause_table_labels_copy_and_disclosure(tmp_path, monkeypatch,
 
     assert label not in m.labels, "the stage/park label must come off"
     assert m.status == "done"
-    # byte-exact legacy copy + the _feed chokepoint's provenance sentinel
-    assert fake.comments == [f"{copy}\n\n{COMMENT_SENTINEL}"]
-    assert len(zipped) == 1
+    # an ℹ️ notice whose Record is the byte-exact legacy copy (ADR-0042
+    # §4), sealed by the _feed chokepoint's provenance sentinel
+    [body] = fake.comments
+    assert body.endswith(f"\n\n{COMMENT_SENTINEL}")
+    assert assert_notice(body, feed.INFO, record_has=[copy]) == copy
+    assert "https://forge/pr/8" in body.split("\n", 1)[0]
+    # the notice's (entry id, body) reaches the deliverable step, so the
+    # zip note can be appended to its fold (ADR-0042 §6)
+    [(_args, kw)] = zipped
+    assert kw["anchor"] == ("c1", body[:-len(f"\n\n{COMMENT_SENTINEL}")])
     assert disclosed == (["p1"] if discloses else [])
     if run:
         assert "review:done" in run.finalized_steps
@@ -87,8 +95,8 @@ def test_run_path_redelivery_skips_core_but_retries_zip(tmp_path, monkeypatch):
     pr = PullRequest(number=8, url="https://forge/pr/8", state="open")
     zipped = []
 
-    async def fake_zip(*a):
-        zipped.append(a)
+    async def fake_zip(*a, **kw):
+        zipped.append((a, kw))
 
     monkeypatch.setattr(mgr, "deliver_internal_zip", fake_zip)
     run = _review_run()
@@ -100,6 +108,9 @@ def test_run_path_redelivery_skips_core_but_retries_zip(tmp_path, monkeypatch):
             pr=pr, pr_url="https://forge/pr/8", run=run))
     assert len(fake.comments) == 1, "checkpointed core must not re-post"
     assert len(zipped) == 2, "zip has its own idempotency (deliver:zip)"
+    # a redelivered core never re-posts, so the anchor is unknown to the
+    # retried zip step: it posts its own notice instead (deliver.py)
+    assert zipped[0][1]["anchor"][0] == "c1" and zipped[1][1]["anchor"] is None
 
 
 def test_zip_failure_never_undoes_done(tmp_path, monkeypatch):

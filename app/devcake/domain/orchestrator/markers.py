@@ -66,18 +66,15 @@ FEED_INLINE_MAX = 2048
 # at the step transcript, not a non-existent attachment.
 REPLY_MARKER = "<!-- DEVCAKE-REPLY -->"
 
-# The deliverable-zip feed note, marked so any feed consumer can classify it
-# as packaging bookkeeping — an auth-walled zip link must never be mistaken
-# for the mission's answer. Same startswith contract as REPLY_MARKER. Wording
-# says the zip is the audit copy, not the answer (docs/05 §4).
-DELIVERABLE_MARKER = "<!-- DEVCAKE-DELIVERABLE -->"
-
 # ADR-0042 §7 — no marker rides as an HTML comment (one vendor renders them
-# as text). The answer and the deliverable note are marked by backticked
-# tokens inside the step card's / notice's fold instead; the two HTML
-# markers above survive only as the PROJECTION's legacy shapes (the Dev's
+# as text). The answer is marked by a backticked token inside the step
+# card's fold; the deliverable-zip note (packaging bookkeeping — an
+# auth-walled zip link must never be mistaken for the mission's answer;
+# the wording says the zip is the audit copy, docs/05 §4) opens with the
+# deliverable token as the first line of its fold section. The HTML reply
+# marker above survives only as the PROJECTION's legacy shape (the Dev's
 # ACTIVITY.md is unfolded from the record byte for byte) and on pre-card
-# feeds.
+# feeds; the HTML deliverable marker is retired outright.
 ANSWER_TOKEN_RE = re.compile(r"`devcake:answer:v1 step=(\d+)`")
 DELIVERABLE_TOKEN = "`devcake:deliverable:v1`"
 # ADR-0042 §5 — the one status comment per mission, found again by this

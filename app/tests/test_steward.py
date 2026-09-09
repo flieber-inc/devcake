@@ -39,7 +39,9 @@ class MapPMO:
 
     def capabilities(self):
         from fakes import fake_pmo_capabilities
-        return fake_pmo_capabilities(relations_supported=self._relations_supported)
+        return fake_pmo_capabilities(
+            relations_supported=self._relations_supported,
+            comment_max_chars=getattr(self, "comment_max_chars", None))
 
     async def list_all(self, team_ref):
         return self.missions
@@ -136,6 +138,10 @@ def test_apply_steward_edges_validates_everything(tmp_path):
     pmo_id, comment = pmo.comments[-1]
     assert pmo_id == "id" and "T-B" in comment
     assert comment.endswith("`devcake:v1`")        # notification is sentinel-signed
+    from fakes import assert_notice
+    assert_notice(comment, "ℹ️ DevCake mapped a blocking relation",
+                  record_has=["🔗 DevCake mapped a blocking relation: this "
+                              "mission is blocked by **T-B**"])
 
 
 def test_apply_steward_edges_skips_when_relations_unsupported(tmp_path):
@@ -979,6 +985,24 @@ def test_apply_routes_delivers_receipts_and_drops_label(tmp_path):
     assert "leads, not truths" in body
     assert "finding 0 about the config" in body        # verbatim from record
     assert "— steward:" in body
+    # the leads notice (ADR-0042 §6): lead, the finding quoted in the head,
+    # the delivery comment as it was in the Record — the elevated marker
+    # counted exactly once, the fingerprints inside the fold
+    from devcake.domain.orchestrator.feed import strip_fold, unquoted
+    from devcake.domain.orchestrator.markers import (discovery_in_keys,
+                                                     finding_fingerprints)
+    from fakes import assert_notice
+    rec = assert_notice(body, "📨 **Leads from T-S, step 2.** 1 lead — leads, not truths",
+                        record_has=["`devcake:discovery-in:v1 src=T-S step=2`",
+                                    "🔎 [T-S · step 2 ·", "**1.**",
+                                    "> finding 0 about the config",
+                                    "*— steward: target touches the same config*"])
+    assert rec.startswith("`devcake:discovery-in:v1 src=T-S step=2`\n\n🔎 [T-S")
+    assert "> finding 0 about the config" in strip_fold(body)[0]
+    assert "> — steward: target touches the same config" in strip_fold(body)[0]
+    assert unquoted(body).count("discovery-in:v1 src=T-S step=2") == 1
+    assert discovery_in_keys(unquoted(body)) == {("T-S", 2)}
+    assert len(finding_fingerprints(unquoted(body))) == 1
     src_posts = [md for pid, md in pmo.comments if pid == "src"]
     assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
                for md in src_posts)
@@ -1170,6 +1194,134 @@ def test_apply_routes_routed_nowhere_still_receipts(tmp_path):
     assert any("`devcake:discovery-routed:v1 step=2 to=-`" in md
                for md in src_posts)
     assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+    # no step card on the source (a pre-card harvest): today's receipt
+    # comment rides a ⚠️ notice's Record — the fallback shape
+    from fakes import assert_notice
+    [body] = src_posts
+    rec = assert_notice(body, "⚠️ **For the record.** Routing receipts",
+                        record_has=["`devcake:discovery-routed:v1 step=2 to=-`"])
+    assert rec == ("🧭 Discovery routing receipts (dispositioned batches; "
+                   "`to=-` = routed nowhere):\n"
+                   "`devcake:discovery-routed:v1 step=2 to=-`")
+    assert pmo.edits == []
+
+
+# ── ADR-0042 §6: receipts append to the source step card's fold ─────────────
+
+def _card_body(n=2, pad=""):
+    """A step card on the source feed whose Discoveries section carries the
+    harvest marker for step 2 — the entry the routing receipts belong to."""
+    from devcake.domain.orchestrator.feed import (FoldSection, StepCardParts,
+                                                  render_step_card)
+    from devcake.domain.orchestrator.markers import discovery_marker
+    from devcake.ports.pmo import FOLD_DETAILS
+    parts = StepCardParts(
+        seq=2, mission_type="EXECUTE", glyph="🔀", outcome_word="executed",
+        result_line="Pull request https://forge.example/pr/8.",
+        next_line="DevCake — REVIEW.", transcript_name="2_EXECUTE.md",
+        transcript_url="https://files.example/2_EXECUTE.md",
+        sections=[FoldSection("Discoveries", discovery_marker(2, n) + pad),
+                  FoldSection("Run", "`L-T-S-2-EXECUTE-AAAAAA`")])
+    return render_step_card(parts, collapsible=FOLD_DETAILS) + "\n\n`devcake:v1`"
+
+
+def _card_setup(tmp_path, *, n=2, pad="", paged=False):
+    pmo, mgr, run = _route_setup(tmp_path, n=n)
+    body = _card_body(n, pad)
+    if paged:
+        body = "Part 1 of 2\n\n" + body
+    pmo.feeds["src"].entries = [ActivityEntry(
+        ts=NOW, author="devcake", kind="comment", body=body, entry_id="card1")]
+    src_run = mgr.runs.store.get("L-T-S-2-EXECUTE-AAAAAA")
+    src_run.feed_anchor = "card1"
+    mgr.runs.store.save(src_run)
+    return pmo, mgr, run
+
+
+def test_receipts_append_to_the_source_step_card(tmp_path):
+    """A source with a step card: the receipt is a `Routing receipts`
+    section appended to the card's fold by edit — no new comment — and
+    the rescan reads it there, so pending closes and the label drops; a
+    re-run finds the receipt inside the fold and writes nothing."""
+    from devcake.domain.orchestrator.feed import (fold_sections, strip_fold,
+                                                  unquoted)
+    from devcake.domain.orchestrator.markers import (discovery_posts,
+                                                     discovery_receipts)
+    pmo, mgr, run = _card_setup(tmp_path)
+    mgr._discoveries_pending.add("src")
+    assert _apply(mgr, run, [_route()]) == (1, 0)
+    assert _src_comments(pmo) == []                    # nothing posted on the source
+    [(pid, eid, body)] = pmo.edits
+    assert (pid, eid) == ("src", "card1")
+    assert body.startswith("🔀 Step 2 · EXECUTE · executed")
+    last = fold_sections(strip_fold(body)[1])[-1]
+    assert last.title == "Routing receipts" and last.at is not None
+    assert last.body == ("🧭 Discovery routing receipts (dispositioned batches; "
+                         "`to=-` = routed nowhere):\n"
+                         "`devcake:discovery-routed:v1 step=2 to=T-T`")
+    assert discovery_receipts(unquoted(body)) == {(2, "T-T")}
+    assert discovery_posts(unquoted(body)) == [(2, 2)]     # the card's own marker, once
+    assert body.rstrip().endswith("`devcake:v1`")          # re-sealed by _edit
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+    assert "src" not in mgr._discoveries_pending
+    edits, comments = len(pmo.edits), len(pmo.comments)
+    assert _apply(mgr, run, [_route()]) == (0, 0)          # redelivered finalize
+    assert (len(pmo.edits), len(pmo.comments)) == (edits, comments)
+
+
+def test_receipts_fall_back_to_a_notice_when_the_edit_fails(tmp_path):
+    from fakes import assert_notice
+    pmo, mgr, run = _card_setup(tmp_path)
+    audits = []
+    mgr._audit = lambda pid, action, detail="": audits.append(action)
+
+    async def _refuse(ref, entry_id, markdown):
+        raise RuntimeError("entity not found")
+    pmo.edit_feed = _refuse
+    assert _apply(mgr, run, [_route()]) == (1, 0)
+    assert "discovery_receipt_fold_failed" in audits
+    [body] = _src_comments(pmo)
+    rec = assert_notice(body, "⚠️ **For the record.** Routing receipts",
+                        record_has=["`devcake:discovery-routed:v1 step=2 to=T-T`"])
+    assert rec.startswith("🧭 Discovery routing receipts")
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps   # pending still closes
+
+
+def test_receipts_fall_back_when_the_card_is_over_the_vendor_cap(tmp_path):
+    pmo, mgr, run = _card_setup(tmp_path, pad="\n\n" + "x" * 2800)
+    pmo.comment_max_chars = 3000
+    audits = []
+    mgr._audit = lambda pid, action, detail="": audits.append(action)
+    assert _apply(mgr, run, [_route()]) == (1, 0)
+    assert pmo.edits == []                              # refused before the wire
+    assert "discovery_receipt_fold_failed" in audits
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo))
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+
+
+def test_receipts_fall_back_when_the_card_is_paged(tmp_path):
+    pmo, mgr, run = _card_setup(tmp_path, paged=True)
+    audits = []
+    mgr._audit = lambda pid, action, detail="": audits.append(action)
+    assert _apply(mgr, run, [_route()]) == (1, 0)
+    assert pmo.edits == []
+    assert "discovery_receipt_fold_failed" not in audits   # no card ⇒ no failure
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in _src_comments(pmo))
+
+
+def test_live_scan_carries_entries_but_the_memo_never_does(tmp_path):
+    from devcake.domain.orchestrator import discovery
+    from devcake.domain.orchestrator.feed_memo import FeedScanMemo
+    pmo, mgr, run = _card_setup(tmp_path)
+    mgr.feed_memo = FeedScanMemo()
+    src = next(mm for mm in pmo.missions if mm.pmo_id == "src")
+    live = run_coro(discovery.scan_source(mgr, src, memo=False))
+    assert [e.entry_id for e in live.entries] == ["card1"]
+    memo = run_coro(discovery.scan_source(mgr, src))            # live read, memoized
+    assert memo.entries == []
+    assert run_coro(discovery.scan_source(mgr, src)).entries == []   # the memo hit
 
 
 def test_finalize_steward_branches_on_duty(tmp_path):
@@ -1291,6 +1443,14 @@ def test_delivery_over_the_inline_ceiling_keeps_fingerprints(
     assert sorted(FINDING_MARKER_RE.findall(body)) == sorted(
         finding_fingerprint({"finding": f"finding {i} about the config"})
         for i in (0, 1))
+    # re-rendered from the parts, not string-split: the lead survives, the
+    # head says the findings are not repeated, the Record keeps the
+    # marker, the pointer and the fingerprints and nothing else
+    from fakes import assert_notice
+    rec = assert_notice(body, "📨 **Leads from T-S, step 2.** 2 leads",
+                        record_has=["🔎 [T-S · step 2 ·", "`devcake:finding:v1 sha="])
+    assert "not repeated here" in body
+    assert "**1.**" not in rec and "— steward:" not in body
     # ...and a re-route of either finding is now a content duplicate
     pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
     assert _apply(mgr2, run2, [_route(finding=2)]) == (0, 0)

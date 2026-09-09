@@ -10,7 +10,7 @@ from ...security import redact
 from ..model import (LABEL_CREATED, LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_SKIP,
                      LABEL_TRACKING, MissionRef)
 from ..run import Run
-from . import steps
+from . import feed, steps
 from .markers import (COMMENT_SENTINEL, at_decomposition_limit, defang,
                       decomposition_depth, decomposition_marker)
 
@@ -62,13 +62,21 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
             if live.status == "in_progress":
                 await mgr.pmo.set_status(
                     MissionRef(pmo_id, run.pmo_kind), "backlog")
-            await mgr._feed(
-                pmo_id, run.pmo_kind,
+            shown = depth if depth is not None else 'unknown'
+            record = (
                 f"⛔ Depth limit: this mission is at decomposition depth "
-                f"{depth if depth is not None else 'unknown'} of the "
+                f"{shown} of the "
                 f"configured limit {limit} and may not be decomposed "
                 f"again. Parked with `DEVCAKE-SKIP` for a human to "
                 f"re-scope.")
+            await mgr._feed(
+                pmo_id, run.pmo_kind,
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"This mission is at decomposition depth {shown} of the "
+                    f"limit {limit} and cannot be split again, so it is parked.",
+                    record,
+                    todo="Re-scope it, then remove the `DEVCAKE-SKIP` label."))
             mgr._audit(pmo_id, "depth_limit_rejected", run.run_id)
         await mgr._checkpoint(run, steps.DECOMP_DEPTH_LIMIT, _depth_limit)
         run.verdict = "handed off: decomposition depth limit"
@@ -184,7 +192,13 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 + ". Reconcile the existing `DEVCAKE-CREATED` missions, "
                   "then remove `DEVCAKE-NEEDS-HUMAN` to retry."
             )
-            await mgr._feed(pmo_id, live.pmo_kind, baton)
+            await mgr._feed(pmo_id, live.pmo_kind, feed.notice(
+                mgr, feed.NEEDS_YOU,
+                "A replayed decomposition found children that do not match "
+                "its manifest, so none were created.",
+                baton,
+                todo="Reconcile the existing `DEVCAKE-CREATED` missions, then "
+                     "remove the `DEVCAKE-NEEDS-HUMAN` label to retry."))
             if live.pmo_kind == "project":
                 await mgr.pmo.post_feed(
                     MissionRef(pmo_id, "project"),
@@ -384,10 +398,26 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                     log.warning("project-update plan-approval note failed "
                                 "for %s", run.mission_key, exc_info=True)
         else:
-            await mgr._feed(
-                pmo_id, "issue",
+            record = (
                 f"🧩 Decomposed into {len(normalized)} standalone issues: "
                 f"{links}. This issue is canceled in their favor." + gate_note)
+            if gated:
+                body = feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"Split into {len(normalized)} missions ({links}); this "
+                    f"issue is canceled in their favor, and every child is "
+                    f"parked because this board approves plans by hand.",
+                    record,
+                    todo="Review the split — edit a child in place or cancel "
+                         "it — then remove the `DEVCAKE-NEEDS-HUMAN` label on "
+                         "each child you want started.")
+            else:
+                body = feed.notice(
+                    mgr, feed.INFO,
+                    f"Split into {len(normalized)} missions ({links}); this "
+                    f"issue is canceled in their favor.",
+                    record)
+            await mgr._feed(pmo_id, "issue", body)
             await mgr.pmo.cancel_mission(MissionRef(pmo_id, "issue"))
             mgr._audit(pmo_id, "decomposed_canceled", links)
         if gated:

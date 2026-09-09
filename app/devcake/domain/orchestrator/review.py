@@ -111,6 +111,10 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
     pr = await forge.get_pr_by_branch(run_branch(run))
     pr_url = (pr.url if pr else None) or result.get("pr_url") or "?"
     footer = forge.approval_footer(pr_url)
+    if pr and pr.url and run.pr_url != pr.url:
+        # ADR-0042: the forge-verified url is the record's; saved by the
+        # first checkpoint below (every path past here saves the run)
+        run.pr_url = pr.url
 
     if verdict == "approve":
         # ADR-0031 — the Freshness Gate, BEFORE any approval artifact: a

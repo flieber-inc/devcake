@@ -191,6 +191,10 @@ class MissionManager:
         return await feed._feed(self, pmo_id, kind, markdown,
                                 externalize=externalize, reply_to=reply_to)
 
+    async def _edit(self, pmo_id: str, kind: str, entry_id: str,
+                    markdown: str):
+        return await feed._edit(self, pmo_id, kind, entry_id, markdown)
+
     async def _checkpoint(self, run: Run, key: str, fn):
         return await finalize._checkpoint(self, run, key, fn)
 

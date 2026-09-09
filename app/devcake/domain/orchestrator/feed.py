@@ -406,10 +406,41 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     return first
 
 
+async def _edit(mgr, pmo_id: str, kind: str, entry_id: str,
+                markdown: str) -> None:
+    """The second feed chokepoint (ADR-0042 §3, §5): replace the whole body
+    of DevCake's OWN entry — a step card gaining a late fold section, the
+    status comment refreshed. Same policy as `_feed` — redaction, the
+    sentinel appended LAST, project kind suppressed to the audit log —
+    with three deliberate differences: no externalization (a fold's
+    markers must stay inline, so a long body is the caller's problem), no
+    vendor-cap paging (over `comment_max_chars` raises ValueError BEFORE
+    any wire call — the caller falls back to a new post), no threading.
+    `markdown` may arrive sealed or unsealed; it is never double-sealed.
+    Invalidates the feed memo in `finally`, exactly like `_feed`: a write
+    the client saw fail may still have landed. PMOTransient and permanent
+    errors propagate — the callers decide the fallback (a vanished entry
+    is permanent: post instead)."""
+    markdown = redact(unseal(markdown))
+    if kind == "project":
+        mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
+        return
+    body = markdown.rstrip() + "\n\n" + COMMENT_SENTINEL
+    cap = _comment_max_chars(mgr)
+    if cap is not None and len(body) > cap:
+        raise ValueError(
+            f"edited body exceeds the vendor cap ({len(body)} > {cap})")
+    try:
+        await mgr.pmo.edit_feed(MissionRef(pmo_id, "issue"), entry_id, body)
+    finally:
+        feed_written(mgr, pmo_id)
+
+
 def feed_written(mgr, pmo_id: str) -> None:
     """DevCake wrote to this feed: memoized scans of it are stale (ADR-0033
-    addendum). Every DevCake-authored issue comment passes through `_feed`,
-    so this is the one invalidation site."""
+    addendum). Every DevCake-authored issue comment write — a post through
+    `_feed`, an edit through `_edit` — passes here: the one invalidation
+    site."""
     memo = getattr(mgr, "feed_memo", None)
     if memo is not None:
         memo.forget(pmo_id)

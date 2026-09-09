@@ -130,9 +130,14 @@ def test_execute_finalize_posts_marked_discovery_comment(tmp_path):
     run = _exec_run(store)
     run_coro(mgr.finalize(run, _payload([ENTRY, dict(ENTRY)])))
     disc = [c for c in fake.comments if "devcake:discovery:v1" in c]
-    assert len(disc) == 1
-    # marker line FIRST and unquoted — the scan surface
-    assert unquoted(disc[0]).splitlines()[0] == discovery_marker(1, 2)
+    assert len(disc) == 1                       # inside the step card
+    # the marker line is the first line of the card's Discoveries section,
+    # unquoted — the scan surface (ADR-0042)
+    from devcake.domain.orchestrator.feed import fold_sections, strip_fold
+    section = next(s for s in fold_sections(strip_fold(disc[0])[1])
+                   if s.title == "Discoveries")
+    assert unquoted(section.body).splitlines()[0] == discovery_marker(1, 2)
+    assert discovery_posts(unquoted(disc[0])) == [(1, 2)]
     # the close proceeded: transition applied, run finished
     assert {"DEVCAKE-REVIEW"} in [add for _, add in fake.swaps]
     assert run.state == "finished"
@@ -245,31 +250,39 @@ def test_upload_failure_falls_back_inline_and_close_proceeds(tmp_path):
     assert LABEL_DISCOVERY in m.labels
 
 
-def test_post_failure_is_audited_and_never_wedges(tmp_path):
+def test_a_refused_card_fails_the_close_and_redelivery_commits(tmp_path):
+    """ADR-0042: the harvest rides the step card, so a refused card post is
+    a failed close (exactly as a refused transcript was): audited, not
+    checkpointed, no label — and the redelivery posts the card, then the
+    harvest bookkeeping commits once."""
+    import pytest
     m, mgr, fake, store = _harvest_mgr(tmp_path)
     orig = fake.post_feed
     audits = []
     mgr._audit = lambda *a, **k: audits.append(a)
 
-    async def _refuse(ref, markdown):
+    async def _refuse(ref, markdown, **kw):
         if "devcake:discovery:v1" in markdown:
             raise RuntimeError("PMO down")
-        await orig(ref, markdown)
+        return await orig(ref, markdown, **kw)
     fake.post_feed = _refuse
     run = _exec_run(store)
-    run_coro(mgr.finalize(run, _payload([ENTRY])))
-    assert run.state == "finished"                 # the close proceeded
+    with pytest.raises(RuntimeError):
+        run_coro(mgr.finalize(run, _payload([ENTRY])))
     assert "discovery:post" not in run.finalized_steps
+    assert "step_card" not in run.finalized_steps
     assert LABEL_DISCOVERY not in m.labels
     assert (set(), {LABEL_DISCOVERY}) not in fake.swaps
     assert any(len(a) > 1 and a[1] == "discovery_post_failed" for a in audits)
+    assert any(len(a) > 1 and a[1] == "step_card_failed" for a in audits)
     assert not any(len(a) > 1 and a[1] == "discovery_post" for a in audits)
-    # redelivery retries the post
+    # redelivery posts the card and commits the harvest
     fake.post_feed = orig
     run_coro(mgr.finalize(run, _payload([ENTRY])))
     assert any("devcake:discovery:v1" in c for c in fake.comments)
     assert "discovery:post" in run.finalized_steps
     assert LABEL_DISCOVERY in m.labels
+    assert run.state == "finished"
 
 
 def test_redelivery_posts_once(tmp_path):

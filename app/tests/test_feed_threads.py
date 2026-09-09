@@ -157,26 +157,29 @@ def test_finalize_completes_flat_when_the_anchor_was_deleted(tmp_path):
 
 # ── finalize: one thread per step ───────────────────────────────────────────
 
-def test_finalize_threads_token_report_and_harvest_under_the_transcript(tmp_path):
+def test_finalize_posts_one_step_card_carrying_report_and_harvest(tmp_path):
+    """ADR-0042: the transcript, the answer, the token report and the
+    harvest ride ONE top-level comment — the step card — whose fold holds
+    the report and the marker-first harvest; the answer token replaces
+    the answer comment. The card's id is the step's anchor."""
     _, mgr, fake, store = _mgr(tmp_path, threads=True)
     run = _exec_run(store)
-    # a last message makes finalize post the answer comment too
     run_coro(mgr.finalize(run, dict(_payload([ENTRY]),
                                     last_message_md="the answer")))
-    parents = _parents(fake)
-    transcript = _find(fake, "🧾 DevCake transcript")
-    anchor = dict(zip(fake.comments, (cid for cid, _ in fake.threads)))[transcript]
-    assert parents[transcript] is None                       # top level
-    assert parents[_find(fake, "🧮 DevCake token report")] == anchor
-    assert parents[_find(fake, "devcake:discovery:v1")] == anchor
-    assert parents[_find(fake, REPLY_MARKER)] is None        # the answer stays visible
-    # persisted with the transcript checkpoint
+    cards = [c for c in fake.comments if c.startswith("🔀 Step 1 · EXECUTE")]
+    assert len(cards) == 1
+    card = cards[0]
+    assert "🧮 DevCake token report" in card
+    assert "devcake:discovery:v1" in card
+    assert "> the answer" in card
+    assert "`devcake:answer:v1 step=1`" in card
+    assert "Transcript: `1_EXECUTE.md`" in card
+    assert not any(c.lstrip().startswith(REPLY_MARKER) for c in fake.comments)
+    assert {parent for _, parent in fake.threads} == {None}   # nothing nested
+    anchor = dict(zip(fake.comments, (cid for cid, _ in fake.threads)))[card]
     assert store.get(run.run_id).feed_anchor == anchor
-    # order of the feed is unchanged: transcript, answer, token report, harvest
-    order = [next(k for k in ("🧾", REPLY_MARKER, "🧮", "devcake:discovery:v1")
-                  if k in c) for c in fake.comments
-             if any(k in c for k in ("🧾", REPLY_MARKER, "🧮", "devcake:discovery:v1"))]
-    assert order == ["🧾", REPLY_MARKER, "🧮", "devcake:discovery:v1"]
+    assert {steps.STEP_CARD, steps.TRANSCRIPT, steps.REPLY, steps.TOKEN_REPORT,
+            steps.DISCOVERY_POST} <= set(store.get(run.run_id).finalized_steps)
 
 
 def test_flat_vendor_gets_byte_identical_bodies_top_level(tmp_path):
@@ -190,8 +193,9 @@ def test_flat_vendor_gets_byte_identical_bodies_top_level(tmp_path):
 
 
 def test_redelivered_finalize_threads_under_the_saved_anchor(tmp_path):
-    # the process died after the transcript checkpoint: the redelivery must
-    # not re-post the transcript, and must still nest the report under it
+    # a PRE-CARD run mid-flight at the upgrade (transcript checkpointed by
+    # the old build, no step card): the redelivery must not re-post the
+    # transcript, and still nests the report under it — the old shape
     _, mgr, fake, store = _mgr(tmp_path, threads=True)
     run = _exec_run(store, finalized_steps=[steps.TRANSCRIPT],
                     feed_anchor="c-earlier")

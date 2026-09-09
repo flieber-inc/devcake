@@ -3249,68 +3249,59 @@ def test_explicit_error_class_wins_over_the_state_default(tmp_path):
     assert store.get(run.run_id).error_class == "DEV_OPERATOR_STOP"
 
 
-def test_finalize_posts_the_answer_as_its_own_marked_comment(tmp_path):
-    # Downstream feed consumers cannot read our deliverable zips, so the
-    # answer has to arrive as its own comment they can recognise
-    # deterministically: one comment, marker FIRST, body quarantined.
+def test_finalize_posts_the_answer_inside_the_step_card(tmp_path):
+    # ADR-0042: the answer is the card's blockquote (quarantined) and the
+    # card carries the answer token; the reply comment is gone.
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
     run_coro(mgr.finalize(run, _finalize_payload(
         last_message_md="Root cause: the skip gate.\n\nFix in !2163.")))
-    reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
-    assert "> Root cause: the skip gate." in reply
-    assert "> Fix in !2163." in reply
-    # quarantine holds: every line of model text is quoted. Only our own
-    # provenance sentinel stays unquoted (feed.is_devcake_comment reads it),
-    # which is why a consumer relaying the answer must strip that line.
-    body = [
-        l for l in reply.splitlines()
-        if l and not l.startswith(REPLY_MARKER) and "`devcake:v1`" not in l
-    ]
-    assert all(l.lstrip().startswith(">") or l == ">" for l in body), reply
-    assert feed.is_devcake_comment(reply)
+    assert not any(c.lstrip().startswith(REPLY_MARKER) for c in fake.comments)
+    card = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "> Root cause: the skip gate." in card
+    assert "> Fix in !2163." in card
+    assert "`devcake:answer:v1 step=1`" in card
+    # quarantine holds: every line of model text is quoted
+    quoted = [l for l in card.splitlines() if "skip gate" in l or "!2163" in l]
+    assert all(l.startswith(">") for l in quoted), card
+    assert feed.is_devcake_comment(card)
 
 
-def test_the_reply_comment_redacts_before_it_truncates(tmp_path):
-    # A clipped half-token no longer matches its own pattern, so redaction has
-    # to run first — same rule as the transcript comment.
+def test_the_card_redacts_before_it_cuts_the_answer(tmp_path):
+    # A clipped half-token no longer matches its own pattern, so redaction
+    # runs before the boundary cut.
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
     run_coro(mgr.finalize(run, _finalize_payload(
         last_message_md="key ghp_" + "c" * 36 + "\n" + "x" * FEED_INLINE_MAX)))
-    reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
-    assert "ghp_" not in reply
-    assert "truncated" in reply
-    # Reply has no attachment of its own; point at the step transcript and
-    # never claim an attachment exists.
-    assert "attachment" not in reply.lower()
-    assert "step transcript" in reply
+    card = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "ghp_" not in card
+    assert "truncated" in card
+    assert "full text in the attachment" in card     # the transcript IS attached
 
 
-def test_a_redelivered_finalize_does_not_post_the_reply_twice(tmp_path):
+def test_a_redelivered_finalize_does_not_post_the_card_twice(tmp_path):
     # Finalize is redelivered on retry; finalized_steps is what stops a second
-    # copy of the answer reaching the requester.
+    # copy of the step reaching the feed.
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
     payload = _finalize_payload(last_message_md="Answered.")
     run_coro(mgr.finalize(run, payload))
     run_coro(mgr.finalize(run, payload))
-    assert sum(1 for c in fake.comments
-               if c.lstrip().startswith(REPLY_MARKER)) == 1
+    assert len([c for c in fake.comments if "`1_ONBOARD.md`" in c]) == 1
 
 
-def test_an_old_payload_without_last_message_posts_no_reply(tmp_path):
-    # Rolling-deploy pin: an old image sends no last_message_md, and an empty
-    # answer must not become an empty marked comment.
-    for payload in (_finalize_payload(), _finalize_payload(last_message_md="")):
-        m = mission("in_progress", {"DEVCAKE"})
-        mgr, fake, store = make_mgr(tmp_path, m)
-        run = _saved_run(store)
-        run_coro(mgr.finalize(run, payload))
-        assert not any(c.lstrip().startswith(REPLY_MARKER) for c in fake.comments)
+def test_an_old_payload_without_last_message_posts_a_pointer_card(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload()))
+    card = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "devcake:answer:v1" not in card
+    assert not any(l.startswith(">") for l in card.splitlines())
 
 
 def test_review_reviewed_does_not_displace_the_execute_reply(tmp_path):

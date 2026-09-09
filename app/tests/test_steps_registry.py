@@ -46,6 +46,7 @@ def test_constant_byte_values_are_frozen():
     assert steps.REPLY == "reply"
     assert steps.TOKEN_REPORT == "token_report"
     assert steps.TRANSITION == "transition"
+    assert steps.STEP_CARD == "step_card"
     assert steps.TRANSITION_HUMAN_NEEDED == "transition:human_needed"
     assert steps.ACL_USER_DELETED == "acl_user_deleted"
     assert steps.DECOMP_CHILD(3) == "decomp:child:3"

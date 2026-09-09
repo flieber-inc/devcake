@@ -16,6 +16,19 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Changed — one step card per step on the mission feed.** A step used
+  to post its transcript, its answer (under an HTML marker one vendor
+  renders as text), its token report and its discoveries as separate
+  comments, the answer twice. Each step now posts one comment: a header
+  line (outcome, step, duration, cost), the Dev's answer quoted and cut
+  at a sentence boundary, what the result is and who acts next, the
+  transcript, and one collapsed fold holding the record — token report,
+  discoveries, run id and every marker the orchestrator scans. The Dev's
+  activity folder is unfolded from that record and stays byte-identical;
+  a golden test holds the pre-card feed and the card feed to the same
+  folder. Adapters gained an edit-own-comment operation and a fold-syntax
+  capability along the way.
+
 ## v0.5.17 (2026-09-09)
 
 Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.8.

@@ -16,8 +16,13 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+## v0.5.17 (2026-09-09)
+
+Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.8.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.5.17).
+
 - **Fixed — a mission gated on hundreds of finished siblings launches
-  again.** The prompt lists every finished blocker's closing note and
+  again** (#441). The prompt lists every finished blocker's closing note and
   every reference repository; on a board where one mission waited on a
   few hundred siblings, those two sections alone put a quarter-megabyte
   on the harness command line, the launch was refused three times as
@@ -29,7 +34,7 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   size of each part, so the next such case is a log line, not a dig.
 
 - **Fixed — a launch no longer costs a vendor's hourly budget when the
-  mission has hundreds of blockers.** Before launch, DevCake re-reads
+  mission has hundreds of blockers** (#442). Before launch, DevCake re-reads
   every blocker live. That read went one edge at a time, asked the
   peer boards before the mission's own, and ran twice per attempt, so a
   mission gated on a few hundred finished siblings spent about 2,700

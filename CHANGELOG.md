@@ -28,6 +28,17 @@ track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
   clone. A prompt still past the budget is logged at dispatch with the
   size of each part, so the next such case is a log line, not a dig.
 
+- **Fixed — a launch no longer costs a vendor's hourly budget when the
+  mission has hundreds of blockers.** Before launch, DevCake re-reads
+  every blocker live. That read went one edge at a time, asked the
+  peer boards before the mission's own, and ran twice per attempt, so a
+  mission gated on a few hundred finished siblings spent about 2,700
+  Linear requests per attempt, Linear locked all boards on that key for
+  an hour, and the loop repeated when the lock lifted. The blocker set
+  is now read in one batched walk (one query per hundred ids on Linear),
+  the mission's own board is asked first, and the two pre-launch passes
+  share the answers. The same mission now costs four requests.
+
 ## v0.5.16 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.8.

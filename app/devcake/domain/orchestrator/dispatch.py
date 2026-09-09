@@ -136,6 +136,7 @@ async def resolve_blocker_work(
         mgr, mission: Mission, primary_repo: str,
         all_runs: list | None = None, *,
         max_extras: int = MAX_BLOCKER_WORK_EXTRAS,
+        memo: dict | None = None,
 ) -> tuple[list[dict[str, str]], list[str], list[dict[str, str]]]:
     """Direct done-blockers' work repos for RO mounts, plus their handoffs.
 
@@ -183,10 +184,15 @@ async def resolve_blocker_work(
             continue
         by_mid.setdefault(r.mission_pmo_id, []).append(r)
 
-    memo: dict = {}   # fresh per dispatch — blocker status is read all-live
+    # blocker status is read all-live per dispatch; `memo` is the dispatch's
+    # own (shared with the pre-launch gate), so the set is read ONCE, in
+    # one batched locator walk
+    if memo is None:
+        memo = {}
+    found = await mgr.blocker_locator.resolve_many(
+        list(mission.blocked_by), local_mgr=mgr, memo=memo)
     for bid in mission.blocked_by:
-        res = await mgr.blocker_locator.resolve(
-            bid, local_mgr=mgr, memo=memo)
+        res = found.get(bid)
         if res is None:
             skip.append(f"{bid}: unreadable")
             continue
@@ -490,8 +496,10 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
         return None
     repo = mgr.forges.instance(repo_name)
     forge = mgr.forges.get(repo_name)
+    blocker_memo: dict = {}   # one live read of the blocker set per dispatch
     if live.blocked_by:
-        open_blockers = await schedule.open_blockers_live(mgr, live)
+        open_blockers = await schedule.open_blockers_live(
+            mgr, live, memo=blocker_memo)
         if open_blockers:
             # same reason shape as schedule.gate_map so the missions row
             # names the live TOCTOU, not a silent skip
@@ -551,7 +559,7 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
     # side-effect-free (store + locator reads only).
     all_runs = mgr.runs.store.all()
     blocker_entries, blocker_skips, blocker_notes = await resolve_blocker_work(
-        mgr, live, repo_name, all_runs)
+        mgr, live, repo_name, all_runs, memo=blocker_memo)
 
     # One policy for mission and STEWARD dispatch; the result also supplies
     # the mount snapshot, so omitted context cannot leak into the runspec.

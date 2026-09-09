@@ -209,6 +209,15 @@ def test_dispatch_snapshots_foreign_blocker_work_end_to_end(tmp_path):
     mgr, fake, _store = make_mgr(tmp_path, m, forge=_ForgeWithDescriptor())
     mgr.internal_forge = CrossForge()
     mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    # the one-mission fake answers EVERY id with its mission; a real adapter
+    # returns the asked issue or raises — the locator asks local first now
+    real_get = fake.get
+
+    async def strict_get(ref):
+        if ref.pmo_id != m.pmo_id:
+            raise RuntimeError(f"unknown {ref.pmo_id}")
+        return await real_get(ref)
+    fake.get = strict_get
     launched = []
 
     async def launch(run, image):
@@ -422,3 +431,30 @@ def test_prompt_includes_blocker_section():
     assert "Completed blocker work" in out
     assert "linear-t-a" in out
 
+
+
+def test_gate_and_blocker_work_share_one_locator_walk(tmp_path):
+    """The pre-launch gate and the blocker-work pass read the blocker set
+    ONCE per dispatch (a shared memo): each blocker costs one read, not two
+    — and with an all-live re-read that is the whole point."""
+    from devcake.domain.orchestrator import schedule
+
+    class CountingBlockerPMO(BlockerPMO):
+        def __init__(self, missions):
+            super().__init__(missions)
+            self.gets = []
+
+        async def get(self, ref):
+            self.gets.append(ref.pmo_id)
+            return await super().get(ref)
+
+    done = {f"b{i}": _mission(f"b{i}", f"T-B{i}", status="done") for i in range(5)}
+    m = _mission("m", "T-M", blocked_by=list(done))
+    pmo = CountingBlockerPMO({**done, "m": m})
+    mgr = make_mission_manager(tmp_path, pmo=pmo, internal_forge=_ROInternal())
+    memo: dict = {}
+    assert run_coro(schedule.open_blockers_live(mgr, m, memo=memo)) == []
+    entries, skips, notes = run_coro(dispatch.resolve_blocker_work(
+        mgr, m, "linear-t-m", [], memo=memo))
+    assert sorted(pmo.gets) == sorted(done)            # five reads, not ten
+    assert [n["mission_key"] for n in notes] == [f"T-B{i}" for i in range(5)]

@@ -149,12 +149,13 @@ async def schedule(mgr, missions: list[Mission],
     return dispatched
 
 
-async def open_blockers_live(mgr, m: Mission) -> list[str]:
+async def open_blockers_live(mgr, m: Mission,
+                             memo: dict | None = None) -> list[str]:
     """The all-live variant (ADR-0034 PR-3): dispatch's pre-launch re-read
-    resolves every blocker fresh — empty by_id (no snapshot index) and a
-    fresh memo (no cross-mission reuse). The two empty dicts USED to be
-    magic arguments hand-rolled at the call site."""
-    return await _open_blockers(mgr, m, {}, {})
+    resolves every blocker fresh — empty by_id (no snapshot index) and no
+    cross-mission reuse. `memo` is the dispatch's own: the blocker-work
+    pass that follows reads the same answers instead of the wire again."""
+    return await _open_blockers(mgr, m, {}, {} if memo is None else memo)
 
 
 async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
@@ -168,16 +169,24 @@ async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
     (fail-safe; self-heals next cycle). ADR-0007. `memo` holds
     `Resolved | None` per bid (locator-managed, one walk per cycle)."""
     open_ = []
+    missing = [bid for bid in m.blocked_by if bid not in by_id]
+    found: dict = {}
+    if missing:
+        # one locator walk for the whole off-snapshot set (batched on
+        # adapters that can) — a mission gated on hundreds of siblings
+        # costs a handful of reads, not one per edge
+        first = {bid for bid in missing if bid not in memo}
+        found = await mgr.blocker_locator.resolve_many(
+            missing, local_mgr=mgr, memo=memo)
+        for bid in missing:
+            if found.get(bid) is None and bid in first:
+                log.warning("blocker %s of %s unreadable — treated as open",
+                            bid, m.key)
     for bid in m.blocked_by:
         b = by_id.get(bid)
         if b is None:
-            first = bid not in memo
-            r = await mgr.blocker_locator.resolve(
-                bid, local_mgr=mgr, memo=memo)
+            r = found.get(bid)
             b = r.mission if r is not None else None
-            if b is None and first:
-                log.warning("blocker %s of %s unreadable — treated as open",
-                            bid, m.key)
         if b is None:
             open_.append(f"{bid} (unreadable)")
         elif b.status not in ("done", "canceled"):

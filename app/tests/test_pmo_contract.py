@@ -25,7 +25,7 @@ def _params(fn):
 def test_port_declares_expected_surface():
     # the authoritative contract — a port edit must be deliberate (docs/05 §1)
     assert sorted(PORT_METHODS) == sorted([
-        "list_missions", "list_all", "get", "get_activity", "children_of",
+        "list_missions", "list_all", "get", "get_many", "get_activity", "children_of",
         "feed_changes_since",
         "post_feed", "set_status", "cancel_mission", "swap_labels", "create_mission",
         "create_relation", "ensure_labels", "append_description",

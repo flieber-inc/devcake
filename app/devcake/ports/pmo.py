@@ -154,6 +154,26 @@ class PMOCapabilities(BaseModel):
     # (`reply_to`). False ⇒ the feed chokepoint posts every comment top
     # level and never hands `reply_to` to the adapter.
     feed_threads: bool = False
+    # `get_many` exists and is materially cheaper than one `get` per id
+    # (Linear: one filtered query per 100 ids). The blocker locator reads a
+    # mission's whole blocker set through it, so a launch gated on hundreds
+    # of finished siblings costs a handful of requests, not hundreds. False
+    # ⇒ the locator loops `get`.
+    batch_get: bool = False
+
+
+async def get_many_via_get(pmo, refs: list[MissionRef]) -> dict[str, Mission]:
+    """The port's `get_many` for an adapter with no cheaper batch read: one
+    `get` per id, an unreadable id absent. Adapters delegating here leave
+    `capabilities().batch_get` False, so the blocker locator keeps its own
+    per-id pacing and timeouts instead of calling this."""
+    out: dict[str, Mission] = {}
+    for ref in refs:
+        try:
+            out[ref.pmo_id] = await pmo.get(ref)
+        except Exception:  # noqa: BLE001 — absence is the contract for an id the vendor will not return
+            continue
+    return out
 
 
 class PMOPort(Protocol):
@@ -196,6 +216,12 @@ class PMOPort(Protocol):
     async def list_missions(self, team_ref: str) -> list[Mission]: ...
     async def list_all(self, team_ref: str) -> list[Mission]: ...
     async def get(self, ref: MissionRef) -> Mission: ...
+    # Consulted only when `capabilities().batch_get`. Returns the missions
+    # it could read keyed by pmo_id; an id the vendor does not know is
+    # simply absent (never raised) — the caller's fail-safe treats absence
+    # as unreadable. Issue kind is the contract (blocked_by edges are
+    # issue-kind on every adapter).
+    async def get_many(self, refs: list[MissionRef]) -> dict[str, Mission]: ...
     async def get_activity(self, ref: MissionRef,
                            full: bool = False) -> Activity: ...
     async def children_of(self, ref: MissionRef) -> list[Mission]: ...

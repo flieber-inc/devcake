@@ -920,6 +920,20 @@ until that run exists, field evidence below stays operator-self-reported.
   — the rest counted, "list /workspace/repo/"); the assembled prompt is
   measured at dispatch and a breach of `PROMPT_MAX_BYTES` logs the size
   of each part. Docs 07, 15, ADR-0032, CHANGELOG.
+- **Blocker resolution in one batched walk** (2026-09-09, field
+  incident, ADR-0009 amendment): re-arming the same mission on an
+  undeployed fix showed the other half of the cost — each launch attempt
+  resolved its 319 blockers live twice, three reads per blocker per pass
+  (owner map, peer scan, then local), about 2,700 Linear requests in
+  seven minutes; the vendor answered with an hour-long lock-out of all
+  three boards, and the loop repeated when it lifted. Now:
+  `PMOPort.get_many` + `PMOCapabilities.batch_get` (Linear: one filtered
+  query per 100 ids), `BlockerLocator.resolve_many` (memo hits, then the
+  owner map's peer, then the LOCAL adapter, then peers for the misses; a
+  refused batch is a miss, never a per-id retry), the poll gate and both
+  dispatch passes route through it, and the two dispatch passes share one
+  memo. Same mission now: four requests per attempt. Docs 04, 05,
+  ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

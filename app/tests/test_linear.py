@@ -373,3 +373,38 @@ def test_asset_regexes_tolerate_angle_bracket_urls():
         ("r.md", "https://uploads.linear.app/y/r.md")]
     assert _ASSET_RE.findall(plain) == ["https://uploads.linear.app/y/r.md",
                                         "https://uploads.linear.app/z/s"]
+
+
+def _issue_node(i):
+    return {"id": f"id{i}", "identifier": f"T-{i}", "title": f"t{i}",
+            "description": "", "url": f"https://linear/t-{i}",
+            "updatedAt": "2026-07-12T10:00:00.000Z", "priority": 2,
+            "state": {"name": "Done", "type": "completed"},
+            "labels": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+            "project": None,
+            "inverseRelations": {"pageInfo": {"hasNextPage": False}, "nodes": []}}
+
+
+def test_get_many_reads_a_hundred_ids_per_query_and_keys_by_id():
+    """PMOCapabilities.batch_get: 250 blocker ids → three filtered queries
+    (100 + 100 + 50), results keyed by id, an id Linear does not return is
+    absent (never raised), duplicates collapse."""
+    queries = []
+    ad = LinearAdapter("key")
+
+    async def _gql(query, variables=None):
+        queries.append((query, dict(variables or {})))
+        ids = variables["ids"]
+        nodes = [_issue_node(int(i[2:])) for i in ids if i != "id999"]
+        return {"issues": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                           "nodes": nodes}}
+    ad._gql = _gql
+    refs = [MissionRef(f"id{i}", "issue") for i in range(249)]
+    refs += [MissionRef("id999", "issue"), MissionRef("id0", "issue")]
+    got = run_coro(ad.get_many(refs))
+    assert len(queries) == 3
+    assert [len(q[1]["ids"]) for q in queries] == [100, 100, 50]
+    assert all("id: {in: $ids}" in q[0] for q in queries)
+    assert set(got) == {f"id{i}" for i in range(249)}
+    assert got["id7"].key == "T-7" and got["id7"].status == "done"
+    assert ad.capabilities().batch_get is True

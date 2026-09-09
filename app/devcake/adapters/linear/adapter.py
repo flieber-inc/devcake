@@ -117,6 +117,9 @@ MAX_RELATION_PAGES = 10  # 10 × 50 = 500 relations fail-loud ceiling (ADR-0012)
 # warning matches the relations pattern; get/_get paths also cursor-walk when
 # hasNextPage is set.
 LABELS_PAGE = 50
+# ids per get_many query — Linear's connection page size; a mission's whole
+# blocker set is read in ceil(n / this) requests
+GET_MANY_CHUNK = 100
 MAX_LABEL_PAGES = 5  # 5 × 50 = 250 labels fail-loud ceiling
 
 # feed_changes_since page size (root comments connection, ids and times
@@ -387,6 +390,43 @@ class LinearAdapter:
         if ref.kind == "project":
             return await self._get_project(ref.pmo_id)
         return await self._get_issue(ref.pmo_id)
+
+    async def get_many(self, refs: list[MissionRef]) -> dict[str, Mission]:
+        """Batch read (PMOCapabilities.batch_get): one filtered issues query
+        per GET_MANY_CHUNK ids — the same node shape as list_all, labels and
+        relations cursor-walked when a first page is full. Ids Linear does
+        not return are absent from the result. A project-kind ref (no
+        production caller: blocked_by edges are issue-kind) reads one at a
+        time through the unified `get`."""
+        out: dict[str, Mission] = {}
+        issue_ids = list(dict.fromkeys(
+            r.pmo_id for r in refs if r.kind != "project"))
+        for i in range(0, len(issue_ids), GET_MANY_CHUNK):
+            chunk = issue_ids[i:i + GET_MANY_CHUNK]
+            nodes = await self._paginate(
+                """query($ids: [ID!]!, $after: String) {
+                     issues(first: 100, after: $after, filter: {id: {in: $ids}}) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes {
+                         id identifier title description url updatedAt priority
+                         state { name type }
+                         labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                            nodes { name } }
+                         project { id }
+                         inverseRelations(first: 50) { pageInfo { hasNextPage endCursor }
+                                                nodes { type issue { id } } }
+                       } } }""", "issues", {"ids": chunk})
+            for n in nodes:
+                page = (n.get("labels") or {}).get("pageInfo") or {}
+                if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
+                    await self._paginate_issue_labels(n["id"], n)
+                if ((n.get("inverseRelations") or {}).get("pageInfo") or {}).get("hasNextPage"):
+                    await self._paginate_issue_relations(n["id"], n)
+                out[n["id"]] = self._issue_to_mission(n)
+        for r in refs:
+            if r.kind == "project" and r.pmo_id not in out:
+                out[r.pmo_id] = await self._get_project(r.pmo_id)
+        return out
 
     async def _get_issue(self, pmo_id: str) -> Mission:
         data = await self._gql(
@@ -1204,6 +1244,7 @@ class LinearAdapter:
                                native_label_swap_atomic=True,
                                relations_supported=True,
                                global_ids=True,   # Linear pmo_ids are UUIDs
+                               batch_get=True,    # get_many: 100 ids per query
                                # an issue's updatedAt moves with every
                                # TOP-LEVEL comment posted on it (verified live
                                # on a field host: over dozens of missions it

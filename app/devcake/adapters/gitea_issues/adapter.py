@@ -19,7 +19,7 @@ import httpx
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              FeedChange, FeedDelta, Mission, MissionRef,
                              NormalizedStatus, canonicalize_labels)
-from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
+from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient, get_many_via_get
 from .._toolkit import gitea_internal_tracker_enable_deps, label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
@@ -381,6 +381,11 @@ class GiteaIssuesAdapter:
             self._team_ref = ref
             self._owner, self._repo = parse_team_ref(ref)
             self._label_ids.clear()
+
+    async def get_many(self, refs: list[MissionRef]) -> dict[str, Mission]:
+        # no cheaper batch read on this vendor — capabilities().batch_get
+        # stays False and the locator paces per id itself
+        return await get_many_via_get(self, refs)
 
     async def get(self, ref: MissionRef) -> Mission:
         self._require_issue(ref)

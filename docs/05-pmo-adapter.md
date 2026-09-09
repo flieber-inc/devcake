@@ -29,6 +29,9 @@ class PMOPort(Protocol):
     async def list_all(self, team_ref: str) -> list[Mission]: ...
         # terminal included — the poll loop + /api/v1/missions
     async def get(self, ref: MissionRef) -> Mission: ...
+    # consulted only when capabilities().batch_get — the missions it
+    # could read, keyed by pmo_id; an unknown id is absent, never raised
+    async def get_many(self, refs: list[MissionRef]) -> dict[str, Mission]: ...
     async def get_activity(self, ref: MissionRef, full: bool = False) -> Activity: ...
         # ordered feed; full=True walks entire history + reply structure +
         # mission attachments (ADR-0014). A ref without an issue-style comment
@@ -191,6 +194,8 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 **Blocked-by relations (adr/0007):** issue queries (`list_all`, `_get_issue`) additionally fetch `inverseRelations(first: 50)` with `pageInfo`; nodes of type `blocks` map to `Mission.blocked_by` (on issue B, `inverseRelations` holds relations where B is `relatedIssue`, so each node's `issue` is a blocker). A full first page is **cursor-walked** (`_paginate_issue_relations`, ceiling 10 × 50 with a fail-loud warning — adr/0012: a truncated read would under-block the gate and silently skip decomposition edge inheritance). `create_relation` → `issueRelationCreate(input: {issueId: blocker, relatedIssueId: blocked, type: blocks})`, tolerating the duplicate-relation error so decomposition resume stays idempotent. Relations are **issue-only** in Linear — projects always normalize with `blocked_by = []`.
 
 **Cross-instance resolution (ADR-0009 amendment):** a blocker id that is not in this instance's snapshot may resolve through a PEER same-system instance's adapter (same `get` query, that instance's API key) via the orchestrator's `BlockerLocator` when this adapter declares `PMOCapabilities.global_ids=True` (Linear does — workspace-global UUIDs, first-success is unambiguous). Colliding-id systems leave `global_ids=False` and never peer-resolve. This is an orchestrator concern; the adapter itself stays instance-bound.
+
+**Batch read (`PMOCapabilities.batch_get`):** `get_many(refs)` reads a set of issues in one `issues(filter: {id: {in: …}})` query per 100 ids (same node shape as `list_all`, labels and relations cursor-walked when a first page is full) and returns them keyed by id; an id Linear does not return is absent. The blocker locator reads a mission's whole blocker set through it, so a launch gated on hundreds of finished siblings costs ceil(n / 100) requests where the per-id path cost n reads per adapter consulted. Adapters without a cheaper batch read leave `batch_get=False` and the locator loops `get`.
 
 **Verified live 2026-07-12 (sandbox):** (a) the direction above is correct end-to-end (`B.blocked_by == [A]`, A unaffected); (b) a duplicate `issueRelationCreate` returns an **idempotent success**, not an error — the adapter's error-tolerance is belt-and-suspenders; (c) the enlarged `list_all` costs complexity **1,310** against Linear's 3,000,000/hour budget (headers `x-complexity` / `x-ratelimit-complexity-*`) — ~5% of budget at 30 s polling; (d) the `` `devcake:v1` `` comment footer survives the create→read roundtrip byte-for-byte; (e) deleting a blocker issue clears the relation from the blocked issue immediately; (f) `projectUpdateCreate` posts a project update that reads back with the sentinel intact — the baton-pass channel for project-kind hand-offs (§6, `03-mission-lifecycle.md` §4a).
 

@@ -271,7 +271,8 @@ def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
                           attachments_supported=True,
                           comment_max_chars=None,
                           updated_at_tracks_comments=True,
-                          feed_delta=False, feed_threads=False):
+                          feed_delta=False, feed_threads=False,
+                          batch_get=False):
     """Shared capability row for the test fakes. Default is Linear-shaped
     (global ids ON, so peer-resolution tests exercise the allowed path;
     `updated_at` tracks comments, so the feed memo has no safety rescan);
@@ -286,7 +287,8 @@ def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
         comment_max_chars=comment_max_chars,
         global_ids=global_ids,
         updated_at_tracks_comments=updated_at_tracks_comments,
-        feed_delta=feed_delta, feed_threads=feed_threads)
+        feed_delta=feed_delta, feed_threads=feed_threads,
+        batch_get=batch_get)
 
 
 # ── ADR-0028: the test-side service graph ────────────────────────────────────

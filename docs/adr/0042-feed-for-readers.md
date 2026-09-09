@@ -1,6 +1,6 @@
 # ADR-0042 — The feed for readers: step cards, one fold for the record, one status comment
 
-Status: Proposed.
+Status: Accepted 2026-09-09 — implementation in progress (the plan's PR sequence: the port operation, the primitives, the edit chokepoint and the step card are the first four PRs).
 
 ## Context — the feed is a record that people are asked to read
 
@@ -96,7 +96,10 @@ card, in this order:
    pointer, and the run identity. Every backticked marker the orchestrator
    scans rides here, unquoted, so the scans read exactly what they read
    today from `feed.unquoted(body)`. The provenance sentinel closes the
-   fold, not the card.
+   card, AFTER the fold: the sentinel's classifier anchors at the end of
+   the unquoted body, so nothing may follow it — a fold that closed after
+   the sentinel would turn every card into a human comment and trip the
+   Freshness Gate on DevCake's own record.
 
 The card carries the step's whole record in one body: transcript token,
 answer, token report, harvest, sentinel. Three top-level entries and one
@@ -110,10 +113,14 @@ the vendor's collapsible syntax chosen by the adapter's capability row: a
 section on Linear. It is the only vendor-specific rendering in this design.
 
 Bookkeeping that arrives **after** the card was posted — the steward's
-routing receipts on a source mission, a deferred-merge retry or settle
-marker, a freshness re-review counter — is **appended to the fold of the
-step card it belongs to**, through a new port operation, `edit_feed`, that
-edits DevCake's own comment. The fold only ever grows: the record stays
+routing receipts on a source mission, the deliverable note on the
+completion notice — is **appended to the fold of the comment it belongs
+to**, through a new port operation, `edit_feed`, that edits DevCake's own
+comment. The merge-state markers (settle, retry, hand-off) and the
+directive counters are NOT appended: the merge sweep picks its driver by
+the marker's entry time and an edit keeps the old entry's time, so those
+stay on notices of their own (§4) — an append is only ever a set-valued
+record whose order does not matter. The fold only ever grows: the record stays
 monotonic, `pending = posted − receipted` reads the same, and the edit is
 DevCake's own write, which the feed memo already handles. A vendor without
 an edit operation (none today) would fall back to a reply where the vendor
@@ -130,7 +137,11 @@ hand-off baton, the plan-approval request, "awaiting your merge", the
 give-up notice, loop and unlimited-attempt warnings, freshness disclosures,
 out-of-pipeline merge detection, illegal or unknown outcomes, decomposition
 notes and depth limits are all notices. A reader scanning a feed finds the
-hand glyph and knows every place they were addressed.
+hand glyph and knows every place they were addressed. Every notice
+carries today's comment text, verbatim, in a `Record` section of its fold:
+the head is for people, the fold is the record, and the Dev's folder
+unfolds the record — so a notice, like a card, changes nothing a Dev
+reads.
 
 Directives addressed to the **next Dev** (the conflict-resolve directive,
 the freshness re-review directive) are notices too: a person should see
@@ -214,7 +225,7 @@ vendor ids are normalised.
 | Primitive | Linear | GitHub / GitLab / Gitea Issues |
 |---|---|---|
 | Step card, notice, status comment | top-level comment | top-level comment |
-| Fold | collapsible section (Linear markdown) | `<details><summary>` |
+| Fold | `+++ Title … +++` fence (capability `plus`; renders as a native toggle — verified) | `<details><summary>` (capability `details`) |
 | Late bookkeeping | `edit_feed` on the card | `edit_feed` on the card |
 | Status comment | `edit_feed` | `edit_feed` |
 | Threads | available; not required | none; not needed |

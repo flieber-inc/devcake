@@ -240,13 +240,23 @@ def _blocker_repos_note(mgr, entries: list[dict[str, str]],
     HANDOFF note (ADR-0032). Empty when there is nothing to say. Handoffs
     render for mounted AND unmounted done blockers — the narrative is
     decoupled from the mount list by design (dedup/cap/same-repo drops must
-    never eat it)."""
+    never eat it).
+
+    Built to a byte budget (prompts.BLOCKER_NOTE_MAX_BYTES, ADR-0032
+    addendum): the prompt is one argv element with a hard kernel ceiling,
+    and a mission gated on hundreds of finished siblings carries hundreds
+    of excerpts. Mounted blockers ride first (their clones are in the
+    workspace), then the note-only ones in blocked_by order, then the skip
+    reasons; whatever does not fit is counted in one closing line that
+    points at MISSION.md, which always carries every handoff."""
+    from ...prompts import BLOCKER_NOTE_MAX_BYTES
     notes = notes or []
     handoffs = {n["mission_key"]: n for n in notes}
     if not entries and not skip_reasons \
             and not any(n["handoff"] for n in notes):
         return ""
-    lines = []
+    # one block (1–2 lines) per blocker, in priority order
+    blocks: list[str] = []
     listed: set[str] = set()
     for e in entries:
         name = e["repo_ref"]
@@ -261,17 +271,16 @@ def _blocker_repos_note(mgr, entries: list[dict[str, str]],
                 url = inst.url
         slug = (url or name).rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         listed.add(e["mission_key"])
-        lines.append(
-            f"- `{e['mission_key']}` (`{name}`) → /workspace/repo/{slug}/")
+        block = f"- `{e['mission_key']}` (`{name}`) → /workspace/repo/{slug}/"
         n = handoffs.get(e["mission_key"])
         if n and n["handoff"]:
-            lines.append(f"  Handoff: {n['handoff']}")
+            block += f"\n  Handoff: {n['handoff']}"
+        blocks.append(block)
     for n in notes:
         if n["mission_key"] in listed or not n["handoff"]:
             continue
-        lines.append(f"- `{n['mission_key']}` — {n['title']} (no work-repo "
-                     f"mount)")
-        lines.append(f"  Handoff: {n['handoff']}")
+        blocks.append(f"- `{n['mission_key']}` — {n['title']} (no work-repo "
+                      f"mount)\n  Handoff: {n['handoff']}")
     body = (
         "\n### Completed blocker work (read-only)\n"
         "Shallow clones of work repositories from missions that block this "
@@ -282,10 +291,42 @@ def _blocker_repos_note(mgr, entries: list[dict[str, str]],
         "description predates them: where they conflict, the handoff is "
         "newer — reconcile, and flag the drift in your summary.\n"
     )
-    if lines:
-        body += "\n" + "\n".join(lines) + "\n"
-    if skip_reasons:
-        body += "\n" + "\n".join(f"(skipped: {r})" for r in skip_reasons) + "\n"
+    used = len(body.encode()) + 240            # the closing line's room
+    kept: list[str] = []
+    for text in blocks:
+        cost = len(text.encode()) + 1
+        if used + cost > BLOCKER_NOTE_MAX_BYTES:
+            break
+        kept.append(text)
+        used += cost
+    skips: list[str] = []
+    for r in skip_reasons:
+        text = f"(skipped: {r})"
+        cost = len(text.encode()) + 1
+        if used + cost > BLOCKER_NOTE_MAX_BYTES:
+            break
+        skips.append(text)
+        used += cost
+    if kept:
+        body += "\n" + "\n".join(kept) + "\n"
+    if skips:
+        body += "\n" + "\n".join(skips) + "\n"
+    left_blocks = len(blocks) - len(kept)
+    left_skips = len(skip_reasons) - len(skips)
+    if left_blocks or left_skips:
+        bits = []
+        if left_blocks:
+            bits.append(f"{left_blocks} more finished blocker(s)")
+        if left_skips:
+            bits.append(f"{left_skips} more skipped blocker(s)")
+        body += ("\n(prompt budget: " + " and ".join(bits)
+                 + " are not listed here — every finished blocker's "
+                 "handoff is in /workspace/activity/MISSION.md under "
+                 "\"Blocked by (completed — handoffs)\"; read it before "
+                 "you rely on this list being complete)\n")
+        log.info("blocker note trimmed to the prompt budget: %d of %d "
+                 "blockers, %d of %d skip reasons",
+                 len(kept), len(blocks), len(skips), len(skip_reasons))
     return body + "\n"
 
 
@@ -329,22 +370,57 @@ def _reference_repos_note(mgr, primary: str) -> str:
     """The read-only reference-repos section for EVERY stage's prompt
     (founder request 2026-07-15): consultation material cloned alongside
     the mission's repository. Empty when the instance has none configured
-    (or they all vanished from config)."""
+    (or they all vanished from config). Built to a byte budget
+    (prompts.REFERENCE_REPOS_NOTE_MAX_BYTES): a team with hundreds of
+    repositories lists the head and says where the rest are — the
+    workspace holds every clone regardless."""
+    from ...prompts import REFERENCE_REPOS_NOTE_MAX_BYTES
     names = [n for n in (mgr.instance.reference_repos or [])
              if n != primary and n in mgr.forges.instances]
     if not names:
         return ""
+    head = (
+        "\n### Reference repositories (read-only)\n"
+        "Cloned alongside this mission's repository as consultation "
+        "material (documentation, style guides, context). Read them freely; "
+        "NEVER modify them, commit to them, or open PRs against them:\n")
+    used = len(head.encode()) + 160
     lines = []
     for n in names:
         inst_x = mgr.forges.instance(n)
         slug = inst_x.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        lines.append(f"- `{n}` → /workspace/repo/{slug}/ ({inst_x.url})")
-    return (
-        "\n### Reference repositories (read-only)\n"
-        "Cloned alongside this mission's repository as consultation "
-        "material (documentation, style guides, context). Read them freely; "
-        "NEVER modify them, commit to them, or open PRs against them:\n"
-        + "\n".join(lines) + "\n")
+        text = f"- `{n}` → /workspace/repo/{slug}/ ({inst_x.url})"
+        cost = len(text.encode()) + 1
+        if used + cost > REFERENCE_REPOS_NOTE_MAX_BYTES:
+            break
+        lines.append(text)
+        used += cost
+    left = len(names) - len(lines)
+    body = head + "\n".join(lines) + "\n"
+    if left:
+        body += (f"(prompt budget: {left} more reference repositories are "
+                 "cloned under /workspace/repo/ and not listed here — list "
+                 "that directory to see them all)\n")
+        log.info("reference-repository note trimmed to the prompt budget: "
+                 "%d of %d repositories", len(lines), len(names))
+    return body
+
+
+def prompt_size_report(prompt: str, sections: dict[str, str]) -> str | None:
+    """A one-line anatomy when the assembled prompt is past
+    prompts.PROMPT_MAX_BYTES — the budgets above keep the app's own
+    sections under it, so a breach means operator content (a very large
+    mission brief or playbook) and the line says which. None when it
+    fits. The entrypoint still refuses past the kernel ceiling (docs/07 §4
+    exit 17); this is the diagnosis that used to take a run-file dig."""
+    from ...prompts import PROMPT_MAX_BYTES
+    total = len(prompt.encode())
+    if total <= PROMPT_MAX_BYTES:
+        return None
+    parts = ", ".join(f"{k} {len(v.encode()):,} B"
+                      for k, v in sections.items() if v)
+    return (f"prompt is {total:,} bytes, past the {PROMPT_MAX_BYTES:,}-byte "
+            f"budget (kernel ceiling 131,072 per argument): {parts}")
 
 
 DISPATCH_EXPECT_S = 300     # mirror sync + provision on a big board
@@ -565,9 +641,10 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         ref_note = _reference_repos_note(mgr, repo_name)
         ident = _identifying_prompt(mgr, dev_type)
+        playbook = _pb(mtype.value)
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(
-                ident, live, playbook=_pb("ONBOARD"),
+                ident, live, playbook=playbook,
                 repo_options=_onboard_repo_options(mgr, repo_name),
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
@@ -575,7 +652,7 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
                 discoveries_cap=mgr.config.budgets.discoveries_per_run),
             MissionType.PLAN: lambda: plan_prompt(
-                ident, live, playbook=_pb("PLAN"),
+                ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 plan_approval_rule=plan_approval_rule(mgr, mtype)),
@@ -583,17 +660,24 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
                 default_branch=default_branch,
-                playbook=_pb("EXECUTE"),
+                playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
                 discoveries_cap=mgr.config.budgets.discoveries_per_run),
             MissionType.REVIEW: lambda: review_prompt(
-                ident, live, playbook=_pb("REVIEW"),
+                ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 discoveries_cap=mgr.config.budgets.discoveries_per_run),
         }[mtype]()
+        size_line = prompt_size_report(prompt, {
+            "identity": ident, "playbook": playbook,
+            "description": live.description or "",
+            "blocker note": blocker_note, "reference repos": ref_note})
+        if size_line:
+            log.warning("dispatch of %s %s: %s", mission.key, mtype.value,
+                        size_line)
 
         spec_env = _protocol_spec_env(mgr,
             mission_id=mission.pmo_id, mission_key=mission.key,

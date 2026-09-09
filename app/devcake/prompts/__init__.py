@@ -598,13 +598,27 @@ def steward_discovery_prompt(identifying_prompt: str, package: str) -> str:
 
 STEWARD_MISSION_CAP = 200          # prompt-size bound; truncation is logged
 STEWARD_DESC_HEAD_CHARS = 300
-# The whole steward prompt rides the harness argv as ONE element, and Linux
-# caps a single argument at 131,072 bytes (MAX_ARG_STRLEN): past it the
-# container dies at execve before the model is called. The discovery
-# package is built to keep the rendered prompt under this budget — also a
-# context the model can actually reason over — and leaves the rest of the
-# pending sources for the next run (ADR-0033 addendum; docs/07 §4 exit 17).
-STEWARD_PROMPT_MAX_BYTES = 96 * 1024
+# EVERY prompt rides the harness argv as ONE element, and Linux caps a
+# single argument at 131,072 bytes (MAX_ARG_STRLEN): past it the container
+# dies at execve before the model is called (the entrypoint refuses first —
+# docs/07 §4 exit 17). Anything the app accumulates into a prompt is built
+# to a byte budget under this line — also a context the model can actually
+# reason over. The steward's discovery package leaves the rest of the
+# pending sources for the next run (ADR-0033 addendum); a mission prompt's
+# blocker and reference-repository sections keep what fits and point at
+# the workspace for the rest (ADR-0032 addendum).
+PROMPT_MAX_BYTES = 96 * 1024
+STEWARD_PROMPT_MAX_BYTES = PROMPT_MAX_BYTES
+# Section budgets inside a mission prompt. The blocker note carries one
+# handoff excerpt (≤ HANDOFF_EXCERPT_MAX) per finished blocker — a mission
+# gated on a few hundred siblings would otherwise put a quarter-megabyte of
+# closing notes on the command line. MISSION.md in the activity folder
+# always carries every handoff, so the note only needs the head of the
+# list plus a pointer.
+BLOCKER_NOTE_MAX_BYTES = 24 * 1024
+# The reference-repository list names every consultation clone; a team
+# with hundreds of repositories lists the head and says where the rest are.
+REFERENCE_REPOS_NOTE_MAX_BYTES = 8 * 1024
 
 # the canonical (un-doubled) playbook texts — seed source for the stored
 # "default" templates and the fallback when a stored template is broken

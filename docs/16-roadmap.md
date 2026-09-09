@@ -907,6 +907,19 @@ until that run exists, field evidence below stays operator-self-reported.
   plan then saw the local receipt and never retried — the pin stayed "no
   receipt". The baker now re-pushes local receipts for the current digest
   the container lacks on every tick; a failed write is not a failed bake.
+- **Mission prompt sections built to budgets** (2026-09-09, field
+  incident, ADR-0032 addendum): a mission gated on a few
+  hundred finished siblings could not launch — its ONBOARD prompt was
+  315 KB against the 131,072-byte per-argument ceiling, three attempts
+  refused at exit 17 and the mission marked failed. The blocker note
+  (one 700-char handoff excerpt per finished blocker, 259 KB) and the
+  reference-repository list (every clone, 44 KB) had no section bound.
+  Now: `BLOCKER_NOTE_MAX_BYTES` (24 KB — mounted blockers first, then
+  note-only ones, then skip reasons; the rest counted in a closing line
+  that points at MISSION.md) and `REFERENCE_REPOS_NOTE_MAX_BYTES` (8 KB
+  — the rest counted, "list /workspace/repo/"); the assembled prompt is
+  measured at dispatch and a breach of `PROMPT_MAX_BYTES` logs the size
+  of each part. Docs 07, 15, ADR-0032, CHANGELOG.
 ### Field evidence (receipted)
 
 - **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54

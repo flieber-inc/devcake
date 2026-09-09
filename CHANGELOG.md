@@ -16,6 +16,18 @@ See the living log and open candidates in
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+- **Fixed — a mission gated on hundreds of finished siblings launches
+  again.** The prompt lists every finished blocker's closing note and
+  every reference repository; on a board where one mission waited on a
+  few hundred siblings, those two sections alone put a quarter-megabyte
+  on the harness command line, the launch was refused three times as
+  "prompt too large", and the mission was marked failed. Both sections
+  are now built to a byte budget: the head of each list rides in the
+  prompt, the rest is counted in one closing line that points at the
+  workspace, which always holds every handoff (MISSION.md) and every
+  clone. A prompt still past the budget is logged at dispatch with the
+  size of each part, so the next such case is a log line, not a dig.
+
 ## v0.5.16 (2026-09-08)
 
 Patch release in the v0.5 "Java Lava" line. `devcake-cli` stays at 0.1.8.

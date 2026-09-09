@@ -66,54 +66,121 @@ class BlockerLocator:
         seam is for OFF-SNAPSHOT ids only — the gate resolves snapshot hits
         against its own by_id first. Memoized in the caller-supplied `memo`
         (one dict per poll segment or dispatch), so a shared blocker costs
-        one network walk per cycle."""
-        if bid in memo:
-            return memo[bid]
-        memo[bid] = await self._resolve_uncached(bid, local_mgr)
-        return memo[bid]
+        one network walk per cycle. One id; `resolve_many` is the batch
+        form and the one the dispatch path uses."""
+        return (await self.resolve_many([bid], local_mgr=local_mgr,
+                                        memo=memo))[bid]
 
-    async def _resolve_uncached(self, bid: str, local_mgr) -> Resolved | None:
+    async def resolve_many(self, bids: list[str], *, local_mgr,
+                           memo: dict) -> dict[str, Resolved | None]:
+        """Every id at once: memo hits served, the rest resolved in as few
+        wire reads as the adapters allow (`PMOCapabilities.batch_get` — one
+        query per hundred ids on Linear; a `get` per id elsewhere). Order:
+        the owner map's peer for the ids it names → the LOCAL adapter for
+        everything still open → the same-system peer scan (config order,
+        first success) for the misses. Local precedes the scan because a
+        mission's blockers are overwhelmingly its own board's, and a
+        same-workspace key reads a peer's issue anyway; attribution for a
+        local hit is every same-system instance (safe exactly where ids
+        cannot collide, which is the only place peers are consulted). A
+        wire failure on any path counts as a miss for that path — never a
+        retry per id, which is the storm this batch form exists to end.
+        Every answer, negative included, lands in `memo`."""
+        todo = [b for b in dict.fromkeys(bids) if b not in memo]
+        if todo:
+            for bid, r in (await self._resolve_batch(todo, local_mgr)).items():
+                memo[bid] = r
+        return {b: memo.get(b) for b in bids}
+
+    async def _resolve_batch(self, bids: list[str],
+                             local_mgr) -> dict[str, Resolved | None]:
+        out: dict[str, Resolved | None] = {b: None for b in bids}
         system = local_mgr.instance.system
         try:
             peers_allowed = bool(local_mgr.pmo.capabilities().global_ids)
         except Exception:  # noqa: BLE001 — a capability probe failure must fail CLOSED (no peer resolution), never crash the locator
             peers_allowed = False
-        owner = self._owner_of(bid) if peers_allowed else None
+        pending = list(bids)
+        tried_owner: dict[str, str] = {}
         if peers_allowed:
-            peer = self._managers.get(owner) if owner else None
-            if peer is not None and peer is not local_mgr \
-                    and peer.instance.system == system:
-                got = await self._get(peer, bid, timeout=PEER_GET_TIMEOUT_S)
-                if got is not None:
+            by_owner: dict[str, list[str]] = {}
+            for b in pending:
+                owner = self._owner_of(b)
+                peer = self._managers.get(owner) if owner else None
+                if peer is not None and peer is not local_mgr \
+                        and peer.instance.system == system:
+                    by_owner.setdefault(owner, []).append(b)
+            for owner, ids in by_owner.items():
+                peer = self._managers[owner]
+                got = await self._fetch(peer, ids, timeout=PEER_GET_TIMEOUT_S)
+                for b, m in got.items():
                     # Same attribution shape as local: LEGACY stamps so a
                     # multi-PMO upgrade does not orphan pre-v3 peer runs.
-                    return Resolved(got, self._instance_refs(peer))
-            # The owner map misses done+aged-out blockers BY DESIGN
-            # (release_stale_ownership frees entries the owner no longer
-            # sees) — for extant pipelines this scan is the hot path, not a
-            # last resort. Config order; first success wins (safe only
-            # because global ids cannot collide).
-            for peer in self._managers.values():
-                if peer is local_mgr or peer.instance.system != system:
-                    continue
-                if owner is not None and peer.instance_name == owner:
-                    continue       # already tried via the owner map
-                got = await self._get(peer, bid, timeout=PEER_GET_TIMEOUT_S)
-                if got is not None:
-                    return Resolved(got, self._instance_refs(peer))
-        got = await self._get(local_mgr, bid)
-        if got is not None:
+                    out[b] = Resolved(m, self._instance_refs(peer))
+                for b in ids:
+                    tried_owner[b] = owner
+            pending = [b for b in pending if out[b] is None]
+        if pending:
+            got = await self._fetch(local_mgr, pending)
             # Same-workspace vendor keys can resolve a peer's id through the
             # LOCAL adapter; the true owner is then unknown and the Mission
             # is stamped with the local instance (adapters are
             # instance-bound). Widening attribution to every same-system
             # instance is safe only where ids cannot collide.
-            refs = self._instance_refs(local_mgr)
+            refs = set(self._instance_refs(local_mgr))
             if peers_allowed:
                 refs |= {m.instance_name for m in self._managers.values()
                          if m.instance.system == system}
-            return Resolved(got, frozenset(refs))
-        return None
+            for b, m in got.items():
+                out[b] = Resolved(m, frozenset(refs))
+            pending = [b for b in pending if out[b] is None]
+        if peers_allowed and pending:
+            # The owner map misses done+aged-out blockers BY DESIGN
+            # (release_stale_ownership frees entries the owner no longer
+            # sees), so for a genuinely foreign id this scan is the path.
+            # Config order; first success wins (safe only because global
+            # ids cannot collide).
+            for peer in self._managers.values():
+                if peer is local_mgr or peer.instance.system != system:
+                    continue
+                ids = [b for b in pending
+                       if tried_owner.get(b) != peer.instance_name]
+                if not ids:
+                    continue
+                got = await self._fetch(peer, ids, timeout=PEER_GET_TIMEOUT_S)
+                for b, m in got.items():
+                    out[b] = Resolved(m, self._instance_refs(peer))
+                pending = [b for b in pending if out[b] is None]
+                if not pending:
+                    break
+        return out
+
+    async def _fetch(self, mgr, bids: list[str],
+                     timeout: float | None = None) -> dict[str, Mission]:
+        """The missions `mgr` can read among `bids`, keyed by id. One
+        `get_many` call when the adapter declares batch_get (the timeout
+        then covers the whole call, scaled by its page count), else one
+        `get` per id. A failure is a miss, never a retry."""
+        try:
+            batch = bool(mgr.pmo.capabilities().batch_get)
+        except Exception:  # noqa: BLE001 — an unreadable capability row means the plain path, not a crash
+            batch = False
+        if not batch:
+            out: dict[str, Mission] = {}
+            for b in bids:
+                m = await self._get(mgr, b, timeout=timeout)
+                if m is not None:
+                    out[b] = m
+            return out
+        refs = [MissionRef(b, "issue") for b in bids]
+        try:
+            if timeout is not None:
+                pages = max(1, -(-len(bids) // 100))
+                async with asyncio.timeout(timeout * pages):
+                    return dict(await mgr.pmo.get_many(refs))
+            return dict(await mgr.pmo.get_many(refs))
+        except Exception:  # noqa: BLE001 — one unreadable/slow path falls through to the next candidate; unresolved blockers stay open (ADR-0007 fail-safe)
+            return {}
 
     @staticmethod
     async def _get(mgr, bid: str,

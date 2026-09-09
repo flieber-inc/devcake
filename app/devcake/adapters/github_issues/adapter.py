@@ -19,7 +19,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...domain.model import FeedDelta
-from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
+from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient, get_many_via_get
 from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
@@ -247,6 +247,11 @@ class GitHubIssuesAdapter:
                 m = await self._enrich_blocked_by(m)
             out.append(m)
         return out
+
+    async def get_many(self, refs: list[MissionRef]) -> dict[str, Mission]:
+        # no cheaper batch read on this vendor — capabilities().batch_get
+        # stays False and the locator paces per id itself
+        return await get_many_via_get(self, refs)
 
     async def get(self, ref: MissionRef) -> Mission:
         self._require_issue(ref)

@@ -44,10 +44,19 @@ non-DevCake automation) owns cross-team coordination. Decision:
   dependency set by `build_managers` on every manager (live managers dict +
   PollRuntime owner map; no degrade path — a missed wire fails loud).
   Resolution order: local snapshot → owner map (durable claims; released
-  entries are EXPECTED for done+aged-out blockers, so the next step is the
-  hot path, not a fallback) → same-system peer scan (config order, first
-  success) → local adapter fallback → unreadable (fail-safe open, ADR-0007
-  semantics unchanged).
+  entries are EXPECTED for done+aged-out blockers) → local adapter →
+  same-system peer scan (config order, first success) → unreadable
+  (fail-safe open, ADR-0007 semantics unchanged). The local adapter
+  precedes the scan because a mission's blockers are overwhelmingly its
+  own board's and a same-workspace key reads a peer's issue anyway; a
+  local hit is attributed to every same-system instance, which is safe
+  exactly where peers are consulted at all (ids cannot collide). A
+  mission's whole off-snapshot set resolves in ONE locator walk
+  (`resolve_many`), batched on adapters that declare
+  `PMOCapabilities.batch_get`; a refused batch is a miss for that path,
+  never a per-id retry — the per-edge walk cost three reads per blocker
+  per pass, and a launch gated on hundreds of finished siblings spent a
+  vendor's hourly budget before it began.
 - **Peer resolution is restricted by adapter capability**
   (`PMOCapabilities.global_ids`, not a vendor-name set): systems whose
   pmo_ids are globally unique across the vendor environment (Linear UUIDs

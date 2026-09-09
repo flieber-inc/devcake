@@ -55,7 +55,7 @@ prose.
 | `FORGE_PERMANENT` | no | no | — | PMO comment + health strip (e.g. merge blocked, `06-forge-adapter.md` §5) |
 | `DEV_CRASH` | yes — by natural rescheduling (INV-3) | **yes** | scheduler (next cycle) | after cap: `DEVCAKE-FAILED` (§3) |
 | `DEV_MCP_SETUP` | yes — same (a transient install/network failure deserves retries; the deterministic missing-secret case never dispatches at all, `14` §8) | **yes** | scheduler | same |
-| `DEV_PROMPT_TOO_LARGE` | yes — same (the steward's next package is built to the budget; a mission brief needs an operator edit) | **yes** | scheduler | same |
+| `DEV_PROMPT_TOO_LARGE` | yes — same (the app-built sections — steward package, blocker note, reference list — are built to budgets, so a breach means operator content: the dispatch warning names the part, and a mission brief that large needs an operator edit) | **yes** | scheduler | same |
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_ORPHANED` | yes — same (the mission's label never advanced) | **yes** | scheduler | same |
 | `DEV_KILLED` | yes — same | **yes** | scheduler | same |

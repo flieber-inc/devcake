@@ -124,6 +124,26 @@ function of PMO state, so the receipt is unchanged.
   past the excerpt cap at read time (excerpting re-caps); Linear renders
   the marker line as literal code — cosmetic.
 
+## Addendum — the blocker note is built to a prompt budget
+
+The per-excerpt cap bounds one handoff, not the note: a mission gated on
+a few hundred finished siblings rendered a quarter-megabyte of excerpts
+into a prompt that rides the harness argv as one element, past the
+kernel's per-argument ceiling (`07-dev-runtime.md` §4, exit 17), and could
+never launch. Rulings. **The note is built to a byte budget**
+(`prompts.BLOCKER_NOTE_MAX_BYTES`): mounted blockers ride first (their
+clones are in the workspace), then the note-only ones in `blocked_by`
+order, then the skip reasons; the note ends with one line counting what
+it left out and pointing at MISSION.md's "Blocked by (completed —
+handoffs)" block, which always carries every handoff — the prompt is the
+head of the list, the workspace is the whole of it. **The reference
+repository list is bounded the same way** (`REFERENCE_REPOS_NOTE_MAX_BYTES`;
+the rest are counted and the Dev is told to list `/workspace/repo/`).
+**The assembled prompt is measured at dispatch**: past `PROMPT_MAX_BYTES`
+(shared with the steward's package budget) a warning names the size of
+each part, so a breach by operator content (a brief, a playbook) is
+diagnosed from the log rather than from the run record.
+
 ## Related
 
 - Implement: `domain/orchestrator/markers.py` (`HANDOFF_MARKER`,

@@ -199,10 +199,6 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 baton,
                 todo="Reconcile the existing `DEVCAKE-CREATED` missions, then "
                      "remove the `DEVCAKE-NEEDS-HUMAN` label to retry."))
-            if live.pmo_kind == "project":
-                await mgr.pmo.post_feed(
-                    MissionRef(pmo_id, "project"),
-                    redact(baton) + "\n\n" + COMMENT_SENTINEL)
             mgr._audit(pmo_id, "decomposition_conflict", detail)
         await mgr._checkpoint(run, steps.DECOMP_CONFLICT, _decomp_conflict)
         run.verdict = "handed off: decomposition replay conflict"
@@ -386,17 +382,31 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "project"),
                                        remove=set(), add={LABEL_TRACKING})
             mgr._audit(pmo_id, "decomposed_project", links)
+            # the split is the project's record too (ADR-0043 §2): the same
+            # notice an issue original gets, on the project-native feed
+            record = (f"🧩 Decomposed into {len(normalized)} issues: {links}."
+                      + gate_note)
             if gated:
-                # projects have no issue-style comment feed: the instruction
-                # rides a project update, best-effort like the hand-off baton
-                try:
-                    await mgr.pmo.post_feed(
-                        MissionRef(pmo_id, "project"),
-                        f"🧩 Decomposed into {len(normalized)} issues: {links}."
-                        + gate_note + "\n\n" + COMMENT_SENTINEL)
-                except Exception:  # noqa: BLE001 — project-update note is best-effort; the children carry the label and the audit records the gate
-                    log.warning("project-update plan-approval note failed "
-                                "for %s", run.mission_key, exc_info=True)
+                body = feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"Split into {len(normalized)} missions ({links}); every "
+                    f"child is parked because this board approves plans by "
+                    f"hand.",
+                    record,
+                    todo="Review the split — edit a child in place or cancel "
+                         "it — then remove the `DEVCAKE-NEEDS-HUMAN` label on "
+                         "each child you want started.")
+            else:
+                body = feed.notice(
+                    mgr, feed.INFO,
+                    f"Split into {len(normalized)} missions ({links}); this "
+                    f"project tracks them and completes when they are done.",
+                    record)
+            try:
+                await mgr._feed(pmo_id, "project", body)
+            except Exception:  # noqa: BLE001 — the note is best-effort; the children carry the labels and the audit records the split
+                log.warning("project decomposition note failed for %s",
+                            run.mission_key, exc_info=True)
         else:
             record = (
                 f"🧩 Decomposed into {len(normalized)} standalone issues: "

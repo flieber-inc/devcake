@@ -338,10 +338,34 @@ def test_human_needed_allowed_for_projects(tmp_path):
                                    "summary": "grant the scope"}, None))
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # not parked with SKIP
     assert "DEVCAKE-SKIP" not in m.labels
-    # the baton MUST be PMO-visible: comments are suppressed for projects, so
-    # it goes out as a project update, sentinel-signed (docs/05 §6)
-    pid, body = fake.project_updates[-1]
-    assert "grant the scope" in body and body.endswith("`devcake:v1`")
+    # the baton MUST be PMO-visible: it goes out as a project update through
+    # the feed chokepoint, sentinel-signed, exactly once (ADR-0043 §2)
+    batons = [b for _, b in fake.project_updates if "grant the scope" in b]
+    assert len(batons) == 1 and batons[0].endswith("`devcake:v1`")
+
+
+def test_project_run_posts_its_step_card_to_the_project_feed(tmp_path):
+    """ADR-0043 §2: a project run's close posts the same step card an issue
+    gets — transcript uploaded and linked — to the project-native feed,
+    so the project's record is complete for its children."""
+    m = mission("in_progress", {"DEVCAKE"})
+    m.pmo_kind = "project"
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run.pmo_kind = "project"
+    store.save(run)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        result={"outcome": "human_needed", "summary": "needs a decision"},
+        last_message="I split it three ways.")))
+    bodies = [b for _, b in fake.project_updates]
+    cards = [b for b in bodies if "`1_ONBOARD.md`" in b]
+    assert len(cards) == 1                     # one card, on the project
+    assert "Step 1 · ONBOARD" in cards[0] and "Transcript" in cards[0]
+    assert cards[0].endswith("`devcake:v1`")
+    assert any(name == "1_ONBOARD.md" for name, _ in fake.uploads)
+    assert fake.comments == []                 # nothing on an issue feed
+    assert not any("project_feed_suppressed" in str(a)
+                   for a in getattr(mgr, "audits", []))
 
 
 def test_awaiting_merge_redelivery_not_misread_as_external(tmp_path):

@@ -349,15 +349,6 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                     baton,
                     todo="When it is resolved, remove the `DEVCAKE-NEEDS-HUMAN` "
                          "label and DevCake resumes where it left off."))
-            if run.pmo_kind == "project":
-                try:
-                    await mgr.pmo.post_feed(
-                        MissionRef(pmo_id, "project"),
-                        redact(baton) + "\n\n" + COMMENT_SENTINEL)
-                except Exception:  # noqa: BLE001 — project-update mirror is best-effort; failure logged, the hand-off is already recorded on the feed + audit
-                    log.warning("project-update hand-off failed for %s — "
-                                "summary lives in the audit log only",
-                                run.mission_key, exc_info=True)
             mgr._audit(pmo_id, "devcake_needs_human",
                         f"#{nth}: " + (result.get("summary") or "")[:110])
         await mgr._checkpoint(run, steps.TRANSITION_HUMAN_NEEDED, _human)

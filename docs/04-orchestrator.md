@@ -7,7 +7,8 @@ The orchestrator is the always-on core of the main app. **Implementation** lives
 
 | Module | Role |
 |---|---|
-| `schedule.py` | candidate gate map + schedule order |
+| `schedule.py` | candidate gate map + schedule order; the one observer of dispatch outcomes for `stalls.py` (a launch ends a mission's episode; a refusal or deferral is clocked and classified; the cycle closes with the ticket/health surfacing) |
+| `stalls.py` | stalled dispatches (ADR-0042 addendum): ledger, threshold, one notice per block per episode, the status comment's waiting line, `/health.stalled_dispatches` |
 | `dispatch.py` | mission dispatch (prompt, attempts, repo resolution) |
 | `finalize.py` | run finalize spine, checkpoints, `restore_after_failure` |
 | `transitions.py` | outcome → label/status transitions |

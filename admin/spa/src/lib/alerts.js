@@ -15,6 +15,8 @@ export function alertKey(a) {
   return `${a.id}:${hash(`${a.title}|${a.body || ""}`)}`;
 }
 
+import { stallAge, stallSeverity, stallWords } from "./stalls.js";
+
 export default function deriveAlerts(health) {
   const alerts = [];
 
@@ -377,6 +379,31 @@ export default function deriveAlerts(health) {
       body: breakers
         .map(([k, v]) => `${k} (${v}) — ${remedy(k)}`)
         .join(" · "),
+    });
+  }
+
+  // Stalled dispatches (stalls.py): missions DevCake cannot start, past the
+  // threshold. Dependency waits never appear here — a stall is a refused or
+  // deferred dispatch a person can act on (an archived ancestor, a missing
+  // Dev image receipt, an unreadable repository). Warning first, critical
+  // after a day; self-clearing when the mission dispatches or the block
+  // goes away. Not dismissable: while this is set the mission sits in its
+  // column looking ready and is not.
+  const stalled = health.stalled_dispatches || [];
+  if (stalled.length > 0) {
+    alerts.push({
+      id: "stalled-dispatches",
+      severity: stallSeverity(stalled),
+      title:
+        stalled.length === 1
+          ? `${stalled[0].key} cannot start`
+          : `${stalled.length} missions cannot start`,
+      body:
+        stalled
+          .map((r) => `${r.key}: ${stallWords(r)} (${r.subject}) for ${stallAge(r.seconds)}`)
+          .join(" · ") +
+        " — the ticket's status comment says what would clear it; this alert " +
+        "clears itself when the mission dispatches.",
     });
   }
 

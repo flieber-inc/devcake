@@ -13,6 +13,16 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Added — a mission that cannot start is now visible.** A mission whose
+  dispatch DevCake refuses or defers for a reason a person can act on,
+  for longer than a threshold, is listed on the health endpoint, raised as
+  an alert on the admin Overview with its age, and badged on its board
+  card. The ticket gets one notice per distinct block and its status
+  comment is created early with a "waiting to start since" line that says
+  why and what would clear it. Waiting on a blocker never counts, the same
+  block is never repeated, a different block notifies again, and neither
+  the notice nor the status comment ever enters a Dev's context.
+
 ## v0.6.2 (2026-09-10)
 
 Patch release in the v0.6 "Kentucky Butter" line — the activity repository

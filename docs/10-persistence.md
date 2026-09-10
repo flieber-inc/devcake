@@ -38,6 +38,10 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
   state/
     runs/{run_id}.json          # Run records (02-domain-model.md §7), one file per run
     runs/quarantine/            # unreadable/model-invalid/pre-v2 records, moved aside at boot (§5)
+    stalls.json                 # stalled-dispatch ledger (stalls.py, ADR-0042 addendum):
+                                #   per instance, per mission — the current block, its
+                                #   first-seen time, the episode, what was written to the
+                                #   ticket; restart-safe clocks, advisory (wipe = re-notify)
     cron_outcomes.json          # scheduled-task fire ledger (ADR-0035): last 3 automatic
                                 # outcomes + last_fire_at per job — degradation + the
                                 # elapsed-interval schedule survive restarts; advisory

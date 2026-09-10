@@ -157,7 +157,8 @@ starts at EXECUTE, a person orders a mission into REVIEW by choosing that
 label, a mission that predates this ADR is next dispatched at whatever
 step it is on, a hand-off resumes mid-pipeline. Every dispatch therefore
 looks for the status comment by its marker and creates it when absent,
-before the run starts; the check is idempotent and needs no stored id, so
+before the run starts (a stalled deferral creates it too — addendum
+below); the check is idempotent and needs no stored id, so
 a restart or a second instance neither duplicates nor loses it. It carries the step ladder with outcomes and costs, the current
 state in one sentence (running step 2; parked, waiting on you to approve
 the plan; awaiting merge of the PR; done), the PR link, the cumulative
@@ -275,3 +276,44 @@ One structure, one voice, one vendor-specific line: the fold's syntax.
   arithmetic), ADR-0036 (ancestor mirrors).
 - docs/03 §4–§8 (comment shapes, token report, threading, sentinel),
   docs/05 §1 (port surface), docs/07 §1–2 (activity folder).
+
+## Addendum — a mission that cannot start is a state a person must see (2026-09-10)
+
+**Context.** A decomposition child sat for eight days because its
+original had been archived after the split: the ancestor walk could not
+find it, strict context sourcing deferred the dispatch every cycle, and
+nothing but a log line said so. The refusal was the doctrine working; the
+silence was the defect. The founder's conditions: the ticket must carry it
+for the human, the Dev's context must never carry it, and it must not be
+spammed.
+
+**Decision.** `stalls.py` clocks every dispatch the scheduler refused or
+deferred for a reason a person can act on (a missing harness receipt,
+upstream context missing, a repository or the board unreadable, a Dev Type
+not ready). A *dependency* wait is never a stall. A block has an identity
+(kind + subject) and belongs to an *episode*, which ends when the mission
+dispatches or a person parks or closes it. Past a threshold
+(`stall_after_seconds`, default thirty minutes):
+
+- `/health.stalled_dispatches` lists the block with its age; the admin
+  Overview raises a self-clearing alert and the board card carries a badge.
+- ONE ✋ notice per identity per episode is posted — a new comment, so the
+  ticket's subscribers are notified — and the mission's status comment is
+  **created when none exists** (§5's rule gains "or by a stalled
+  deferral") and edited so its Now line reads "waiting to start since
+  <date> — <why>". The date does the aging; nothing is rewritten for the
+  same block. A different block notifies again; the same block flickering
+  within an episode writes nothing; a block that cleared without a dispatch
+  and returns after a day counts as new; at most one write per mission per
+  hour regardless.
+- Both carry a marker the projection drops (`` `devcake:stall:v1` `` beside
+  `` `devcake:status:v1` ``): they are about DevCake's inability to proceed,
+  not about the mission's work, so they never enter ACTIVITY.md, the record
+  or any upstream folder. Pinned by test.
+
+**Consequences.** A stall is visible on the panel within a poll of the
+threshold and on the ticket once. A project-kind mission is clocked and
+shown on the panel but never written to (its feed is its children's
+context). The ledger persists under `/data/state/stalls.json` so a restart
+keeps the clocks.
+

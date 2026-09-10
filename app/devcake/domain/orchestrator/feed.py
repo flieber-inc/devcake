@@ -19,7 +19,7 @@ from ..run import utcnow
 from . import markers
 from .markers import (ANSWER_TOKEN_RE, COMMENT_SENTINEL, FEED_INLINE_MAX,
                       PART_LINE, PLAN_FILE, REPLY_MARKER, SENTINEL_RE,
-                      STATUS_MARKER_RE, STEP_MARKER)
+                      STALL_MARKER_RE, STATUS_MARKER_RE, STEP_MARKER)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -889,6 +889,12 @@ def notice(mgr, lead: str, what: str, record: str, *, todo: str = "",
 
 # ── the status comment (a view) ───────────────────────────────────────────
 
+def is_stall_notice(body: str | None) -> bool:
+    """A stalls.py notice (DevCake cannot start the mission): a person's
+    notification, never Dev context — the projection drops it."""
+    return bool(body) and bool(STALL_MARKER_RE.search(unquoted(body)))
+
+
 def is_status_comment(body: str | None) -> bool:
     return is_devcake_comment(body) and bool(STATUS_MARKER_RE.search(unquoted(body)))
 
@@ -1050,7 +1056,7 @@ def unfold_entries(entries) -> list[Projected]:
         if reconstructed is None:
             out.extend(_projected(e, e.body or "") for e in group)
             continue
-        if is_status_comment(first.body):
+        if is_status_comment(first.body) or is_stall_notice(first.body):
             continue
         card = unfold_card(group, reconstructed)
         if card is not None:

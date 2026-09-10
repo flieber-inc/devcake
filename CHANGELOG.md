@@ -13,6 +13,15 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Changed — a mission's activity repository is its record, kept current.**
+  The per-mission activity repository used to be written once, before a
+  step launched. It is now refreshed at every run boundary: when a step
+  closes, including failures, at completion, at a hand-off, when a pull
+  request is closed unmerged, and when a conflict is routed back. The
+  upstream folders a Dev cloned at dispatch stay in place. Two read
+  operations on the internal forge let the record be read back (ADR-0043,
+  stage 1 of 3).
+
 ## v0.6.1 (2026-09-10)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.

@@ -154,16 +154,56 @@ class FakeInternalForge:
         self.deleted: list[str] = []
         self.ro_token = ro_token
         self.push_exc = push_exc
+        # ADR-0043 — the record as the fake holds it: repo → {path: b64}.
+        # Pushes maintain it like the Gitea adapter (stale paths pruned,
+        # kept prefixes untouched); the read operations serve from it.
+        self.snapshots: dict[str, dict[str, str]] = {}
+        self.read_calls: list[tuple[str, str]] = []
 
     async def ensure_activity_repo(self, instance, mission_key):
         from devcake.ports.internal_forge import activity_repo_name
         self.ensured.append((instance, mission_key))
         return activity_repo_name(instance, mission_key)
 
-    async def push_activity_snapshot(self, repo_name, files, message):
+    async def push_activity_snapshot(self, repo_name, files, message, *,
+                                     keep_prefixes=()):
         if self.push_exc:
             raise self.push_exc
         self.pushes.append((repo_name, files, message))
+        wanted = {f["path"]: f["content_b64"] for f in files}
+        if len(wanted) != len(files):
+            raise ValueError("duplicate paths in activity snapshot")
+        cur = self.snapshots.setdefault(repo_name, {})
+        for path in list(cur):
+            if path not in wanted and not path.startswith(tuple(keep_prefixes)):
+                del cur[path]
+        cur.update(wanted)
+
+    def seed_snapshot(self, repo_name, files: dict[str, bytes]):
+        """Test helper: a record for a mission that ran before this test."""
+        import base64
+        self.snapshots[repo_name] = {
+            p: base64.b64encode(b).decode() for p, b in files.items()}
+
+    async def activity_snapshot_tree(self, repo_name):
+        import base64
+        import hashlib
+        self.read_calls.append((repo_name, ""))
+        cur = self.snapshots.get(repo_name)
+        if cur is None:
+            return None
+        out = []
+        for path, b64 in cur.items():
+            data = base64.b64decode(b64)
+            out.append({"path": path, "size": len(data),
+                        "sha": hashlib.sha1(
+                            b"blob %d\0" % len(data) + data).hexdigest()})
+        return out
+
+    async def activity_snapshot_file(self, repo_name, path):
+        import base64
+        self.read_calls.append((repo_name, path))
+        return base64.b64decode(self.snapshots[repo_name][path])
 
     def activity_credentials(self, repo_name):
         from devcake.ports.internal_forge import ActivityRepoCredentials

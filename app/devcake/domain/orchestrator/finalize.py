@@ -12,6 +12,7 @@ from ...security import redact, redact_value
 from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, is_pre_wipe, utcnow
+from . import activity_payload as activity_payload_mod
 from . import discovery, status_comment, steps, transitions
 from .feed import (SECTION_ANSWER, SECTION_DISCOVERIES, SECTION_RUN,
                    SECTION_TOKEN_REPORT, SECTION_TRANSITION, FoldSection,
@@ -215,6 +216,8 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
             log.warning("run %s failed (exit %s, attempt %d)",
                         run.run_id, exit_code, run.attempt_of_step)
             await status_comment.refresh(mgr, pmo_id, reason="failed", run=run)
+            await activity_payload_mod.record_activity(
+                mgr, pmo_id, run.pmo_kind, run.mission_key, "failed")
             return
 
         # 2b — ADR-0033 harvest bookkeeping (label, pending set, routing
@@ -265,6 +268,8 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
                             run.run_id, e)
                 await status_comment.refresh(mgr, pmo_id, reason="bad_output",
                                              run=run)
+                await activity_payload_mod.record_activity(
+                    mgr, pmo_id, run.pmo_kind, run.mission_key, "bad_output")
                 return
             if _pre_wipe(mgr, run):
                 return
@@ -286,6 +291,10 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
         # ADR-0042 §5 — the LAST statement of the close: the status comment
         # says what the record now says (best-effort, never a gate)
         await status_comment.refresh(mgr, pmo_id, reason="finalize", run=run)
+        # ADR-0043 §1 — then the record: the activity repository holds what
+        # the feed now holds (best-effort, never a gate)
+        await activity_payload_mod.record_activity(
+            mgr, pmo_id, run.pmo_kind, run.mission_key, "finalize")
 
 
 def dev_failure_error(mgr, run: Run, payload: dict) -> str:

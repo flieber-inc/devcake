@@ -38,6 +38,8 @@ The folder contract (docs/07 §2) becomes three parts, replacing "chronological 
 
 ## Decision 4 — carrier: per-mission activity repos under `devcake-repos`, deleted on Clear
 
+> Amended by ADR-0043: the repo is refreshed at every run boundary, not only before a dispatch, and is read back to build the upstream folders of downstream missions.
+
 Every mission gets **its own repo** `activity-{instance}-{key}` in the operator org `devcake-repos` (founder decision: one repo per mission for browsability — not a single archive repo; the `activity-` prefix is the sweeper's discriminator against operator repos and the skill-store, whose names cannot contain hyphens). Properties:
 
 - **App-written only**, via the existing Contents-API multi-file-commit wrapper (skill-store pattern): before every step dispatch, the freshly built folder (MISSION.md, ACTIVITY.md, siblings) is committed as one commit "step {seq} {TYPE} dispatch". Unprotected `main`; no per-mission machine users or token pairs — Devs clone with **one shared read-only service credential** (`devcake-activity-ro`, minted at boot beside the existing service accounts).

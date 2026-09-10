@@ -139,10 +139,27 @@ class InternalForgePort(Protocol):
         ...
 
     async def push_activity_snapshot(self, repo_name: str, files: list[dict],
-                                     message: str) -> None:
-        """ONE commit making main exactly match files [{path, content_b64}]:
-        create/update by tree sha, stale paths deleted, unchanged blobs
-        skipped (identical snapshot ⇒ no commit)."""
+                                     message: str, *,
+                                     keep_prefixes: tuple[str, ...] = ()
+                                     ) -> None:
+        """ONE commit making the repo's main match `files` [{path,
+        content_b64}]: stale paths are deleted, unchanged blobs omitted, an
+        identical snapshot commits nothing. Paths under a `keep_prefixes`
+        entry are never deleted (ADR-0043: a record push rebuilds the
+        mission's own folder and leaves the `upstream/` subtree the Dev
+        cloned at dispatch in place)."""
+        ...
+
+    # ADR-0043 — the record, read back. Sizes ride the tree so a byte budget
+    # is decided before any content is fetched. None = the repo does not
+    # exist (a mission that never dispatched has no record).
+    async def activity_snapshot_tree(self, repo_name: str
+                                     ) -> list[dict] | None:
+        """[{path, size, sha}] on main; None when the repo is absent."""
+        ...
+
+    async def activity_snapshot_file(self, repo_name: str, path: str) -> bytes:
+        """Raw bytes of one blob at main."""
         ...
 
     def activity_credentials(self, repo_name: str

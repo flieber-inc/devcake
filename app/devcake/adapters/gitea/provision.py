@@ -524,11 +524,15 @@ class GiteaProvisioner:
         return repo
 
     async def push_activity_snapshot(self, repo_name: str, files: list[dict],
-                                     message: str) -> None:
+                                     message: str, *,
+                                     keep_prefixes: tuple[str, ...] = ()
+                                     ) -> None:
         """ONE Contents-API commit making main exactly match `files`
         [{path, content_b64}]: the tree decides create vs update (sha),
-        stale paths are DELETED (a renamed feed attachment must not linger),
-        and unchanged blobs (git blob-sha match) are omitted — an identical
+        stale paths are DELETED (a renamed feed attachment must not linger)
+        unless they sit under a `keep_prefixes` entry (ADR-0043: a record
+        push leaves the dispatch-time `upstream/` subtree alone), and
+        unchanged blobs (git blob-sha match) are omitted — an identical
         snapshot commits nothing."""
         import base64
         import hashlib
@@ -551,11 +555,38 @@ class GiteaProvisioner:
                 entry["operation"] = "create"
             batch.append(entry)
         for path, sha in shas.items():
-            if path not in wanted:
-                batch.append({"operation": "delete", "path": path, "sha": sha})
+            if path in wanted or path.startswith(keep_prefixes):
+                continue
+            batch.append({"operation": "delete", "path": path, "sha": sha})
         if not batch:
             return
         await self._commit_files(OPERATOR_ORG, repo_name, batch, message)
+
+    async def activity_snapshot_tree(self, repo_name: str
+                                     ) -> list[dict] | None:
+        """ADR-0043 — the record's blob list [{path, size, sha}], None when
+        the repo does not exist. Existence is asked separately because
+        `_repo_tree` answers [] for an absent repo AND an empty one."""
+        exists = await self._req("GET", f"/repos/{OPERATOR_ORG}/{repo_name}",
+                                 tolerate=(404,))
+        if not exists:
+            return None
+        return [{"path": t["path"], "size": int(t.get("size") or 0),
+                 "sha": t["sha"]}
+                for t in await self._repo_tree(OPERATOR_ORG, repo_name)]
+
+    async def activity_snapshot_file(self, repo_name: str, path: str) -> bytes:
+        """ADR-0043 — one blob of the record at main (contents-API idiom,
+        admin-credentialed, same as the skill store)."""
+        import base64
+        from urllib.parse import quote
+        data = await self._req(
+            "GET", f"/repos/{OPERATOR_ORG}/{repo_name}/contents/"
+                   f"{quote(path)}?ref=main")
+        if isinstance(data, dict) and data.get("encoding") == "base64":
+            return base64.b64decode(data["content"])
+        raise RuntimeError(
+            f"activity repo {repo_name}: unexpected contents payload for {path}")
 
     def activity_credentials(self, repo_name: str) -> ActivityRepoCredentials | None:
         """Shared RO clone credentials for one activity repo (sync — runspec

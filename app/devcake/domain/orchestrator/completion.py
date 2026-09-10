@@ -162,14 +162,13 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
             # ADR-0042 §5 — the status comment reads "done" (a view; never
             # a gate; inside the write-back class so a starved key does
             # not refuse it)
-            await status_comment.refresh(
+            act = await status_comment.refresh(
                 mgr, ref.pmo_id, reason=spec.audit_action, run=run,
                 mission=mission, pr_url=pr_url)
-            # ADR-0043 §1 — the record follows the close
+            # ADR-0043 §1 — the record follows the close, on the same read
             await activity_payload.record_activity(
-                mgr, ref.pmo_id, ref.kind,
-                mission_key,
-                spec.audit_action)
+                mgr, ref.pmo_id, ref.kind, mission_key, spec.audit_action,
+                act=act)
         anchor = posted[0] if posted else None
         try:
             if run is not None:
@@ -246,10 +245,11 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
         mgr._audit(pmo_id, "conflict_resolve_dispatched",
                     f"attempt {n + 1} ({pr_url})")
         with write_back_class():
-            await status_comment.refresh(mgr, pmo_id, reason="conflict_routed",
-                                         pr_url=pr_url)
+            act = await status_comment.refresh(mgr, pmo_id,
+                                               reason="conflict_routed",
+                                               pr_url=pr_url)
             await activity_payload.record_activity(
-                mgr, pmo_id, "issue", key, "conflict_routed")
+                mgr, pmo_id, "issue", key, "conflict_routed", act=act)
         return True
     except Exception:  # noqa: BLE001 — degrade with record: conflict routing failure is logged; caller keeps the mission parked for a human
         log.exception("conflict auto-resolve routing failed for %s", key)

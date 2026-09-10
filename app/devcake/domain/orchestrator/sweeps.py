@@ -255,12 +255,12 @@ async def merge_sweep(mgr, m: Mission) -> None:
                             f"mission canceled (merge sweep)."))
                 mgr._audit(m.pmo_id, "merge_sweep_canceled", state.url)
                 with completion.write_back_class():
-                    await status_comment.refresh(
+                    act = await status_comment.refresh(
                         mgr, m.pmo_id, reason="merge_sweep_canceled",
                         pr_url=state.url)
                     await activity_payload.record_activity(
                         mgr, m.pmo_id, m.pmo_kind or "issue", m.key,
-                        "merge_sweep_canceled")
+                        "merge_sweep_canceled", act=act)
     else:
         # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
         # human — unless the deferred-retry window is actively running
@@ -454,12 +454,12 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                     mgr.merge_handoffs[m.pmo_id] = (
                         f"{m.key}: awaiting human merge — {pr_url}")
                     with completion.write_back_class():
-                        await status_comment.refresh(
+                        act = await status_comment.refresh(
                             mgr, m.pmo_id, reason="conflict_handoff",
                             mission=m, pr_url=pr_url)
                         await activity_payload.record_activity(
                             mgr, m.pmo_id, m.pmo_kind or "issue", m.key,
-                            "conflict_handoff")
+                            "conflict_handoff", act=act)
             elif elapsed:
                 # a closing attempt that did not merge and was no conflict:
                 # the second in a row hands off
@@ -506,10 +506,11 @@ async def _hand_off_exhausted(mgr, m: Mission, pr_url: str,
     mgr._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
     mgr._merge_window_closed.add(m.pmo_id)
     with completion.write_back_class():
-        await status_comment.refresh(mgr, m.pmo_id, reason="merge_handoff",
-                                     mission=m, pr_url=pr_url)
+        act = await status_comment.refresh(mgr, m.pmo_id, reason="merge_handoff",
+                                           mission=m, pr_url=pr_url)
         await activity_payload.record_activity(
-            mgr, m.pmo_id, m.pmo_kind or "issue", m.key, "merge_handoff")
+            mgr, m.pmo_id, m.pmo_kind or "issue", m.key, "merge_handoff",
+            act=act)
 
 
 async def _closing_attempt_failed(mgr, m: Mission, pr_url: str, window: int,

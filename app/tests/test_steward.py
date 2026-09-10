@@ -995,7 +995,9 @@ def test_apply_routes_delivers_receipts_and_drops_label(tmp_path):
     rec = assert_notice(body, "📨 **Leads from T-S, step 2.** 1 lead — leads, not truths",
                         record_has=["`devcake:discovery-in:v1 src=T-S step=2`",
                                     "🔎 [T-S · step 2 ·", "**1.**",
-                                    "> finding 0 about the config",
+                                    "> Finding: finding 0 about the config",
+                                    "> Evidence: src/x.py:0",
+                                    "> Scope: scope 0",
                                     "*— steward: target touches the same config*"])
     assert rec.startswith("`devcake:discovery-in:v1 src=T-S step=2`\n\n🔎 [T-S")
     assert "> finding 0 about the config" in strip_fold(body)[0]
@@ -1425,33 +1427,35 @@ def test_apply_routes_skips_a_finding_already_on_the_recipient(tmp_path):
     assert sha not in stamped
 
 
-def test_delivery_over_the_inline_ceiling_keeps_fingerprints(
-        tmp_path, monkeypatch):
-    """The ceiling fallback drops finding bodies but never a counted marker;
-    the per-finding fingerprints ride the head so content dedup survives a
-    truncated delivery."""
+def test_long_delivery_keeps_every_finding_in_full(tmp_path, monkeypatch):
+    """Founder ruling 2026-09-10: no inline ceiling on a delivery — the
+    recipient's Dev reads the findings from its own folder and never sees
+    the source mission's file, so the Record carries every finding in
+    full (finding, evidence, scope) however long, the head an excerpt,
+    the markers and fingerprints on the head lines as before."""
     from devcake.domain.orchestrator.markers import (
         FINDING_MARKER_RE, finding_fingerprint)
-    monkeypatch.setattr(steward, "FEED_INLINE_MAX", 240)
+    monkeypatch.setattr(steward, "FEED_INLINE_MAX", 240)   # no longer consulted
     pmo, mgr, run = _route_setup(tmp_path)
     delivered, rejected = _apply(mgr, run, [_route(finding=1),
                                             _route(finding=2)])
     assert (delivered, rejected) == (2, 0)
     body = next(md for pid, md in pmo.comments if pid == "tgt")
+    assert len(body) > 240                                # nothing dropped
     assert "`devcake:discovery-in:v1 src=T-S step=2`" in body
-    assert "about the config" not in body                 # bodies dropped
     assert sorted(FINDING_MARKER_RE.findall(body)) == sorted(
         finding_fingerprint({"finding": f"finding {i} about the config"})
         for i in (0, 1))
-    # re-rendered from the parts, not string-split: the lead survives, the
-    # head says the findings are not repeated, the Record keeps the
-    # marker, the pointer and the fingerprints and nothing else
     from fakes import assert_notice
     rec = assert_notice(body, "📨 **Leads from T-S, step 2.** 2 leads",
-                        record_has=["🔎 [T-S · step 2 ·", "`devcake:finding:v1 sha="])
-    assert "not repeated here" in body
-    assert "**1.**" not in rec and "— steward:" not in body
-    # ...and a re-route of either finding is now a content duplicate
+                        record_has=["🔎 [T-S · step 2 ·", "`devcake:finding:v1 sha=",
+                                    "> Finding: finding 0 about the config",
+                                    "> Finding: finding 1 about the config",
+                                    "> Evidence: src/x.py:1", "> Scope: scope 1"])
+    assert "not repeated here" not in body
+    assert "in full in the record below" in body
+    assert rec.count("**1.**") == 2                       # one block per finding, per source
+    # ...and a re-route of either finding is a content duplicate
     pmo2, mgr2, run2 = _route_setup(tmp_path / "b", recipient_bodies=[body])
     assert _apply(mgr2, run2, [_route(finding=2)]) == (0, 0)
     assert not any(pid == "tgt" for pid, _ in pmo2.comments)

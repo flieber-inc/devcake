@@ -16,6 +16,7 @@ must never wedge a close.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from ...security import redact
@@ -526,3 +527,97 @@ async def discovery_sweep(mgr, m) -> None:
         except Exception as ex:  # noqa: BLE001 — retried next sweep
             mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
         mgr._discoveries_pending.discard(m.pmo_id)
+
+
+# ── the Discoveries digest (ADR-0042 §5 addendum: one place for a reader) ──
+
+DIGEST_BUDGET = 24_000     # chars; older deliveries drop first, said so
+
+_RECORD_LINK_RE = re.compile(r"Full record attached: \[[^\]]+\]\(([^)]+)\)")
+
+
+def _section_or_body(body: str, title: str) -> str:
+    """The fold section `title` of a card/notice, or the whole body when
+    the entry predates folds (a legacy harvest / delivery comment)."""
+    from .feed import fold_sections, strip_fold
+    head, inner = strip_fold(body)
+    if inner is not None:
+        for s in fold_sections(inner):
+            if s.title == title:
+                return s.body
+        return ""
+    return body
+
+
+def _quoted_blocks(text: str) -> list[str]:
+    """The finding blocks of a record: numbering lines, `>`-quoted text and
+    steward notes — never a backticked marker line, never a bare
+    provenance line (the digest is a VIEW: no scan may count it)."""
+    out: list[str] = []
+    for para in text.split("\n\n"):
+        s = para.strip()
+        if not s or s.startswith("`") or s.startswith("🔎") or s == "---":
+            continue
+        if s.startswith("Full record attached") or s.startswith("(attachment"):
+            continue
+        out.append(s)
+    return out
+
+
+def digest_lines(entries) -> list[str]:
+    """What this mission discovered and what it was handed, gathered from
+    the feed for the status comment's `Discoveries` section — a reader's
+    one place. Pure over the entries; carries no backticked marker and no
+    step-file token, so no scan counts it and the Freshness Gate ignores
+    it like the rest of the status comment. Outgoing: per step, the count,
+    the record file link and the excerpts the card carries. Incoming: per
+    (source, step), every finding in full as the delivery carried it.
+    Over the budget, the oldest deliveries are dropped and the line says
+    so — the record above always has them."""
+    from .feed import unquoted
+    from .markers import DISCOVERY_IN_MARKER_RE, DISCOVERY_MARKER_RE
+    from .feed import SECTION_DISCOVERIES, SECTION_RECORD
+    reported: list[str] = []
+    received: list[list[str]] = []
+    seen_in: set[tuple[str, int]] = set()
+    for e in entries:
+        body = e.body or ""
+        plain = unquoted(body)
+        for step, n in DISCOVERY_MARKER_RE.findall(plain):
+            section = _section_or_body(body, SECTION_DISCOVERIES)
+            m = _RECORD_LINK_RE.search(section)
+            link = f" · [record file]({m.group(1)})" if m else ""
+            reported.append(f"step {step} · {n} finding{'' if n == '1' else 's'}{link}")
+            reported.extend(_quoted_blocks(section))
+        for src, step in DISCOVERY_IN_MARKER_RE.findall(plain):
+            key = (src, int(step))
+            if key in seen_in:
+                continue
+            seen_in.add(key)
+            record = _section_or_body(body, SECTION_RECORD)
+            # one `---`-separated part per (source, step) in a bundled delivery
+            part = next((pt for pt in record.split("\n\n---\n\n")
+                         if f"src={src} step={step}`" in pt), record)
+            ts = getattr(e, "ts", None)
+            when = f" · {ts:%Y-%m-%d}" if ts else ""
+            received.append([f"from {src}, step {step}{when}",
+                             *_quoted_blocks(part)])
+    if not reported and not received:
+        return []
+    lines: list[str] = []
+    if reported:
+        lines += ["**Reported by this mission**", *reported]
+    if received:
+        kept = list(received)
+        dropped = 0
+        while kept and sum(len("\n\n".join(b)) for b in kept) > DIGEST_BUDGET:
+            kept.pop(0)
+            dropped += 1
+        lines += ["", "**Leads received**"] if lines else ["**Leads received**"]
+        if dropped:
+            lines.append(f"{dropped} older deliver{'y' if dropped == 1 else 'ies'} "
+                         f"omitted here — the record above has them.")
+        for block in kept:
+            lines += block
+    return lines
+

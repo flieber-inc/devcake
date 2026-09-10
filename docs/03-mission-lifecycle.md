@@ -189,7 +189,7 @@ every site: a fixed lead — `✋ **Needs you.**` when a person must act,
 `⚠️ **For the record.**` for a disclosure, `ℹ️` for a status note, a
 directive lead (`🧩 **Conflict-resolve directive.**`,
 `🔄 **Freshness re-review N/cap.**`) for the next Dev,
-`📨 **Leads from KEY, step N.**` for a discovery delivery — then one
+`📨 **Leads from KEY, step N.**` for a discovery delivery (its head quotes an excerpt of each finding; its `Record` carries every finding in full — finding, evidence, scope — with no inline ceiling, since the recipient's Dev reads them from its own folder and never sees the source mission's file; a capped vendor pages it, markers on the first page — ADR-0042 addendum) — then one
 sentence saying what, then the what-to-do (the §5 merge command on a
 hand-off), then the fold whose `Record` section is the comment text of the
 pre-notice build, verbatim, markers included on their own lines. The head
@@ -226,7 +226,7 @@ by `DEVCAKE-SKIP`; ⏳ awaiting merge of the PR; ✅ done; 🚫 canceled;
 **parent** when there is one, and the step ladder — one row per step from
 the mission's runs, latest attempt per step, glyph · outcome · duration ·
 cost. A mission that entered at REVIEW by label shows one row; the ladder is
-the runs, never the label history.
+the runs, never the label history. Its fold also carries a **`Discoveries`** section (ADR-0042 addendum): what the mission reported (per step: count, the record-file link, the card's excerpts) and every lead it received (per source and step, the findings in full) — a view over the feed (`discovery.digest_lines`) with no marker, no file token and no provenance line, so no scan counts it and no Dev sees it; oldest deliveries drop first past a byte budget, and the section says so. Building it costs the refresh one full feed read, which the ADR-0043 record push at the same boundary reuses; a discovery delivery refreshes the recipient's comment so the section is current when the leads land.
 
 It is **created by whichever dispatch finds the feed without one** — there
 is no privileged entry point — or by a **stalled deferral** (a dispatch refused or deferred for longer than `stall_after_seconds` for a reason a person can act on: the Now line then reads "waiting to start since <date> — <why>", and one ✋ notice per block per episode is posted beside it; both carry a marker the Dev's folder drops — ADR-0042 addendum, `stalls.py`) — found again by the `` `devcake:status:v1` ``

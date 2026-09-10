@@ -38,3 +38,5 @@ Canceled blockers do not mount. A blocker repo with **no read credential at disp
 - Dependents on internal pipelines can read upstream trees without Linear archaeology.
 - Operators can opt into PMO file visibility for configured repos without changing zero-repo guarantees.
 - Docs/14: blocker RO tokens (other mission’s read token) enter the Dev under Zone B trust — documented, same class as reference repos.
+
+> Amended by ADR-0043 §4: beside the work-repo mount, a direct done blocker's whole record is now copied under `upstream/{KEY}/` in the dependent's activity folder. The mount contract above is unchanged.

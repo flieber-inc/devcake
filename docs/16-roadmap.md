@@ -936,6 +936,15 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **Upstream folders are copies of the record, stage 3** (2026-09-10,
+  ADR-0043 §3-4): `_offer_upstream` reads each upstream mission's activity
+  repo through `activity_snapshot_tree` (budget decided from sizes) and
+  `activity_snapshot_file`, vendor rebuild only when no record exists;
+  `family_graph.upstream_chain` appends every direct done blocker
+  (`RELATION_BLOCKER`, never transitive; `blockers_outside` counts
+  peer-board ones for the banner); blocker gaps are disclosed, never
+  gating; banner names the source per folder. Prompts, docs/07, ADR-0017
+  and ADR-0036 pointers.
 - **Project runs write their record, stage 2** (2026-09-10, ADR-0043 §2):
   `feed._feed`/`_edit` no longer suppress project kind — posts and edits go
   to the project-native feed (no threads); `_post_step_card` /

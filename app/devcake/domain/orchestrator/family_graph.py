@@ -79,6 +79,7 @@ def decomposition_ancestors(source: Mission,
 # each upstream/{KEY}/ folder is there.
 RELATION_PARENT = "decomposition parent"
 RELATION_PROJECT = "containing project"
+RELATION_BLOCKER = "blocker"
 
 
 @dataclass(frozen=True)
@@ -105,26 +106,50 @@ def containing_project_ref(mission: Mission) -> str | None:
 
 def upstream_chain(source: Mission, missions: list[Mission]) -> list[Upstream]:
     """The missions whose activity a dispatched Dev is offered, nearest
-    first (ADR-0036 + addendum): the decomposition ancestors, then the
-    containing project of the chain's last issue (the source itself when
-    there is no chain). An issue a person places in a project therefore
-    gets the project's brief and feed exactly as a decomposition child
-    does; a chain that already ends at the project gains nothing twice.
-    The project is the farthest ancestor, so it truncates first under the
-    byte cap. Cycle-safe by construction of the walk plus the `seen` set."""
+    first (ADR-0036 + addendum, ADR-0043 §4): the decomposition ancestors,
+    then the containing project of the chain's last issue (the source
+    itself when there is no chain), then every DIRECT `blocked_by` mission
+    whose status is done, in relation order. An issue a person places in a
+    project therefore gets the project's brief and feed exactly as a
+    decomposition child does; a chain that already ends at the project
+    gains nothing twice; a dependent sees each finished blocker's whole
+    record, not only its handoff excerpt. Order is priority: the byte cap
+    truncates from the end, so blockers drop before the project and the
+    project before the nearest parent. Blockers are never followed
+    transitively (their own upstream is in their own record). A blocker the
+    snapshot does not hold (another board, ADR-0009) is not listed — see
+    `blockers_outside`. Cycle-safe by construction of the walk plus the
+    `seen` set."""
     chain = [Upstream(m.pmo_id, m.pmo_kind or "issue", RELATION_PARENT, m)
              for m in decomposition_ancestors(source, missions)]
     last = chain[-1].mission if chain else source
     seen = {source.pmo_id} | {u.ref for u in chain}
-    pid = containing_project_ref(last)
-    if not pid or pid in seen:
-        return chain
     by_id = {m.pmo_id: m for m in missions if m.pmo_id}
-    proj = by_id.get(pid)
-    if proj is not None and (proj.pmo_kind or "issue") != "project":
-        return chain          # a parent_ref that is not a project: ignore
-    chain.append(Upstream(pid, "project", RELATION_PROJECT, proj))
+    by_key = {m.key.upper(): m for m in missions if m.key}
+    pid = containing_project_ref(last)
+    if pid and pid not in seen:
+        proj = by_id.get(pid)
+        if proj is None or (proj.pmo_kind or "issue") == "project":
+            chain.append(Upstream(pid, "project", RELATION_PROJECT, proj))
+            seen.add(pid)
+    for ref in source.blocked_by or []:
+        b = _resolve_in_pool(ref, by_id, by_key)
+        if b is None or b.pmo_id in seen or b.status != "done":
+            continue
+        chain.append(Upstream(b.pmo_id, b.pmo_kind or "issue",
+                              RELATION_BLOCKER, b))
+        seen.add(b.pmo_id)
     return chain
+
+
+def blockers_outside(source: Mission, missions: list[Mission]) -> int:
+    """How many of the source's direct blockers the snapshot does not hold
+    (peer-board blockers, ADR-0009): they are counted in the offer banner,
+    never mirrored — the walk runs over ONE board's snapshot."""
+    by_id = {m.pmo_id for m in missions if m.pmo_id}
+    by_key = {m.key.upper() for m in missions if m.key}
+    return sum(1 for ref in (source.blocked_by or [])
+               if ref not in by_id and ref.upper() not in by_key)
 
 
 def family_of(source: Mission, missions: list[Mission]) -> Family:

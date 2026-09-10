@@ -201,18 +201,25 @@ def _nested_snapshot_bytes(payload: dict) -> list[tuple[str, bytes]]:
 
 async def _offer_upstream(mgr, mission, used: set[str]
                           ) -> tuple[list[dict], list[dict], list[str], list[str]]:
-    """CAKE-124 / ADR-0036 (+ addendum): mirror each upstream mission —
-    every decomposition ancestor, then the containing project — under
-    upstream/{KEY}/. Packs nearest-parent-first into a total byte budget
-    equal to `_attachment_cap()`; the farthest (root-ward) ones truncate
-    first. A containing project the board snapshot does not hold (it may
-    carry no managed label) is read live; an unreadable one is a gap like
-    any ancestor. Returns (attachment_dicts, gaps, truncated_keys,
-    banner_lines)."""
+    """ADR-0043 §3-4 (CAKE-124 / ADR-0036 lineage): mirror each upstream
+    mission — every decomposition ancestor, the containing project, then
+    every direct done blocker — under upstream/{KEY}/. Each folder is a
+    COPY OF THE RECORD: the upstream mission's activity repository, read
+    through the internal forge (its own `upstream/` subtree excluded; the
+    chain lays every folder out flat). A mission with no record (never
+    dispatched) falls back to the vendor rebuild. Packs nearest-first into
+    a total byte budget equal to `_attachment_cap()`, decided from the
+    tree's sizes before a byte is fetched; the farthest truncate first.
+    An unreadable ancestor or project is a strict-gate gap; an unreadable
+    blocker is a disclosed gap that never defers a dispatch (no dispatch
+    was ever gated on blocker context). Returns (attachment_dicts,
+    gating_gaps, truncated_keys, banner_lines)."""
     # Lazy import: family_graph → dispatch → activity_payload (cycle).
     from . import family_graph
+    from ...ports.internal_forge import activity_repo_name
     missions = await _missions_snapshot(mgr)
     chain = family_graph.upstream_chain(mission, missions)
+    outside = family_graph.blockers_outside(mission, missions)
     # A trusted parent_ref that does not resolve in the snapshot is a gap —
     # the Dev must not start believing the chain is empty when it is not.
     pref = decomposition_parent_ref(mission)
@@ -234,7 +241,8 @@ async def _offer_upstream(mgr, mission, used: set[str]
         budget = 25 * 1024 * 1024
 
     files: list[dict] = []
-    gaps: list[dict] = []
+    gaps: list[dict] = []            # gating (ancestor / project)
+    soft_gaps: list[dict] = []       # disclosed only (blocker)
     truncated: list[str] = []
     banners: list[str] = []
     included: list[str] = []
@@ -249,6 +257,13 @@ async def _offer_upstream(mgr, mission, used: set[str]
         return (u.mission.key if u.mission is not None and u.mission.key
                 else u.ref)
 
+    def _gap(up, key, pmo_id, reason):
+        entry = {"key": key, "pmo_id": pmo_id, "reason": reason}
+        (soft_gaps if up.relation == family_graph.RELATION_BLOCKER
+         else gaps).append(entry)
+
+    forge = getattr(mgr, "internal_forge", None)
+
     for i, up in enumerate(chain):
         anc = up.mission
         if anc is None:
@@ -257,34 +272,64 @@ async def _offer_upstream(mgr, mission, used: set[str]
             try:
                 anc = await mgr.pmo.get(MissionRef(up.ref, up.kind))
             except Exception as e:  # noqa: BLE001 — unreadable upstream = gap, never silent
-                reason = (f"{up.relation} unreadable: "
-                          f"{type(e).__name__}: {str(e)[:160]}")
-                gaps.append({"key": up.ref, "pmo_id": up.ref,
-                             "reason": reason})
+                _gap(up, up.ref, up.ref, f"{up.relation} unreadable: "
+                     f"{type(e).__name__}: {str(e)[:160]}")
                 continue
         key = anc.key or anc.pmo_id
         seg = _safe_upstream_key(key)
         if seg is None:
-            gaps.append({"key": key, "pmo_id": anc.pmo_id,
-                         "reason": "unsafe mission key for upstream path"})
-            continue
-        try:
-            nested = await activity_payload(
-                mgr, anc.pmo_id, anc.pmo_kind or up.kind,
-                include_upstream=False)
-        except Exception as e:  # noqa: BLE001 — one ancestor failure must not abort the offer
-            reason = (f"{up.relation} activity unreadable: "
-                      f"{type(e).__name__}: {str(e)[:160]}")
-            gaps.append({"key": key, "pmo_id": anc.pmo_id, "reason": reason})
+            _gap(up, key, anc.pmo_id, "unsafe mission key for upstream path")
             continue
 
-        pairs = _nested_snapshot_bytes(nested)
-        size = sum(len(b) for _, b in pairs)
-        if used_bytes + size > budget:
-            # This ancestor and every older (farther) one are omitted.
-            for rest in chain[i:]:
-                truncated.append(_label(rest))
-            break
+        # 1 — the record: the upstream mission's activity repository
+        source = "record"
+        pairs: list[tuple[str, bytes]] | None = None
+        size = 0
+        if forge is not None and anc.key:
+            repo = activity_repo_name(mgr.instance_name, anc.key)
+            try:
+                tree = await forge.activity_snapshot_tree(repo)
+            except Exception as e:  # noqa: BLE001 — the record is unreadable: a gap, never a silent vendor fallback that could cost the budget
+                _gap(up, key, anc.pmo_id, f"{up.relation} record unreadable: "
+                     f"{type(e).__name__}: {str(e)[:160]}")
+                continue
+            if tree is not None:
+                blobs = [t for t in tree
+                         if not t["path"].startswith("upstream/")]
+                size = sum(int(t.get("size") or 0) for t in blobs)
+                if used_bytes + size > budget:
+                    for rest in chain[i:]:
+                        truncated.append(_label(rest))
+                    break
+                try:
+                    pairs = [(t["path"],
+                              await forge.activity_snapshot_file(repo, t["path"]))
+                             for t in blobs]
+                except Exception as e:  # noqa: BLE001 — same: a half-read record is a gap
+                    _gap(up, key, anc.pmo_id,
+                         f"{up.relation} record unreadable: "
+                         f"{type(e).__name__}: {str(e)[:160]}")
+                    continue
+
+        # 2 — no record (the mission never dispatched): the vendor rebuild
+        if pairs is None:
+            source = "vendor"
+            try:
+                nested = await activity_payload(
+                    mgr, anc.pmo_id, anc.pmo_kind or up.kind,
+                    include_upstream=False)
+            except Exception as e:  # noqa: BLE001 — one upstream failure must not abort the offer
+                _gap(up, key, anc.pmo_id,
+                     f"{up.relation} activity unreadable: "
+                     f"{type(e).__name__}: {str(e)[:160]}")
+                continue
+            pairs = _nested_snapshot_bytes(nested)
+            size = sum(len(b) for _, b in pairs)
+            if used_bytes + size > budget:
+                # This one and every farther one are omitted.
+                for rest in chain[i:]:
+                    truncated.append(_label(rest))
+                break
 
         prefix = f"upstream/{seg}"
         for rel, data in pairs:
@@ -295,28 +340,37 @@ async def _offer_upstream(mgr, mission, used: set[str]
             files.append({"filename": full,
                           "content_b64": base64.b64encode(data).decode()})
         used_bytes += size
-        included.append((key, up.relation, anc.title or ""))
+        included.append((key, up.relation, anc.title or "", source))
 
-    if included:
+    if included or outside:
         banners.append(
-            "## Upstream mission activity (decomposition ancestors and "
-            "the containing project)")
+            "## Upstream mission activity (ancestors, the containing "
+            "project, and finished blockers)")
         banners.append(
-            "Upstream activity mirrors live under `upstream/{MISSION-KEY}/` "
-            "(nearest parent first, toward the graph root; the project "
-            "this mission belongs to comes last). Each holds that "
-            "mission's MISSION.md, ACTIVITY.md and attachments — consult "
-            "them for the brief and history this mission is part of. "
-            "Direct `blocked_by` work-repo mounts remain a separate "
-            "contract (ADR-0017) — they are not mirrored here.")
-        for key, relation, title in included:
+            "Upstream activity mirrors live under `upstream/{MISSION-KEY}/`: "
+            "each decomposition ancestor nearest parent first toward the "
+            "graph root, then the project this mission belongs to, then "
+            "every mission this one was blocked by that finished. Each "
+            "folder is a copy of that mission's record — MISSION.md, "
+            "ACTIVITY.md and every attachment — consult them for the brief, "
+            "the history and the files this mission's work is part of. A "
+            "folder marked \"rebuilt from the vendor\" belongs to a mission "
+            "that never ran under DevCake. Direct `blocked_by` work-repo "
+            "clones under `/workspace/repo/` remain a separate contract "
+            "(ADR-0017).")
+        for key, relation, title, source in included:
             seg = _safe_upstream_key(key) or key
             tail = f": {title}" if title else ""
-            banners.append(f"- `upstream/{seg}/` — {relation}{tail}")
+            src = "" if source == "record" else " (rebuilt from the vendor)"
+            banners.append(f"- `upstream/{seg}/` — {relation}{tail}{src}")
+        if outside:
+            banners.append(
+                f"- {outside} blocker(s) on another board are not mirrored "
+                f"here; their handoffs are in MISSION.md.")
         banners.append("")
 
-    if gaps:
-        for g in gaps:
+    if gaps or soft_gaps:
+        for g in gaps + soft_gaps:
             banners.append(
                 f"⚠ UPSTREAM GAP — activity for `{g.get('key')}` is "
                 f"unavailable: {g.get('reason', 'unreadable')}.")

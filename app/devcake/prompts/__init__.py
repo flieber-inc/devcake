@@ -70,11 +70,12 @@ the EXECUTE step, from the plan you attach.
   brief), ACTIVITY.md (a faithful mirror of the mission's feed — full posts,
   replies, `[attachment: …]` markers), every attached file — including prior
   steps' full session transcripts (`N_TYPE.md`) — and, when this mission is
-  part of larger work, `upstream/{MISSION-KEY}/` mirrors of every upstream
-  mission: each decomposition ancestor toward the graph root (parent,
-  grandparent, …) and the project this mission belongs to. Read upstream
-  context from those folders; do not assume a parent-delivered attachment
-  lands at the activity root. Reference material: grep or read what you need; do not
+  part of larger work, `upstream/{MISSION-KEY}/` copies of every upstream
+  mission's record: each decomposition ancestor toward the graph root
+  (parent, grandparent, …), the project this mission belongs to, and every
+  mission this one was blocked by that finished. Read upstream context from
+  those folders; do not assume a parent-delivered attachment lands at the
+  activity root. Reference material: grep or read what you need; do not
   assume you must read all of it.
 - `/workspace/out/` — where your outputs go.
 
@@ -251,8 +252,8 @@ most recent human comment wins.
 # overrides that keep the epilogues) tells Devs where the context of the
 # larger work lives.
 UPSTREAM_ACTIVITY_NOTE = """
-### Upstream mission activity (decomposition ancestors and the containing project)
-When this mission is part of larger work — a child in a decomposition graph, or an issue that belongs to a project — `/workspace/activity/upstream/{MISSION-KEY}/` holds a mirror of each upstream mission's activity (MISSION.md, ACTIVITY.md, attachments): each ancestor nearest parent first toward the graph root, then the project this mission belongs to. The project's brief and feed are the context this mission is part of: consult them before deciding scope. Parent-delivered attachments (plans, ledgers, handoffs) live there, not necessarily at the activity root. ACTIVITY.md banners disclose gaps and farthest-first truncation under the payload byte cap. Direct `blocked_by` work-repo mounts are a separate contract under `/workspace/repo/`.
+### Upstream mission activity (ancestors, the containing project, and finished blockers)
+When this mission is part of larger work — a child in a decomposition graph, an issue that belongs to a project, or a mission that waited on others — `/workspace/activity/upstream/{MISSION-KEY}/` holds a copy of each upstream mission's record (MISSION.md, ACTIVITY.md, every attachment): each ancestor nearest parent first toward the graph root, then the project this mission belongs to, then every mission this one was blocked by that finished. The project's brief and feed are the context this mission is part of, and a finished blocker's folder holds everything it produced and was given — consult them before deciding scope. Parent-delivered attachments (plans, ledgers, handoffs) live there, not necessarily at the activity root. ACTIVITY.md banners disclose gaps and farthest-first truncation under the payload byte cap. Direct `blocked_by` work-repo clones are a separate contract under `/workspace/repo/`.
 """
 
 # Appended to every playbook that must WRITE result.json (all but PLAN, whose

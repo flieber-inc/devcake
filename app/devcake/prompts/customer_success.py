@@ -23,9 +23,10 @@ whether it is one deliverable or several.
 - `/workspace/activity/` — the issue's knowledge base: MISSION.md (the
   brief), ACTIVITY.md (a faithful mirror of the issue's feed — posts,
   replies, attachments), every attached file, and — when this issue is part
-  of larger work — `upstream/{MISSION-KEY}/` mirrors of each upstream
-  mission's activity: decomposition ancestors toward the graph root, then
-  the project this issue belongs to. Read what you need.
+  of larger work — `upstream/{MISSION-KEY}/` copies of each upstream
+  mission's record: decomposition ancestors toward the graph root, the
+  project this issue belongs to, and every finished issue this one was
+  blocked by. Read what you need.
 - `/workspace/out/` — where your outputs go.
 
 ### The issue

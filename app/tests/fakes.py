@@ -159,6 +159,7 @@ class FakeInternalForge:
         # kept prefixes untouched); the read operations serve from it.
         self.snapshots: dict[str, dict[str, str]] = {}
         self.read_calls: list[tuple[str, str]] = []
+        self.fail_reads: set[str] = set()     # repos whose record is unreadable
 
     async def ensure_activity_repo(self, instance, mission_key):
         from devcake.ports.internal_forge import activity_repo_name
@@ -189,6 +190,8 @@ class FakeInternalForge:
         import base64
         import hashlib
         self.read_calls.append((repo_name, ""))
+        if repo_name in self.fail_reads:
+            raise RuntimeError(f"record unreadable: {repo_name}")
         cur = self.snapshots.get(repo_name)
         if cur is None:
             return None

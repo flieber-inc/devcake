@@ -31,6 +31,19 @@ See the living log and open candidates in
   uploaded and linked, through the same chokepoint issues use (ADR-0043,
   stage 2 of 3).
 
+- **Changed — a Dev's upstream folders are copies of the record, and
+  finished blockers are among them.** The upstream folders in a Dev's
+  workspace were rebuilt from the vendor at every dispatch and covered
+  the decomposition ancestors and the containing project only; a mission
+  this one was blocked by contributed a repository clone and a short
+  handoff excerpt, so an attachment on a blocker's ticket never reached
+  the dependent. Each upstream folder is now a copy of that mission's
+  activity repository, and every direct blocker that finished has one.
+  The byte budget is decided from the record's sizes before anything is
+  fetched; a mission that never ran is rebuilt from the vendor as before;
+  an unreadable blocker is disclosed, never a reason to hold a dispatch
+  (ADR-0043, stage 3 of 3).
+
 ## v0.6.1 (2026-09-10)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.

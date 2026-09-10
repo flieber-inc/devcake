@@ -13,8 +13,13 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
-- **Fixed — an issue placed in a project now sees the project's activity.**
-  A Dev working an issue a person added to a project received nothing
+## v0.6.1 (2026-09-10)
+
+Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.1).
+
+- **Fixed — an issue placed in a project now sees the project's activity**
+  (#452, ADR-0036 addendum). A Dev working an issue a person added to a project received nothing
   from the project: the upstream offer followed only the marker DevCake
   writes when it splits a mission, so the project's brief, its updates and
   its documents were invisible. The offer now ends at the project the

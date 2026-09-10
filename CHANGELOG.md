@@ -13,7 +13,16 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
-- **Changed — a mission's activity repository is its record, kept current.**
+## v0.7.0 (2026-09-10)
+
+Minor release — the v0.7 line opens with the activity repository as the
+record of a mission's run (ADR-0043): every Dev now receives the whole
+record of every mission upstream of its work, blockers included.
+`devcake-cli` stays at 0.1.8.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.7.0).
+
+- **Changed — a mission's activity repository is its record, kept current**
+  (#454).
   The per-mission activity repository used to be written once, before a
   step launched. It is now refreshed at every run boundary: when a step
   closes, including failures, at completion, at a hand-off, when a pull
@@ -22,7 +31,7 @@ See the living log and open candidates in
   operations on the internal forge let the record be read back (ADR-0043,
   stage 1 of 3).
 
-- **Changed — a project's own run now leaves a record.** DevCake used to
+- **Changed — a project's own run now leaves a record** (#457). DevCake used to
   suppress every write to a project, so the step that split a project,
   its transcript and its reasoning went to the observability stream
   only, and every child worked under a root whose folder held the brief
@@ -32,7 +41,7 @@ See the living log and open candidates in
   stage 2 of 3).
 
 - **Changed — a Dev's upstream folders are copies of the record, and
-  finished blockers are among them.** The upstream folders in a Dev's
+  finished blockers are among them** (#456). The upstream folders in a Dev's
   workspace were rebuilt from the vendor at every dispatch and covered
   the decomposition ancestors and the containing project only; a mission
   this one was blocked by contributed a repository clone and a short

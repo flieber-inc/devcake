@@ -13,7 +13,8 @@ from ...ports.pmo import PMOTransient
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
-from . import (board, completion, discovery, dispatch, feed, feed_memo,
+from . import (activity_payload, board, completion, discovery, dispatch,
+               feed, feed_memo,
                freshness, status_comment)
 from .markers import (MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
                       MERGE_SETTLE_MARKER)
@@ -257,6 +258,9 @@ async def merge_sweep(mgr, m: Mission) -> None:
                     await status_comment.refresh(
                         mgr, m.pmo_id, reason="merge_sweep_canceled",
                         pr_url=state.url)
+                    await activity_payload.record_activity(
+                        mgr, m.pmo_id, m.pmo_kind or "issue", m.key,
+                        "merge_sweep_canceled")
     else:
         # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
         # human — unless the deferred-retry window is actively running
@@ -453,6 +457,9 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                         await status_comment.refresh(
                             mgr, m.pmo_id, reason="conflict_handoff",
                             mission=m, pr_url=pr_url)
+                        await activity_payload.record_activity(
+                            mgr, m.pmo_id, m.pmo_kind or "issue", m.key,
+                            "conflict_handoff")
             elif elapsed:
                 # a closing attempt that did not merge and was no conflict:
                 # the second in a row hands off
@@ -501,6 +508,8 @@ async def _hand_off_exhausted(mgr, m: Mission, pr_url: str,
     with completion.write_back_class():
         await status_comment.refresh(mgr, m.pmo_id, reason="merge_handoff",
                                      mission=m, pr_url=pr_url)
+        await activity_payload.record_activity(
+            mgr, m.pmo_id, m.pmo_kind or "issue", m.key, "merge_handoff")
 
 
 async def _closing_attempt_failed(mgr, m: Mission, pr_url: str, window: int,

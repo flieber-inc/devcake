@@ -836,3 +836,56 @@ def test_ensure_pmo_board_enables_deps_without_disabling_time_tracker(
     assert tracker.get("enable_issue_dependencies") is True
     assert tracker.get("enable_time_tracker") is True
     assert tracker.get("allow_only_contributors_to_track_time") is True
+
+
+# ── ADR-0043: the record read back, and kept prefixes on push ────────────
+
+def test_push_activity_snapshot_keeps_prefixed_paths(tmp_path, monkeypatch):
+    rec = _ActivityRecorder(tree_entries=[
+        {"path": "ACTIVITY.md", "sha": "a1"},
+        {"path": "upstream/ROOT-1/MISSION.md", "sha": "u1"},
+        {"path": "stale.md", "sha": "s1"}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.push_activity_snapshot(
+        "activity-linear-t-1",
+        [{"path": "ACTIVITY.md",
+          "content_b64": base64.b64encode(b"fresh").decode()}],
+        "record: finalize", keep_prefixes=("upstream/",)))
+    ops = {e["path"]: e for e in rec.contents_batches[0][1]["files"]}
+    assert ops["ACTIVITY.md"]["operation"] == "update"
+    assert ops["stale.md"]["operation"] == "delete"
+    assert "upstream/ROOT-1/MISSION.md" not in ops     # kept
+
+
+def test_activity_snapshot_tree_none_when_repo_absent(tmp_path, monkeypatch):
+    class Rec(_ActivityRecorder):
+        def __call__(self, request):
+            if (request.method == "GET"
+                    and request.url.path == "/api/v1/repos/devcake-repos/activity-linear-t-9"):
+                return httpx.Response(404, json={})
+            return super().__call__(request)
+    prov = _prov(Rec(), tmp_path, monkeypatch)
+    assert run_coro(prov.activity_snapshot_tree("activity-linear-t-9")) is None
+
+
+def test_activity_snapshot_tree_and_file(tmp_path, monkeypatch):
+    class Rec(_ActivityRecorder):
+        def __call__(self, request):
+            p = request.url.path
+            if request.method == "GET" and p == "/api/v1/repos/devcake-repos/activity-linear-t-1":
+                self.calls.append((request.method, p))
+                return httpx.Response(200, json={"name": "activity-linear-t-1"})
+            if request.method == "GET" and "/contents/" in p:
+                self.calls.append((request.method, p))
+                return httpx.Response(200, json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(b"root brief").decode()})
+            return super().__call__(request)
+    rec = Rec(tree_entries=[{"path": "MISSION.md", "sha": "m1"}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    tree = run_coro(prov.activity_snapshot_tree("activity-linear-t-1"))
+    assert tree == [{"path": "MISSION.md", "size": 1, "sha": "m1"}]
+    data = run_coro(prov.activity_snapshot_file("activity-linear-t-1",
+                                                "MISSION.md"))
+    assert data == b"root brief"
+    assert ("GET", "/api/v1/repos/devcake-repos/activity-linear-t-1/contents/MISSION.md") in rec.calls

@@ -366,6 +366,37 @@ async def push_activity_repo(mgr, mission, mtype, seq: int,
         return {}
 
 
+RECORD_KEEP_PREFIXES = ("upstream/",)
+
+
+async def record_activity(mgr, pmo_id: str, kind: str, mission_key: str,
+                          reason: str) -> None:
+    """ADR-0043 §1: the activity repository is the record of the mission's
+    run. Called at every run boundary (step close, completion, hand-off,
+    PR closed unmerged, conflict routed) after the feed writes of that
+    boundary have landed: rebuild the mission's OWN folder from the feed
+    and push it as one snapshot commit. The `upstream/` subtree the Dev
+    cloned at dispatch is left in place — it belongs to that dispatch.
+    Same contract as the dispatch push: any failure is audited and
+    swallowed, never a gate."""
+    if mgr.internal_forge is None or not mission_key:
+        return
+    try:
+        payload = await activity_payload(mgr, pmo_id, kind,
+                                         include_upstream=False)
+        name = await mgr.internal_forge.ensure_activity_repo(
+            mgr.instance_name, mission_key)
+        await mgr.internal_forge.push_activity_snapshot(
+            name, _activity_snapshot_files(payload), f"record: {reason}",
+            keep_prefixes=RECORD_KEEP_PREFIXES)
+        log.info("activity repo %s: record (%s)", name, reason)
+    except Exception as e:  # noqa: BLE001 — the record push never gates the boundary it follows
+        log.exception("activity record push failed for %s", mission_key)
+        mgr._audit(pmo_id, "activity_record_push_failed",
+                    f"{mission_key} ({reason}): {type(e).__name__}: "
+                    f"{str(e)[:180]}")
+
+
 def _mission_md(m, attachment_lines=(), document_lines=(),
                 blocker_lines=(), discovery_lines=()) -> str:
     """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;

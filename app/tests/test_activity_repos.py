@@ -3,6 +3,7 @@ record of what each step's Dev actually received. Name rule, dispatch
 pre-push hook (never gates), runspec carriage."""
 
 import asyncio
+import base64
 
 from devcake.ports.internal_forge import (ACTIVITY_PREFIX, activity_repo_name,
                                           internal_repo_name)
@@ -141,3 +142,76 @@ def test_dispatch_pushes_for_project_missions(tmp_path):
     _, files, message = forge.pushes[0]
     assert message == "step 1 ONBOARD dispatch"
     assert {f["path"] for f in files} == {"MISSION.md", "ACTIVITY.md"}
+
+
+# ── ADR-0043 §1: the record follows every run boundary ───────────────────
+
+def _finalize_setup(tmp_path, forge):
+    from test_transitions import make_mgr, mission
+    from devcake.config import PMOInstance
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.record_feed = True                 # posts become feed entries
+    mgr.internal_forge = forge
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    return mgr, fake, store
+
+
+def _run(store, **over):
+    from devcake.domain.run import Run
+    kw = dict(run_id="T-1-1-ONBOARD-ZZZZZZ", mission_key="T-1",
+              mission_pmo_id="p1", mission_type="ONBOARD",
+              dev_type="senior-dev", seq=1, stage_label_at_dispatch=None,
+              state="finalizing")
+    kw.update(over)
+    run = Run(**kw)
+    store.save(run)
+    return run
+
+
+def test_finalize_pushes_the_record_and_keeps_upstream(tmp_path):
+    """After the step's card lands, the mission's repo is refreshed from the
+    feed; the dispatch-time upstream/ subtree is left in place."""
+    from test_transitions import _finalize_payload
+    forge = FakeInternalForge()
+    forge.seed_snapshot("activity-linear-t-1", {
+        "MISSION.md": b"stale brief", "ACTIVITY.md": b"stale feed",
+        "upstream/ROOT-1/MISSION.md": b"root brief",
+        "old-attachment.md": b"gone from the feed"})
+    mgr, fake, store = _finalize_setup(tmp_path, forge)
+    run = _run(store)
+    run_coro(mgr.finalize(run, _finalize_payload()))
+    repo, files, message = forge.pushes[-1]
+    assert repo == "activity-linear-t-1" and message == "record: finalize"
+    snap = forge.snapshots["activity-linear-t-1"]
+    assert "upstream/ROOT-1/MISSION.md" in snap          # kept, not pruned
+    assert "old-attachment.md" not in snap               # stale = pruned
+    activity = base64.b64decode(snap["ACTIVITY.md"]).decode()
+    assert "Step 1" in activity or "ONBOARD" in activity  # the card is in
+    assert not any(f["path"].startswith("upstream/") for f in files)
+
+
+def test_failed_run_pushes_the_record_too(tmp_path):
+    forge = FakeInternalForge()
+    mgr, fake, store = _finalize_setup(tmp_path, forge)
+    run = _run(store)
+    run_coro(mgr.finalize(run, {"result": None, "exit_code": 15,
+                                "transcript_md": ""}))
+    assert forge.pushes and forge.pushes[-1][2] == "record: failed"
+
+
+def test_record_push_failure_never_raises(tmp_path):
+    from test_transitions import _finalize_payload
+    forge = FakeInternalForge(push_exc=RuntimeError("gitea down"))
+    mgr, fake, store = _finalize_setup(tmp_path, forge)
+    run = _run(store)
+    run_coro(mgr.finalize(run, _finalize_payload()))   # no raise
+    assert store.get(run.run_id).state == "finished"
+
+
+def test_record_skips_without_internal_forge(tmp_path):
+    from test_transitions import _finalize_payload
+    mgr, fake, store = _finalize_setup(tmp_path, None)
+    run = _run(store)
+    run_coro(mgr.finalize(run, _finalize_payload()))
+    assert store.get(run.run_id).state == "finished"

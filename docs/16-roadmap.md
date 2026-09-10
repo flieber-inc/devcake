@@ -936,6 +936,16 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **The activity repository is the record, stage 1** (2026-09-10, ADR-0043 §1):
+  the per-mission activity repo was a dispatch-time snapshot; it is now
+  refreshed at every run boundary (step close incl. failures, completion,
+  hand-offs, PR closed unmerged, conflict routed) via
+  `activity_payload.record_activity`, with the dispatch-time `upstream/`
+  subtree kept (`push_activity_snapshot(keep_prefixes=)`). Two read
+  operations (`activity_snapshot_tree` with sizes, `activity_snapshot_file`)
+  on the internal forge port, Gitea impl + fake. Stages 2 (project runs
+  write their record as project updates) and 3 (upstream folders copied
+  from the repos, direct done blockers included) follow.
 - **The containing project is upstream** (2026-09-10, ADR-0036 addendum):
   an issue a person placed in a project got nothing from the project —
   the ancestor offer followed only the decomposition marker. The offer now

@@ -215,7 +215,8 @@ PROVISION container (prov-<run_id>, DEVCAKE_PHASE=provision, /mirrors RO)
   │ 1. emit `run.started` on Redis  ──────────────►  app marks Run "running"
   │      (the SOLE run.started sender; payload may include harness_version
   │       from `<cli> --version`; heartbeat sidecar starts here too)
-  │ 2. clone the mission's activity-* repo into /workspace/activity (full history);
+  │ 2. clone the mission's activity-* repo into /workspace/activity (full history;
+  │      the repo is the mission's record — refreshed at every run boundary, ADR-0043);
   │      fallback: `activity.get` (req/reply) → materialize MISSION.md + ACTIVITY.md + attachments
   │ 3. git clone → /workspace/repo — from the RO source mirror
   │      (file://$DEVCAKE_MIRROR_PATH, ADR-0024 §5b below; credential-stripped,

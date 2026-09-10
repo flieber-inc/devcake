@@ -41,7 +41,7 @@ from ...ports.pmo import CRITICAL_BOUNDED_WAIT_S, pmo_call, pmo_call_ctx
 from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
-from . import feed, freshness, status_comment, steps
+from . import activity_payload, feed, freshness, status_comment, steps
 from .feed import unquoted
 from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
 
@@ -165,6 +165,11 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
             await status_comment.refresh(
                 mgr, ref.pmo_id, reason=spec.audit_action, run=run,
                 mission=mission, pr_url=pr_url)
+            # ADR-0043 §1 — the record follows the close
+            await activity_payload.record_activity(
+                mgr, ref.pmo_id, ref.kind,
+                mission_key,
+                spec.audit_action)
         anchor = posted[0] if posted else None
         try:
             if run is not None:
@@ -243,6 +248,8 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
         with write_back_class():
             await status_comment.refresh(mgr, pmo_id, reason="conflict_routed",
                                          pr_url=pr_url)
+            await activity_payload.record_activity(
+                mgr, pmo_id, "issue", key, "conflict_routed")
         return True
     except Exception:  # noqa: BLE001 — degrade with record: conflict routing failure is logged; caller keeps the mission parked for a human
         log.exception("conflict auto-resolve routing failed for %s", key)

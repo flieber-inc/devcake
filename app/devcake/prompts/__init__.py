@@ -69,11 +69,12 @@ the EXECUTE step, from the plan you attach.
 - `/workspace/activity/` — the mission's knowledge base: MISSION.md (the
   brief), ACTIVITY.md (a faithful mirror of the mission's feed — full posts,
   replies, `[attachment: …]` markers), every attached file — including prior
-  steps' full session transcripts (`N_TYPE.md`) — and, when this mission is a
-  decomposition child, `upstream/{MISSION-KEY}/` mirrors of every ancestor
-  toward the graph root (parent, grandparent, …). Read upstream context from
-  those folders; do not assume a parent-delivered attachment lands at the
-  activity root. Reference material: grep or read what you need; do not
+  steps' full session transcripts (`N_TYPE.md`) — and, when this mission is
+  part of larger work, `upstream/{MISSION-KEY}/` mirrors of every upstream
+  mission: each decomposition ancestor toward the graph root (parent,
+  grandparent, …) and the project this mission belongs to. Read upstream
+  context from those folders; do not assume a parent-delivered attachment
+  lands at the activity root. Reference material: grep or read what you need; do not
   assume you must read all of it.
 - `/workspace/out/` — where your outputs go.
 
@@ -244,13 +245,14 @@ where they conflict with the mission description or with older comments, the
 most recent human comment wins.
 """
 
-# ADR-0036 / CAKE-124 — decomposition children receive ancestor activity under
-# upstream/{KEY}/. Appended next to the human-comments note so every playbook
-# (including operator template overrides that keep the epilogues) tells Devs
-# where parent/grandparent context lives.
+# ADR-0036 / CAKE-124 (+ addendum) — decomposition children and issues placed
+# in a project receive upstream activity under upstream/{KEY}/. Appended next
+# to the human-comments note so every playbook (including operator template
+# overrides that keep the epilogues) tells Devs where the context of the
+# larger work lives.
 UPSTREAM_ACTIVITY_NOTE = """
-### Upstream mission activity (decomposition ancestors)
-When this mission is a child in a decomposition graph, `/workspace/activity/upstream/{MISSION-KEY}/` holds a mirror of each ancestor's activity (MISSION.md, ACTIVITY.md, attachments) — nearest parent first, toward the graph root. Parent-delivered attachments (plans, ledgers, handoffs) live there, not necessarily at the activity root. ACTIVITY.md banners disclose gaps and oldest-first truncation under the payload byte cap. Direct `blocked_by` work-repo mounts are a separate contract under `/workspace/repo/`.
+### Upstream mission activity (decomposition ancestors and the containing project)
+When this mission is part of larger work — a child in a decomposition graph, or an issue that belongs to a project — `/workspace/activity/upstream/{MISSION-KEY}/` holds a mirror of each upstream mission's activity (MISSION.md, ACTIVITY.md, attachments): each ancestor nearest parent first toward the graph root, then the project this mission belongs to. The project's brief and feed are the context this mission is part of: consult them before deciding scope. Parent-delivered attachments (plans, ledgers, handoffs) live there, not necessarily at the activity root. ACTIVITY.md banners disclose gaps and farthest-first truncation under the payload byte cap. Direct `blocked_by` work-repo mounts are a separate contract under `/workspace/repo/`.
 """
 
 # Appended to every playbook that must WRITE result.json (all but PLAN, whose

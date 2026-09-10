@@ -201,18 +201,23 @@ def _nested_snapshot_bytes(payload: dict) -> list[tuple[str, bytes]]:
 
 async def _offer_upstream(mgr, mission, used: set[str]
                           ) -> tuple[list[dict], list[dict], list[str], list[str]]:
-    """CAKE-124 / ADR-0036: mirror each decomposition ancestor under
+    """CAKE-124 / ADR-0036 (+ addendum): mirror each upstream mission —
+    every decomposition ancestor, then the containing project — under
     upstream/{KEY}/. Packs nearest-parent-first into a total byte budget
-    equal to `_attachment_cap()`; oldest (root-ward) ancestors truncate
-    first. Returns (attachment_dicts, gaps, truncated_keys, banner_lines)."""
+    equal to `_attachment_cap()`; the farthest (root-ward) ones truncate
+    first. A containing project the board snapshot does not hold (it may
+    carry no managed label) is read live; an unreadable one is a gap like
+    any ancestor. Returns (attachment_dicts, gaps, truncated_keys,
+    banner_lines)."""
     # Lazy import: family_graph → dispatch → activity_payload (cycle).
     from . import family_graph
     missions = await _missions_snapshot(mgr)
-    ancestors = family_graph.decomposition_ancestors(mission, missions)
+    chain = family_graph.upstream_chain(mission, missions)
     # A trusted parent_ref that does not resolve in the snapshot is a gap —
     # the Dev must not start believing the chain is empty when it is not.
     pref = decomposition_parent_ref(mission)
-    if pref and not ancestors:
+    if pref and not any(u.relation == family_graph.RELATION_PARENT
+                        for u in chain):
         pool = {m.pmo_id for m in missions}
         pool |= {m.key.upper() for m in missions if m.key}
         if pref not in pool and pref.upper() not in pool:
@@ -240,7 +245,23 @@ async def _offer_upstream(mgr, mission, used: set[str]
     # file lands, a later flat attachment named `upstream` takes the
     # docs/07 §2 `-2` suffix via `_unique_name` / `_tree_conflict`.
 
-    for i, anc in enumerate(ancestors):
+    def _label(u) -> str:
+        return (u.mission.key if u.mission is not None and u.mission.key
+                else u.ref)
+
+    for i, up in enumerate(chain):
+        anc = up.mission
+        if anc is None:
+            # not in the snapshot (an unlabeled project is never polled):
+            # one live read, under the caller's call class
+            try:
+                anc = await mgr.pmo.get(MissionRef(up.ref, up.kind))
+            except Exception as e:  # noqa: BLE001 — unreadable upstream = gap, never silent
+                reason = (f"{up.relation} unreadable: "
+                          f"{type(e).__name__}: {str(e)[:160]}")
+                gaps.append({"key": up.ref, "pmo_id": up.ref,
+                             "reason": reason})
+                continue
         key = anc.key or anc.pmo_id
         seg = _safe_upstream_key(key)
         if seg is None:
@@ -249,7 +270,7 @@ async def _offer_upstream(mgr, mission, used: set[str]
             continue
         try:
             nested = await activity_payload(
-                mgr, anc.pmo_id, anc.pmo_kind or "issue",
+                mgr, anc.pmo_id, anc.pmo_kind or up.kind,
                 include_upstream=False)
         except Exception as e:  # noqa: BLE001 — one ancestor failure must not abort the offer
             reason = f"{type(e).__name__}: {str(e)[:160]}"
@@ -260,8 +281,8 @@ async def _offer_upstream(mgr, mission, used: set[str]
         size = sum(len(b) for _, b in pairs)
         if used_bytes + size > budget:
             # This ancestor and every older (farther) one are omitted.
-            for rest in ancestors[i:]:
-                truncated.append(rest.key or rest.pmo_id)
+            for rest in chain[i:]:
+                truncated.append(_label(rest))
             break
 
         prefix = f"upstream/{seg}"
@@ -273,19 +294,24 @@ async def _offer_upstream(mgr, mission, used: set[str]
             files.append({"filename": full,
                           "content_b64": base64.b64encode(data).decode()})
         used_bytes += size
-        included.append(key)
+        included.append((key, up.relation, anc.title or ""))
 
     if included:
         banners.append(
-            "## Upstream mission activity (decomposition ancestors)")
+            "## Upstream mission activity (decomposition ancestors and "
+            "the containing project)")
         banners.append(
-            "Ancestor activity mirrors live under `upstream/{MISSION-KEY}/` "
-            "(nearest parent first, toward the graph root). Direct "
-            "`blocked_by` work-repo mounts remain a separate contract "
-            "(ADR-0017) — they are not mirrored here.")
-        for key in included:
+            "Upstream activity mirrors live under `upstream/{MISSION-KEY}/` "
+            "(nearest parent first, toward the graph root; the project "
+            "this mission belongs to comes last). Each holds that "
+            "mission's MISSION.md, ACTIVITY.md and attachments — consult "
+            "them for the brief and history this mission is part of. "
+            "Direct `blocked_by` work-repo mounts remain a separate "
+            "contract (ADR-0017) — they are not mirrored here.")
+        for key, relation, title in included:
             seg = _safe_upstream_key(key) or key
-            banners.append(f"- `upstream/{seg}/` — included")
+            tail = f": {title}" if title else ""
+            banners.append(f"- `upstream/{seg}/` — {relation}{tail}")
         banners.append("")
 
     if gaps:
@@ -409,9 +435,10 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     no resolved blockers and omits the section) render as a MISSION.md
     handoff block.
 
-    ADR-0036 / CAKE-124: when `include_upstream` is true (default), each
-    decomposition ancestor's activity mirror is nested under
-    `upstream/{MISSION-KEY}/` (nearest parent first; oldest truncated first
+    ADR-0036 / CAKE-124 (+ addendum): when `include_upstream` is true
+    (default), each upstream mission's activity mirror — every
+    decomposition ancestor, then the containing project — is nested under
+    `upstream/{MISSION-KEY}/` (nearest first; farthest truncated first
     under the attachment byte cap). Gaps land in `upstream_gaps` and as
     honest banners — never silent. Nested rebuilds pass
     `include_upstream=False` to avoid recursion."""

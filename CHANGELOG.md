@@ -13,6 +13,17 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Fixed — an issue placed in a project now sees the project's activity.**
+  A Dev working an issue a person added to a project received nothing
+  from the project: the upstream offer followed only the marker DevCake
+  writes when it splits a mission, so the project's brief, its updates and
+  its documents were invisible. The offer now ends at the project the
+  issue belongs to, mirrored under the upstream folder like a
+  decomposition parent, with the folder's relation and the project's
+  title named in the activity banner. A project the board does not poll
+  is read once; one that cannot be read is a named gap, never a silent
+  omission.
+
 Community surface added for public-repo hygiene (no LICENSE change in this
 track): [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 

@@ -273,7 +273,8 @@ async def _offer_upstream(mgr, mission, used: set[str]
                 mgr, anc.pmo_id, anc.pmo_kind or up.kind,
                 include_upstream=False)
         except Exception as e:  # noqa: BLE001 — one ancestor failure must not abort the offer
-            reason = f"{type(e).__name__}: {str(e)[:160]}"
+            reason = (f"{up.relation} activity unreadable: "
+                      f"{type(e).__name__}: {str(e)[:160]}")
             gaps.append({"key": key, "pmo_id": anc.pmo_id, "reason": reason})
             continue
 

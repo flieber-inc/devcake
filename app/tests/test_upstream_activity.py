@@ -362,6 +362,72 @@ def test_bundled_skills_never_include_review_ledger():
         assert "review-ledger" not in p.as_posix()
 
 
+def _dispatch_hand_made_issue_in_project(tmp_path, *, strict: bool,
+                                         readable: bool):
+    """Dispatch an issue a person placed in a project (no marker) whose
+    project may be unreadable — the ADR-0036 addendum's gate case."""
+    from devcake.config import AppConfig, Assignment, DevType, PMOInstance
+    from devcake.domain.model import MissionType
+    from fakes import FakeInternalForge, make_mission_manager
+    from test_prompt_templates import _ForgeWithDescriptor
+
+    proj = _project("p", "PRJ-1")
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p"
+    issue.labels |= {"DEVCAKE-EXECUTE"}
+    issue.repo = "main"
+    activities = {"p": _project_act(proj, "project body"),
+                  "i": _act(issue, "issue body")}
+    pmo = MultiActivityPMO([proj, issue], activities)
+    if not readable:
+        pmo.fail_ids.add("p")
+    cfg = AppConfig(
+        context_sourcing_strict=strict,
+        assignments={mt: Assignment(dev_type="senior-dev")
+                     for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")})
+    mgr = make_mission_manager(
+        tmp_path, pmo=pmo, forge=_ForgeWithDescriptor(), config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        noop_audit=True)
+    mgr.internal_forge = FakeInternalForge()
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    mgr._upstream_missions = [proj, issue]
+    launched = []
+
+    async def launch(run, image):
+        launched.append(run)
+    mgr.runs.bootstrap = type("B", (), {"launch": staticmethod(launch)})()
+    run = run_coro(mgr.dispatch(issue, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    return mgr, issue, run, launched, mgr.internal_forge
+
+
+def test_strict_unreadable_project_gates_dispatch(tmp_path):
+    """Strict on: the containing project cannot be read → fail-closed,
+    no attempt burned, the reason names the project."""
+    mgr, issue, run, launched, forge = _dispatch_hand_made_issue_in_project(
+        tmp_path, strict=True, readable=False)
+    assert run is None and launched == [] and forge.pushes == []
+    reason = mgr.blocked_reasons[issue.pmo_id]
+    assert "upstream activity unavailable" in reason
+    assert "PRJ-1" in reason and "containing project" in reason
+
+
+def test_readable_project_dispatches_with_its_mirror_in_the_snapshot(tmp_path):
+    """Strict on, project readable: the dispatch proceeds and the pushed
+    activity snapshot carries upstream/PRJ-1/ with the project's brief."""
+    mgr, issue, run, launched, forge = _dispatch_hand_made_issue_in_project(
+        tmp_path, strict=True, readable=True)
+    assert run is not None and launched
+    _repo, files, _msg = forge.pushes[0]
+    by_path = {f["path"]: base64.b64decode(f["content_b64"]).decode()
+               for f in files}
+    assert "project brief for PRJ-1" in by_path["upstream/PRJ-1/MISSION.md"]
+    assert "project body" in by_path["upstream/PRJ-1/ACTIVITY.md"]
+    assert "containing project: project PRJ-1" in by_path["ACTIVITY.md"]
+
+
 def _dispatch_with_ancestry(tmp_path, *, strict: bool, fail_root: bool = True):
     """Dispatch a child whose parent activity may be unreadable."""
     from devcake.config import AppConfig, Assignment, DevType, PMOInstance

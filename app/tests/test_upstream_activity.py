@@ -492,3 +492,161 @@ def test_nonstrict_unreadable_ancestor_dispatches_with_gap(tmp_path):
     assert "ROOT-1" in by_path["ACTIVITY.md"]
     assert "unavailable" in by_path["ACTIVITY.md"].lower() or \
         "UPSTREAM GAP" in by_path["ACTIVITY.md"]
+
+
+# ── ADR-0043 §3-4: folders are copies of the record; blockers included ───
+
+def _blocker(pmo_id: str, key: str, status: str = "done") -> Mission:
+    return _m(pmo_id, key, status=status)
+
+
+def test_upstream_chain_appends_direct_done_blockers_in_order():
+    a = _blocker("a", "BLK-A"); b = _blocker("b", "BLK-B")
+    c = _blocker("c", "BLK-C", status="in_progress")
+    proj = _project("p", "PRJ-1")
+    issue = _m("i", "ISSUE-1"); issue.parent_ref = "p"
+    issue.blocked_by = ["b", "c", "a"]
+    got = family_graph.upstream_chain(issue, [a, b, c, proj, issue])
+    assert [(u.ref, u.relation) for u in got] == [
+        ("p", family_graph.RELATION_PROJECT),
+        ("b", family_graph.RELATION_BLOCKER),
+        ("a", family_graph.RELATION_BLOCKER)]      # c is not done: skipped
+
+
+def test_upstream_chain_never_lists_a_blocker_twice_or_transitively():
+    root = _m("r", "ROOT-1"); root.blocked_by = ["x"]
+    x = _blocker("x", "BLK-X")
+    child = _m("c", "CHILD-1", parent="r", depth=1)
+    child.blocked_by = ["r", "x"]                   # parent doubles as blocker
+    got = family_graph.upstream_chain(child, [root, x, child])
+    assert [(u.ref, u.relation) for u in got] == [
+        ("r", family_graph.RELATION_PARENT),
+        ("x", family_graph.RELATION_BLOCKER)]
+    # x's own blocker (none here) and r's blockers are never followed
+
+
+def test_blockers_outside_the_snapshot_are_counted():
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["peer-1", "a"]
+    a = _blocker("a", "BLK-A")
+    assert family_graph.blockers_outside(issue, [issue, a]) == 1
+    assert [u.ref for u in family_graph.upstream_chain(issue, [issue, a])] == ["a"]
+
+
+def _forge_with_record(repo: str, files: dict[str, bytes]):
+    from fakes import FakeInternalForge
+    forge = FakeInternalForge()
+    forge.seed_snapshot(repo, files)
+    return forge
+
+
+def test_upstream_folder_is_copied_from_the_record_not_the_vendor(tmp_path):
+    """The parent's activity repo is the source: its files land verbatim
+    (its own upstream/ subtree excluded) and the vendor is not read."""
+    root = _m("r", "ROOT-1")
+    child = _m("c", "CHILD-1", parent="r", depth=1)
+    activities = {"c": _act(child, "child feed"),
+                  "r": _act(root, "VENDOR VIEW — must not be used")}
+    pmo = MultiActivityPMO([root, child], activities)
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [root, child]
+    mgr.internal_forge = _forge_with_record("activity-linear-root-1", {
+        "MISSION.md": b"# ROOT-1 record brief",
+        "ACTIVITY.md": b"record feed with the 1_ONBOARD card",
+        "1_ONBOARD.md": b"full transcript bytes",
+        "spec.pdf": b"%PDF starting attachment",
+        "upstream/GRAND-1/MISSION.md": b"not nested again"})
+    payload = run_coro(mgr.activity_payload("c"))
+    by_name = {a["filename"]: base64.b64decode(a["content_b64"])
+               for a in payload["attachments"]}
+    assert by_name["upstream/ROOT-1/MISSION.md"] == b"# ROOT-1 record brief"
+    assert by_name["upstream/ROOT-1/1_ONBOARD.md"] == b"full transcript bytes"
+    assert by_name["upstream/ROOT-1/spec.pdf"] == b"%PDF starting attachment"
+    assert "upstream/ROOT-1/upstream/GRAND-1/MISSION.md" not in by_name
+    assert not any(pid == "r" for pid, _full in pmo.activity_calls)
+    assert "(rebuilt from the vendor)" not in payload["activity_md"]
+    assert payload["upstream_gaps"] == []
+
+
+def test_upstream_without_a_record_is_rebuilt_from_the_vendor(tmp_path):
+    from fakes import FakeInternalForge
+    root = _m("r", "ROOT-1")
+    child = _m("c", "CHILD-1", parent="r", depth=1)
+    pmo = MultiActivityPMO([root, child], {
+        "c": _act(child, "child feed"), "r": _act(root, "root vendor feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [root, child]
+    mgr.internal_forge = FakeInternalForge()         # no record for ROOT-1
+    payload = run_coro(mgr.activity_payload("c"))
+    by_name = {a["filename"]: base64.b64decode(a["content_b64"])
+               for a in payload["attachments"]}
+    assert b"root vendor feed" in by_name["upstream/ROOT-1/ACTIVITY.md"]
+    assert "ROOT-1 (rebuilt from the vendor)" in payload["activity_md"]
+
+
+def test_done_blocker_record_is_mirrored_and_labeled(tmp_path):
+    blk = _blocker("b", "BLK-1")
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["b"]
+    pmo = MultiActivityPMO([blk, issue], {"i": _act(issue, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [blk, issue]
+    mgr.internal_forge = _forge_with_record("activity-linear-blk-1", {
+        "MISSION.md": b"blocker brief", "ACTIVITY.md": b"blocker feed",
+        "findings.csv": b"a,b\n1,2\n"})
+    payload = run_coro(mgr.activity_payload("i"))
+    by_name = {a["filename"]: base64.b64decode(a["content_b64"])
+               for a in payload["attachments"]}
+    assert by_name["upstream/BLK-1/findings.csv"] == b"a,b\n1,2\n"
+    assert "`upstream/BLK-1/` — blocker" in payload["activity_md"]
+
+
+def test_unreadable_blocker_record_is_a_disclosed_non_gating_gap(tmp_path):
+    blk = _blocker("b", "BLK-1")
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["b"]
+    pmo = MultiActivityPMO([blk, issue], {"i": _act(issue, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [blk, issue]
+    forge = _forge_with_record("activity-linear-blk-1", {"MISSION.md": b"x"})
+    forge.fail_reads.add("activity-linear-blk-1")
+    mgr.internal_forge = forge
+    payload = run_coro(mgr.activity_payload("i"))
+    assert payload["upstream_gaps"] == []            # never gates a dispatch
+    assert "UPSTREAM GAP" in payload["activity_md"]
+    assert "BLK-1" in payload["activity_md"]
+    assert not any(a["filename"].startswith("upstream/")
+                   for a in payload["attachments"])
+
+
+def test_unreadable_ancestor_record_still_gates(tmp_path):
+    root = _m("r", "ROOT-1")
+    child = _m("c", "CHILD-1", parent="r", depth=1)
+    pmo = MultiActivityPMO([root, child], {"c": _act(child, "child feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [root, child]
+    forge = _forge_with_record("activity-linear-root-1", {"MISSION.md": b"x"})
+    forge.fail_reads.add("activity-linear-root-1")
+    mgr.internal_forge = forge
+    payload = run_coro(mgr.activity_payload("c"))
+    assert [g["key"] for g in payload["upstream_gaps"]] == ["ROOT-1"]
+    assert "record unreadable" in payload["upstream_gaps"][0]["reason"]
+
+
+def test_budget_is_decided_from_record_sizes_before_download(tmp_path):
+    """Blockers are last, so they truncate first; an over-budget record is
+    never downloaded (only its tree was read)."""
+    root = _m("r", "ROOT-1")
+    child = _m("c", "CHILD-1", parent="r", depth=1)
+    blk = _blocker("b", "BLK-1"); child.blocked_by = ["b"]
+    pmo = MultiActivityPMO([root, child, blk], {"c": _act(child, "c")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [root, child, blk]
+    forge = _forge_with_record("activity-linear-root-1",
+                               {"MISSION.md": b"r" * 100})
+    forge.seed_snapshot("activity-linear-blk-1", {"big.bin": b"b" * 5000})
+    mgr.internal_forge = forge
+    mgr._attachment_cap = lambda: 1000
+    payload = run_coro(mgr.activity_payload("c"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert "upstream/ROOT-1/MISSION.md" in names
+    assert not any(n.startswith("upstream/BLK-1/") for n in names)
+    assert "BLK-1" in payload["upstream_truncated"]
+    assert ("activity-linear-blk-1", "big.bin") not in forge.read_calls

@@ -1,6 +1,6 @@
 # ADR-0036 — Offer every decomposition ancestor's activity to dispatched Devs
 
-- **Status:** accepted (2026-08-19)
+- **Status:** accepted (2026-08-19); §2's vendor rebuild and §3's blocker exclusion superseded by ADR-0043 (folders are copies of the record; direct done blockers included)
 - **Amends:** ADR-0014 (activity payload / activity repos), cross-references
   ADR-0012 (decomposition-depth bound) and ADR-0017 (blocker-mount contract)
 - **Ticket:** CAKE-124

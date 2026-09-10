@@ -89,7 +89,8 @@ def _pr_url(runs: list[Run], given: str | None) -> str:
     return ""
 
 
-def _now_line(mission: Mission, runs: list[Run], pr_url: str) -> str:
+def _now_line(mission: Mission, runs: list[Run], pr_url: str,
+              waiting: str | None = None) -> str:
     labels = mission.labels
     if mission.status == "done":
         return "✅ Done."
@@ -109,12 +110,14 @@ def _now_line(mission: Mission, runs: list[Run], pr_url: str) -> str:
                  if live.started_at else "")
         return (f"⏳ Running step {live.seq} · {live.mission_type} "
                 f"(attempt {live.attempt_of_step}){since}.")
+    if waiting:                       # stalls.py: cannot start, and why
+        return waiting
     stage = next((_STAGE_STEP[l] for l in _STAGE_STEP if l in labels), None)
     return f"⏳ Queued for {stage}." if stage else "⏳ Queued."
 
 
 def render(mgr, mission: Mission, runs: list[Run], *, pr_url: str | None,
-           collapsible: str) -> str:
+           collapsible: str, waiting: str | None = None) -> str:
     """The comment body (sentinel-free; the chokepoints seal it). Pure —
     everything comes from the record. Never a file token, never a
     `Part i of n` line, no marker but the status marker (each pinned)."""
@@ -127,7 +130,7 @@ def render(mgr, mission: Mission, runs: list[Run], *, pr_url: str | None,
     minutes = sum((_duration_s(r) or 0) for r in latest.values()) / 60
     lines = [f"📌 **{mission.key} — status** · a view DevCake keeps current; "
              "the record is the entries above.", "",
-             f"**Now:** {_now_line(mission, runs, url)}"]
+             f"**Now:** {_now_line(mission, runs, url, waiting)}"]
     if url:
         lines.append(f"**PR:** {url}")
     cost = f"**Cost so far:** ${total:.2f}"

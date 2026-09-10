@@ -229,7 +229,7 @@ cost. A mission that entered at REVIEW by label shows one row; the ladder is
 the runs, never the label history.
 
 It is **created by whichever dispatch finds the feed without one** — there
-is no privileged entry point — found again by the `` `devcake:status:v1` ``
+is no privileged entry point — or by a **stalled deferral** (a dispatch refused or deferred for longer than `stall_after_seconds` for a reason a person can act on: the Now line then reads "waiting to start since <date> — <why>", and one ✋ notice per block per episode is posted beside it; both carry a marker the Dev's folder drops — ADR-0042 addendum, `stalls.py`) — found again by the `` `devcake:status:v1` ``
 token in its `Record` fold (oldest marked entry wins, so a restart or a
 second instance converges on the same comment), and **edited in place** at
 every step end, park, hand-off, merge event and completion, never at

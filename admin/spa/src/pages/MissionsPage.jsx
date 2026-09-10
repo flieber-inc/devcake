@@ -13,6 +13,7 @@ import usePoll from "../lib/usePoll.js";
 import { makeReqSeq } from "../lib/reqSeq.js";
 import { liveMission, refKey } from "../lib/missionIdentity.js";
 import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
+import { stallIndex } from "../lib/stalls.js";
 
 // Board refresh cadence — /missions reflects the last PMO poll (~30s at the
 // server); polling at 10s here keeps the UI fresh without leading the operator
@@ -161,6 +162,7 @@ export default function MissionsPage() {
     poll_interval_seconds: 30,
     poll_degraded: {},
     dependency_cycles: [],
+    stalled_dispatches: [],
   });
   const [error, setError] = useState("");
   // per-mission optimistic overrides, keyed by the INSTANCE-QUALIFIED ref
@@ -240,6 +242,7 @@ export default function MissionsPage() {
           poll_interval_seconds: healthBody.poll_interval_seconds || 30,
           poll_degraded: healthBody.poll_degraded || {},
           dependency_cycles: healthBody.dependency_cycles || [],
+          stalled_dispatches: healthBody.stalled_dispatches || [],
         });
       }
       setPending((prev) => {
@@ -472,6 +475,7 @@ export default function MissionsPage() {
 
   // recompute derived cadence text on every tick — no state coupling
   void tick;
+  const stallIdx = stallIndex(pollState.stalled_dispatches);
   const secondsSincePoll = timeAgoSeconds(pollState.last_poll_at);
   const nextInSeconds =
     secondsSincePoll == null
@@ -740,6 +744,7 @@ export default function MissionsPage() {
                     multiPmo={multiPmo}
                     syncing={!!pending[refKey(row.instance, row.pmo_id)]?.syncing}
                     sectionReason={shared}
+                    stall={stallIdx.get(`${row.instance}:${row.pmo_id}`) || null}
                     onOpen={() => setOpenMission(row)}
                     onAction={(action) => requestAction({ pmo_id: row.pmo_id, instance: row.instance }, action)}
                   />

@@ -936,6 +936,16 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **Stalled dispatches surfaced** (2026-09-10, ADR-0042 addendum): a
+  decomposition child sat 8 days because its archived original made the
+  ancestor walk gap and strict sourcing deferred every cycle — visible in
+  the log only. New `stalls.py`: the scheduler observes every refused /
+  deferred dispatch (dependency waits excluded), a per-instance ledger
+  (`state/stalls.json`) clocks blocks by identity and episode,
+  `/health.stalled_dispatches` + Overview alert + board badge past
+  `stall_after_seconds`, ONE ✋ notice per block per episode and the
+  status comment created early with a "waiting to start since" Now line;
+  `devcake:stall:v1` dropped by the projection like the status marker.
 - **Upstream folders are copies of the record, stage 3** (2026-09-10,
   ADR-0043 §3-4): `_offer_upstream` reads each upstream mission's activity
   repo through `activity_snapshot_tree` (budget decided from sizes) and

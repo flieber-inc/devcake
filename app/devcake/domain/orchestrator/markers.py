@@ -82,6 +82,11 @@ DELIVERABLE_TOKEN = "`devcake:deliverable:v1`"
 # counted, omitted from the Dev's folder by the projection.
 STATUS_MARKER = "`devcake:status:v1`"
 STATUS_MARKER_RE = re.compile(r"`devcake:status:v1`")
+# The stall notice (stalls.py): DevCake's own inability to start a mission,
+# posted once per block per episode for a person — dropped from the Dev's
+# folder like the status comment (it is not about the mission's work).
+STALL_MARKER = "`devcake:stall:v1`"
+STALL_MARKER_RE = re.compile(r"`devcake:stall:v1`")
 
 
 def answer_token(seq: int) -> str:

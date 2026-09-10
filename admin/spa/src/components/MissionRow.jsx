@@ -4,6 +4,7 @@ import MoreMenu from "./MoreMenu.jsx";
 import StageGlyph from "./StageGlyph.jsx";
 import { relTime } from "../lib/format.js";
 import { contextActions, needsHumanReason } from "../lib/board.js";
+import { stallAge, stallWords } from "../lib/stalls.js";
 
 // Priority is a quiet dot, not a chip: on a real fleet nearly every mission
 // is "medium", so a labelled chip repeated down the list carries no scan
@@ -19,7 +20,7 @@ const PRIORITY_DOT = {
 // 2026-08-02, admin/spa/DESIGN.md §2: the kanban card's five stacked rows
 // collapse to one so the title gets the page's width). Click anywhere opens
 // the drawer; the ⋯ menu and the ↗ link stop propagation.
-export default function MissionRow({ row, multiPmo, syncing, sectionReason, onOpen, onAction }) {
+export default function MissionRow({ row, multiPmo, syncing, sectionReason, stall, onOpen, onAction }) {
   const badge = needsHumanReason(row.labels);
   const items = contextActions(row);
   // Park is destructive-ish (stops scheduling) — surface it as a `danger`
@@ -79,6 +80,19 @@ export default function MissionRow({ row, multiPmo, syncing, sectionReason, onOp
       {badge && (
         <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
           {badge}
+        </span>
+      )}
+      {stall && (
+        <span
+          title={`${stall.text} — since ${stall.since}`}
+          className={
+            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium " +
+            (stall.severity === "critical"
+              ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300"
+              : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300")
+          }
+        >
+          waiting: {stallWords(stall)} · {stallAge(stall.seconds)}
         </span>
       )}
       {syncing && (

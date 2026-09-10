@@ -9,6 +9,7 @@ from .. import backend_health
 from ..model import (LABEL_FAILED, LABEL_SKIP, Mission,
                      PRIORITY_RANK, derive, find_cycles)
 from ..repo_sourcing import memory_mount_names
+from . import stalls
 from .markers import DISPATCHABLE_TYPES, decomposition_parent_ref
 
 log = logging.getLogger("devcake.missions")
@@ -95,6 +96,8 @@ async def schedule(mgr, missions: list[Mission],
                                     md[0].updated_at, md[0].pmo_id))
     dispatched = 0
     active = mgr.runs.store.active()
+    stalls.begin_cycle(mgr)
+    launched: set[str] = set()
     for mission, d in candidates:
         # per-mission repo gate (M10): unresolved missions surface WHY and
         # never dispatch; a latched breaker on repo A never stops repo B
@@ -146,6 +149,16 @@ async def schedule(mgr, missions: list[Mission],
         if run:
             active.append(run)
             dispatched += 1
+            launched.add(mission.pmo_id)
+    # stalls.py — the one place that sees both outcomes: a launch ends a
+    # mission's episode; a reason set this cycle (blocked_reasons is
+    # rebuilt every cycle) is a refusal or deferral to clock and classify
+    for mission, _d in candidates:
+        if mission.pmo_id in launched:
+            stalls.dispatched(mgr, mission.pmo_id)
+        elif mgr.blocked_reasons.get(mission.pmo_id):
+            stalls.observe(mgr, mission, mgr.blocked_reasons[mission.pmo_id])
+    await stalls.end_cycle(mgr, missions)
     return dispatched
 
 

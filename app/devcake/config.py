@@ -1121,6 +1121,10 @@ class AppConfig(BaseModel):
     steward: Steward = Field(default_factory=Steward)
     # PLAN_MEMORY: skill-source + memory-mount fail-closed (default ON).
     context_sourcing_strict: bool = True
+    # stalls.py: a mission refused or deferred at dispatch for longer than
+    # this (dependency waits excluded) is surfaced — /health, the admin
+    # Overview alert, one ✋ notice and the status comment's Now line
+    stall_after_seconds: int = Field(1800, ge=60, le=86400)
     # PLAN_MEMORY: OFF enforces a person at the merge chokepoint for any
     # memory-bound card. ON is two-model consent, not a person.
     memory_auto_merge: bool = False

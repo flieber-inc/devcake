@@ -372,6 +372,18 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
     configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
     prefixed = len(managers) > 1   # advisory text carries the instance when N>1
 
+    def _stalled() -> list[dict]:
+        from ..domain.orchestrator import stalls
+        out: list[dict] = []
+        for name, mgr in managers.items():
+            keys = {m.pmo_id: m.key for m in getattr(mgr, "snapshot", None).missions} \
+                if getattr(mgr, "snapshot", None) is not None else {}
+            for row in stalls.stalled(mgr):
+                row = dict(row, instance=name,
+                           key=keys.get(row["pmo_id"], row["pmo_id"]))
+                out.append(row)
+        return out
+
     def _merged(attr: str) -> dict:
         out: dict = {}
         for name, mgr in managers.items():
@@ -429,6 +441,9 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
             ([f"{name}:{k}" for k in cyc] if prefixed else cyc)
             for name, mgr in managers.items() for cyc in mgr.cycles],
         "blocked_reasons": _merged("blocked_reasons"),
+        # stalls.py — missions that cannot start, past the threshold, with
+        # age and a plain-words reason (the Overview alert + board badge)
+        "stalled_dispatches": _stalled(),
         # ADR-0003 amendment / ADR-0040: what each instance's last cycle
         # spent on feed scans and tracking reads, and what the memo saved
         "pmo_demand": {name: dict(getattr(mgr, "cycle_stats", {}) or {})

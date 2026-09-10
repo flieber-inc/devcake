@@ -13,13 +13,13 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
-## v0.7.0 (2026-09-10)
+## v0.6.2 (2026-09-10)
 
-Minor release — the v0.7 line opens with the activity repository as the
-record of a mission's run (ADR-0043): every Dev now receives the whole
-record of every mission upstream of its work, blockers included.
+Patch release in the v0.6 "Kentucky Butter" line — the activity repository
+becomes the record of a mission's run (ADR-0043): every Dev now receives
+the whole record of every mission upstream of its work, blockers included.
 `devcake-cli` stays at 0.1.8.
-[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.7.0).
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.2).
 
 - **Changed — a mission's activity repository is its record, kept current**
   (#454).

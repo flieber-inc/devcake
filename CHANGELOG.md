@@ -13,7 +13,13 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
-- **Added — a mission that cannot start is now visible.** A mission whose
+## v0.6.3 (2026-09-10)
+
+Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.3).
+
+- **Added — a mission that cannot start is now visible** (#460, ADR-0042
+  addendum). A mission whose
   dispatch DevCake refuses or defers for a reason a person can act on,
   for longer than a threshold, is listed on the health endpoint, raised as
   an alert on the admin Overview with its age, and badged on its board

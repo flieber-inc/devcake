@@ -936,6 +936,14 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **The containing project is upstream** (2026-09-10, ADR-0036 addendum):
+  an issue a person placed in a project got nothing from the project —
+  the ancestor offer followed only the decomposition marker. The offer now
+  walks `family_graph.upstream_chain`: decomposition ancestors, then the
+  containing project (`Mission.parent_ref`, trusted from the vendor's
+  record, read live when unlabeled), mirrored last under
+  `upstream/{PROJECT-KEY}/` with the relation and title in the banner;
+  an unreadable project is a named gap. Docs 02, 07 §2, playbook note.
 - **The feed for readers: step cards** (2026-09-09, ADR-0042 PR-1..4):
   a three-step mission read as fifteen comments, a third of them
   markers, the answer posted twice, an HTML marker rendered as text on

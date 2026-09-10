@@ -87,3 +87,43 @@ deselection from Dev Types where the operator still has it selected.
 - Activity payload builders and the dispatch strict gate share one chokepoint
   (`activity_payload` → `upstream_gaps`).
 - No new config field; reuses `context_sourcing_strict` and attachment caps.
+
+## Addendum — the containing project is upstream too (2026-09-10)
+
+**Context.** The ancestor walk above follows only the decomposition marker,
+which DevCake writes when it splits a mission. An issue a person places in a
+project by hand carries no marker, so its Dev received nothing from the
+project: not the brief, not the project updates, not the documents. The
+founder ruled that this is a mistake: a mission inside a project must know
+the project's activity repository is there for consulting and that it is
+the upstream work the mission belongs to. It need not ride in the prompt;
+it must be in the workspace, named for what it is.
+
+**Decision.**
+
+- The offer walks the **upstream chain** (`family_graph.upstream_chain`):
+  the decomposition ancestors as before, then the **containing project** of
+  the chain's last issue (the mission itself when there is no chain). The
+  project is the farthest upstream, so it is mirrored last and truncates
+  first under the byte cap. A chain that already ends at the project by
+  marker gains nothing twice.
+- The containment edge is read from the vendor's own record
+  (`Mission.parent_ref`, the project's id on vendors with projects). It is
+  trusted **without** the `DEVCAKE-CREATED` gate that guards the marker:
+  membership is set by a person or by DevCake on the vendor, never by
+  description text, so it cannot be forged. `family_of` and the family gate
+  do not change — the project edge is context, not ordering.
+- A containing project the board snapshot does not hold (a project without
+  the managed label is never polled) is read live once, under the
+  dispatch's call class. An unreadable project is a named `⚠ UPSTREAM GAP`
+  like any ancestor, so a strict board defers the dispatch rather than
+  launching blind.
+- The ACTIVITY.md offer banner names each mirror's relation
+  (`decomposition parent` / `containing project`) and the upstream
+  mission's title, and the playbooks' workspace note says the project's
+  brief and feed are the context the mission is part of.
+
+**Consequences.** Any issue in a project sees the project's MISSION.md,
+ACTIVITY.md (its updates) and documents under `upstream/{PROJECT-KEY}/`.
+One extra full read per dispatch for such issues, under the existing cap.
+`blocked_by` feeds stay out (§3); widening that remains a separate decision.

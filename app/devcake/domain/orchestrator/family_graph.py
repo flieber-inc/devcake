@@ -10,8 +10,10 @@ PMO calls, no adapters.
 
 Also owns the *directed* decomposition ancestor walk
 (`decomposition_ancestors`, ADR-0036 / CAKE-124) — parent_ref chain toward
-the graph root only. That walk deliberately does NOT follow blocked_by
-edges (ADR-0017 stays the blocker-mount contract).
+the graph root only — and the upstream chain built on it (`upstream_chain`,
+ADR-0036 addendum): the same walk, then the containing project the vendor
+reports for the chain's last issue. Neither follows blocked_by edges
+(ADR-0017 stays the blocker-mount contract).
 """
 
 from __future__ import annotations
@@ -70,6 +72,59 @@ def decomposition_ancestors(source: Mission,
         seen.add(parent.pmo_id)
         cur = parent
     return out
+
+
+# How an upstream mission relates to the dispatched one (ADR-0036
+# addendum). Rendered in the ACTIVITY.md offer banner so the Dev knows why
+# each upstream/{KEY}/ folder is there.
+RELATION_PARENT = "decomposition parent"
+RELATION_PROJECT = "containing project"
+
+
+@dataclass(frozen=True)
+class Upstream:
+    """One upstream mission to mirror. `mission` is None when the board
+    snapshot does not hold it (a project without the managed label is
+    never polled) — the mirror builder then reads it live by `ref`."""
+    ref: str
+    kind: str                  # "issue" | "project"
+    relation: str              # RELATION_PARENT | RELATION_PROJECT
+    mission: Mission | None = None
+
+
+def containing_project_ref(mission: Mission) -> str | None:
+    """The containing project's pmo_id from the vendor's own record
+    (`parent_ref` on issue-kind missions; None on vendors without
+    projects). Trusted WITHOUT the LABEL_CREATED gate that guards the
+    decomposition marker: membership is set by a person or by DevCake on
+    the vendor, never by description text, so it cannot be forged."""
+    if (mission.pmo_kind or "issue") != "issue":
+        return None
+    return mission.parent_ref or None
+
+
+def upstream_chain(source: Mission, missions: list[Mission]) -> list[Upstream]:
+    """The missions whose activity a dispatched Dev is offered, nearest
+    first (ADR-0036 + addendum): the decomposition ancestors, then the
+    containing project of the chain's last issue (the source itself when
+    there is no chain). An issue a person places in a project therefore
+    gets the project's brief and feed exactly as a decomposition child
+    does; a chain that already ends at the project gains nothing twice.
+    The project is the farthest ancestor, so it truncates first under the
+    byte cap. Cycle-safe by construction of the walk plus the `seen` set."""
+    chain = [Upstream(m.pmo_id, m.pmo_kind or "issue", RELATION_PARENT, m)
+             for m in decomposition_ancestors(source, missions)]
+    last = chain[-1].mission if chain else source
+    seen = {source.pmo_id} | {u.ref for u in chain}
+    pid = containing_project_ref(last)
+    if not pid or pid in seen:
+        return chain
+    by_id = {m.pmo_id: m for m in missions if m.pmo_id}
+    proj = by_id.get(pid)
+    if proj is not None and (proj.pmo_kind or "issue") != "project":
+        return chain          # a parent_ref that is not a project: ignore
+    chain.append(Upstream(pid, "project", RELATION_PROJECT, proj))
+    return chain
 
 
 def family_of(source: Mission, missions: list[Mission]) -> Family:

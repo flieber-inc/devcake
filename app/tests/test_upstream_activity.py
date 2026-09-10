@@ -1,8 +1,10 @@
 """CAKE-124: offer every decomposition ancestor's activity under
-activity/upstream/{MISSION-KEY}/ (directed parent_ref chain to root).
+activity/upstream/{MISSION-KEY}/ (directed parent_ref chain to root), and
+(ADR-0036 addendum) the containing project's activity to any issue placed
+in a project.
 
 Public seams under test:
-- family_graph.decomposition_ancestors
+- family_graph.decomposition_ancestors / upstream_chain
 - activity_payload.activity_payload (upstream files + gaps + truncation)
 - dispatch gate via activity_payload upstream_gaps + context_sourcing_strict
 """
@@ -64,6 +66,72 @@ def test_decomposition_ancestors_ignores_blocked_by_only_neighbors():
     child.blocked_by = ["s"]
     got = family_graph.decomposition_ancestors(child, [root, child, sibling])
     assert [m.key for m in got] == ["ROOT-1"]
+
+
+def _project(pmo_id: str, key: str, *, labels: set | None = None) -> Mission:
+    return Mission(
+        instance="linear", pmo_id=pmo_id, pmo_kind="project", key=key,
+        title=f"project {key}", status="backlog",
+        labels=set(labels) if labels is not None else {"DEVCAKE"},
+        updated_at=NOW, description=f"project brief for {key}",
+    )
+
+
+def test_upstream_chain_issue_in_project_gets_the_project():
+    """ADR-0036 addendum: a hand-made issue placed in a project (no marker,
+    no DEVCAKE-CREATED) still gets the project as its upstream."""
+    proj = _project("p", "PRJ-1")
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p"
+    got = family_graph.upstream_chain(issue, [proj, issue])
+    assert [(u.ref, u.relation) for u in got] == \
+        [("p", family_graph.RELATION_PROJECT)]
+    assert got[0].mission is proj and got[0].kind == "project"
+
+
+def test_upstream_chain_marker_chain_ending_at_project_is_not_doubled():
+    """A decomposition child of a project already reaches the project by
+    marker; the containment edge adds nothing twice."""
+    proj = _project("p", "PRJ-1")
+    child = _m("c", "CHILD-1", parent="p", depth=1)
+    child.parent_ref = "p"
+    got = family_graph.upstream_chain(child, [proj, child])
+    assert [(u.ref, u.relation) for u in got] == \
+        [("p", family_graph.RELATION_PARENT)]
+
+
+def test_upstream_chain_issue_chain_then_its_project():
+    """Root issue inside a project → child's chain = [root, project]."""
+    proj = _project("p", "PRJ-1")
+    root = _m("r", "ROOT-1")
+    root.parent_ref = "p"
+    child = _m("c", "CHILD-1", parent="r", depth=1)
+    child.parent_ref = "p"
+    got = family_graph.upstream_chain(child, [proj, root, child])
+    assert [(u.ref, u.relation) for u in got] == [
+        ("r", family_graph.RELATION_PARENT),
+        ("p", family_graph.RELATION_PROJECT)]
+
+
+def test_upstream_chain_project_absent_from_snapshot_is_offered_unresolved():
+    """A project without the managed label is never polled: the chain
+    names it with mission=None so the mirror builder reads it live."""
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p-unlabeled"
+    got = family_graph.upstream_chain(issue, [issue])
+    assert len(got) == 1 and got[0].mission is None
+    assert got[0].ref == "p-unlabeled" and got[0].kind == "project"
+
+
+def test_upstream_chain_without_project_or_marker_is_empty():
+    issue = _m("i", "ISSUE-1")
+    assert family_graph.upstream_chain(issue, [issue]) == []
+
+
+def test_containing_project_ref_is_issue_only():
+    proj = _project("p", "PRJ-1")
+    proj.parent_ref = "x"
+    assert family_graph.containing_project_ref(proj) is None
 
 
 class MultiActivityPMO(MapPMO):
@@ -151,6 +219,92 @@ def test_grandchild_payload_includes_root_and_parent_upstream(tmp_path):
         "upstream/" in payload["activity_md"]
 
 
+def _project_act(proj: Mission, body: str) -> Activity:
+    entries = [ActivityEntry(ts=NOW, author="devcake", kind="comment",
+                             body=body, entry_id=f"u-{proj.pmo_id}")]
+    return Activity(mission=proj, entries=entries)
+
+
+def test_hand_made_issue_in_project_mirrors_the_project(tmp_path):
+    """The founder's case: an issue a person adds to a project must find
+    the project's brief and feed under upstream/, told what it is."""
+    proj = _project("p", "PRJ-1")
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p"
+    activities = {
+        "p": _project_act(proj, "project update: scope agreed"),
+        "i": _act(issue, "issue feed"),
+    }
+    pmo = MultiActivityPMO([proj, issue], activities)
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [proj, issue]
+    payload = run_coro(mgr.activity_payload("i"))
+    by_name = {a["filename"]: base64.b64decode(a["content_b64"])
+               for a in payload["attachments"]}
+    assert b"project brief for PRJ-1" in by_name["upstream/PRJ-1/MISSION.md"]
+    assert b"scope agreed" in by_name["upstream/PRJ-1/ACTIVITY.md"]
+    assert payload["upstream_gaps"] == []
+    banner = payload["activity_md"]
+    assert "upstream/PRJ-1/" in banner and "containing project" in banner
+    assert "project PRJ-1" in banner            # the title, so the Dev knows
+    # the project was read from the snapshot, not fetched live
+    assert "p" not in pmo.get_calls
+
+
+def test_unlabeled_project_is_read_live(tmp_path):
+    """A project outside the board snapshot is fetched once by id."""
+    proj = _project("p", "PRJ-1", labels=set())
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p"
+    activities = {
+        "p": _project_act(proj, "unlabeled project update"),
+        "i": _act(issue, "issue feed"),
+    }
+    pmo = MultiActivityPMO([proj, issue], activities)
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [issue]           # the poll never saw the project
+    payload = run_coro(mgr.activity_payload("i"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert "upstream/PRJ-1/MISSION.md" in names
+    assert pmo.get_calls == ["p"]
+    assert payload["upstream_gaps"] == []
+
+
+def test_unreadable_project_is_a_gap(tmp_path):
+    """The project cannot be read → a named gap, never a silent omission
+    (strict boards defer the dispatch on it like any ancestor gap)."""
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p-gone"
+    pmo = MultiActivityPMO([issue], {"i": _act(issue, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [issue]
+    payload = run_coro(mgr.activity_payload("i"))
+    gaps = payload["upstream_gaps"]
+    assert len(gaps) == 1 and gaps[0]["key"] == "p-gone"
+    assert "containing project unreadable" in gaps[0]["reason"]
+    assert "UPSTREAM GAP" in payload["activity_md"]
+    assert not any(a["filename"].startswith("upstream/")
+                   for a in payload["attachments"])
+
+
+def test_project_child_by_marker_mirrors_the_project_once(tmp_path):
+    """A decomposition child of a project: one upstream folder, labeled as
+    the decomposition parent (unchanged behavior)."""
+    proj = _project("p", "PRJ-1")
+    child = _m("c", "CHILD-1", parent="p", depth=1)
+    child.parent_ref = "p"
+    activities = {"p": _project_act(proj, "project update"),
+                  "c": _act(child, "child feed")}
+    pmo = MultiActivityPMO([proj, child], activities)
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [proj, child]
+    payload = run_coro(mgr.activity_payload("c"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert names.count("upstream/PRJ-1/MISSION.md") == 1
+    assert "decomposition parent" in payload["activity_md"]
+    assert "containing project:" not in payload["activity_md"]
+
+
 def test_strict_unreadable_ancestor_reports_gap(tmp_path):
     """Unreadable ancestor → upstream_gaps entry (dispatch gates on this)."""
     root = _m("r", "ROOT-1")
@@ -206,6 +360,72 @@ def test_bundled_skills_never_include_review_ledger():
     assert "review-ledger" not in names
     for p in builtin.rglob("*"):
         assert "review-ledger" not in p.as_posix()
+
+
+def _dispatch_hand_made_issue_in_project(tmp_path, *, strict: bool,
+                                         readable: bool):
+    """Dispatch an issue a person placed in a project (no marker) whose
+    project may be unreadable — the ADR-0036 addendum's gate case."""
+    from devcake.config import AppConfig, Assignment, DevType, PMOInstance
+    from devcake.domain.model import MissionType
+    from fakes import FakeInternalForge, make_mission_manager
+    from test_prompt_templates import _ForgeWithDescriptor
+
+    proj = _project("p", "PRJ-1")
+    issue = _m("i", "ISSUE-1")
+    issue.parent_ref = "p"
+    issue.labels |= {"DEVCAKE-EXECUTE"}
+    issue.repo = "main"
+    activities = {"p": _project_act(proj, "project body"),
+                  "i": _act(issue, "issue body")}
+    pmo = MultiActivityPMO([proj, issue], activities)
+    if not readable:
+        pmo.fail_ids.add("p")
+    cfg = AppConfig(
+        context_sourcing_strict=strict,
+        assignments={mt: Assignment(dev_type="senior-dev")
+                     for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")})
+    mgr = make_mission_manager(
+        tmp_path, pmo=pmo, forge=_ForgeWithDescriptor(), config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        noop_audit=True)
+    mgr.internal_forge = FakeInternalForge()
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    mgr._upstream_missions = [proj, issue]
+    launched = []
+
+    async def launch(run, image):
+        launched.append(run)
+    mgr.runs.bootstrap = type("B", (), {"launch": staticmethod(launch)})()
+    run = run_coro(mgr.dispatch(issue, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    return mgr, issue, run, launched, mgr.internal_forge
+
+
+def test_strict_unreadable_project_gates_dispatch(tmp_path):
+    """Strict on: the containing project cannot be read → fail-closed,
+    no attempt burned, the reason names the project."""
+    mgr, issue, run, launched, forge = _dispatch_hand_made_issue_in_project(
+        tmp_path, strict=True, readable=False)
+    assert run is None and launched == [] and forge.pushes == []
+    reason = mgr.blocked_reasons[issue.pmo_id]
+    assert "upstream activity unavailable" in reason
+    assert "PRJ-1" in reason and "containing project" in reason
+
+
+def test_readable_project_dispatches_with_its_mirror_in_the_snapshot(tmp_path):
+    """Strict on, project readable: the dispatch proceeds and the pushed
+    activity snapshot carries upstream/PRJ-1/ with the project's brief."""
+    mgr, issue, run, launched, forge = _dispatch_hand_made_issue_in_project(
+        tmp_path, strict=True, readable=True)
+    assert run is not None and launched
+    _repo, files, _msg = forge.pushes[0]
+    by_path = {f["path"]: base64.b64decode(f["content_b64"]).decode()
+               for f in files}
+    assert "project brief for PRJ-1" in by_path["upstream/PRJ-1/MISSION.md"]
+    assert "project body" in by_path["upstream/PRJ-1/ACTIVITY.md"]
+    assert "containing project: project PRJ-1" in by_path["ACTIVITY.md"]
 
 
 def _dispatch_with_ancestry(tmp_path, *, strict: bool, fail_root: bool = True):

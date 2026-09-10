@@ -22,9 +22,10 @@ whether it is one deliverable or several.
   triage (the EXECUTE step produces the deliverables here, from your plan).
 - `/workspace/activity/` — the issue's knowledge base: MISSION.md (the
   brief), ACTIVITY.md (a faithful mirror of the issue's feed — posts,
-  replies, attachments), every attached file, and — when this issue is a
-  decomposition child — `upstream/{MISSION-KEY}/` mirrors of ancestor
-  activity toward the graph root. Read what you need.
+  replies, attachments), every attached file, and — when this issue is part
+  of larger work — `upstream/{MISSION-KEY}/` mirrors of each upstream
+  mission's activity: decomposition ancestors toward the graph root, then
+  the project this issue belongs to. Read what you need.
 - `/workspace/out/` — where your outputs go.
 
 ### The issue

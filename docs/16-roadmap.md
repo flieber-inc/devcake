@@ -936,6 +936,13 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **Project runs write their record, stage 2** (2026-09-10, ADR-0043 §2):
+  `feed._feed`/`_edit` no longer suppress project kind — posts and edits go
+  to the project-native feed (no threads); `_post_step_card` /
+  `_post_transcript` lost their project branches; the raw project-update
+  mirrors in transitions/decomposition are gone (the notice lands there
+  now); the project decomposition note is a `feed.notice`. Audit action
+  `project_feed_suppressed` retired.
 - **The activity repository is the record, stage 1** (2026-09-10, ADR-0043 §1):
   the per-mission activity repo was a dispatch-time snapshot; it is now
   refreshed at every run boundary (step close incl. failures, completion,

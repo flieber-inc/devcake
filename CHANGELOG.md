@@ -22,6 +22,15 @@ See the living log and open candidates in
   operations on the internal forge let the record be read back (ADR-0043,
   stage 1 of 3).
 
+- **Changed — a project's own run now leaves a record.** DevCake used to
+  suppress every write to a project, so the step that split a project,
+  its transcript and its reasoning went to the observability stream
+  only, and every child worked under a root whose folder held the brief
+  and an empty feed. A project run's step card, its notices and its
+  decomposition note now post as project updates, the transcript
+  uploaded and linked, through the same chokepoint issues use (ADR-0043,
+  stage 2 of 3).
+
 ## v0.6.1 (2026-09-10)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.

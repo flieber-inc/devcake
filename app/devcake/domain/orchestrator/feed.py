@@ -345,19 +345,11 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     The sentinel
     goes on the comment, never inside the attachment, so provenance
     classification keeps working. Upload failures fall back to posting
-    inline — an upload outage must never lose feed content. Projects have
-    no issue-style comments API (verified live): their run artifacts
-    live in the audit log + OpenObserve; the substance lands on the child
-    issues anyway (ADR-0006)."""
+    inline — an upload outage must never lose feed content. Project-kind
+    missions post to the vendor's project-native feed (updates) through
+    this same chokepoint (ADR-0043 §2): no threads, otherwise the same
+    policy — a project run's record lands where its mirror reads."""
     markdown = redact(markdown)
-    if kind == "project":
-        # via the MANAGER method, not _audit(mgr, ...) directly (audit D5 #1):
-        # tests override mgr._audit as an instance attribute (fakes noop_audit,
-        # the activity-repo audit collector) — the direct module call would
-        # bypass that seam, leaking to the global events.jsonl and adding a
-        # grace-cycle skip the pre-refactor code did not.
-        mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
-        return
     if externalize and len(markdown) > FEED_INLINE_MAX \
             and _attachments_supported(mgr):
         try:
@@ -378,7 +370,8 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     # the keyword reaches the adapter only when the vendor threads: a
     # flat vendor's post_feed is called exactly as before
     thread = ({"reply_to": reply_to}
-              if reply_to and _threads_supported(mgr) else {})
+              if reply_to and kind == "issue" and _threads_supported(mgr)
+              else {})
     first: str | None = None
     try:
         for part in parts:
@@ -386,7 +379,7 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
             # Every page of one post nests under the same anchor.
             body = part + "\n\n" + COMMENT_SENTINEL
             try:
-                cid = await mgr.pmo.post_feed(MissionRef(pmo_id, "issue"),
+                cid = await mgr.pmo.post_feed(MissionRef(pmo_id, kind),
                                               body, **thread)
             except PMOTransient:
                 raise            # budget / network: retried as it always was
@@ -403,7 +396,7 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
                             "level", pmo_id, e)
                 mgr._audit(pmo_id, "feed_thread_fallback", str(e)[:200])
                 thread = {}
-                cid = await mgr.pmo.post_feed(MissionRef(pmo_id, "issue"), body)
+                cid = await mgr.pmo.post_feed(MissionRef(pmo_id, kind), body)
             if first is None:
                 first = cid
     finally:
@@ -429,16 +422,13 @@ async def _edit(mgr, pmo_id: str, kind: str, entry_id: str,
     errors propagate — the callers decide the fallback (a vanished entry
     is permanent: post instead)."""
     markdown = redact(unseal(markdown))
-    if kind == "project":
-        mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
-        return
     body = markdown.rstrip() + "\n\n" + COMMENT_SENTINEL
     cap = _comment_max_chars(mgr)
     if cap is not None and len(body) > cap:
         raise ValueError(
             f"edited body exceeds the vendor cap ({len(body)} > {cap})")
     try:
-        await mgr.pmo.edit_feed(MissionRef(pmo_id, "issue"), entry_id, body)
+        await mgr.pmo.edit_feed(MissionRef(pmo_id, kind), entry_id, body)
     finally:
         feed_written(mgr, pmo_id)
 

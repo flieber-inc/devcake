@@ -548,14 +548,10 @@ async def _post_step_card(mgr, run: Run, transcript: str,
     unchanged), the harvest (marker first), the transition's PR line, the
     run id. externalize=False always — counted markers ride the comment.
     Returns the card's entry id (the step's fold anchor), None for
-    projects / vendors that return none."""
+    vendors that return none. Project runs post the same card to the
+    project-native feed (ADR-0043 §2)."""
     transcript = redact(transcript)
     name = f"{run.seq}_{run.mission_type}.md"
-    if run.pmo_kind == "project":
-        await mgr._feed(run.mission_pmo_id, "project",
-                         f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)"
-                         f"\n\n---\n\n{transcript}")
-        return None    # project updates have no comment feed (suppressed)
     lm = redact(last_message) if last_message else ""
     glyph, word, result_line, next_line = _card_copy(
         mgr, run, result, outcome, harvest_part=harvest_part,
@@ -599,7 +595,8 @@ async def _post_step_card(mgr, run: Run, transcript: str,
 
     try:
         anchor = await post_attachments_comment(
-            mgr, run.mission_pmo_id, "issue", files=files, comment_of=_comment)
+            mgr, run.mission_pmo_id, run.pmo_kind, files=files,
+            comment_of=_comment)
     except Exception as e:  # noqa: BLE001 — audited, then re-raised: a failed card is a failed close, like a failed transcript before it
         if harvest_part is not None:
             mgr._audit(run.mission_pmo_id, "discovery_post_failed", str(e)[:200])
@@ -636,14 +633,9 @@ async def _post_transcript(mgr, run: Run, transcript: str,
     `>`-blockquoted last message. last_message missing/empty ⇒ the pointer-only
     comment (old-image payloads; never derived from the transcript).
     Returns the transcript comment's entry id (the step's thread anchor),
-    None for projects / vendors that return none."""
+    None for vendors that return none."""
     transcript = redact(transcript)
     name = f"{run.seq}_{run.mission_type}.md"
-    if run.pmo_kind == "project":
-        await mgr._feed(run.mission_pmo_id, "project",
-                         f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)"
-                         f"\n\n---\n\n{transcript}")
-        return None    # project updates have no threads
     def _comment(url):
         if url is None:
             # INV-5: the transcript is always posted, even inline —
@@ -672,7 +664,7 @@ async def _post_transcript(mgr, run: Run, transcript: str,
 
     # docs/05 §4: transcripts always live as attachments, never inline —
     # via the ONE attachment+comment pipe (ADR-0033 chokepoint ruling)
-    anchor = await post_attachment_comment(mgr, run.mission_pmo_id, "issue",
+    anchor = await post_attachment_comment(mgr, run.mission_pmo_id, run.pmo_kind,
                                            filename=name, content=transcript,
                                            comment_of=_comment)
     mgr._audit(run.mission_pmo_id, "transcript", name)
@@ -709,7 +701,7 @@ async def _post_reply(mgr, run: Run, last_message: str | None,
                 + "\n\n… (truncated — full text in the step transcript "
                   "on this issue)")
     await mgr._feed(
-        run.mission_pmo_id, "issue",
+        run.mission_pmo_id, run.pmo_kind,
         f"{REPLY_MARKER}\n\n" + blockquote(body),
         externalize=False,
     )

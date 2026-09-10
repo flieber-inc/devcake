@@ -47,13 +47,14 @@ def test_edit_redacts_and_seals_exactly_once(tmp_path):
     assert e.entry_id == "c1" and e.ts == NOW and e.body == body
 
 
-def test_edit_of_a_project_entry_is_suppressed_and_audited(tmp_path):
+def test_edit_of_a_project_entry_goes_to_the_project_feed(tmp_path):
+    """ADR-0043 §2: project writes are no longer suppressed — an edit of a
+    project entry reaches the vendor's project-native feed, sealed."""
     m, mgr, fake, _ = _seeded(tmp_path)
-    audits = []
-    mgr._audit = lambda pid, action, detail="": audits.append((pid, action))
     run_coro(mgr._edit(m.pmo_id, "project", "pu1", "status"))
-    assert getattr(fake, "edits", []) == []
-    assert (m.pmo_id, "project_feed_suppressed") in audits
+    assert getattr(fake, "edits", []) == []              # not an issue edit
+    (_pid, eid, body), = fake.project_update_edits
+    assert eid == "pu1" and body.endswith(COMMENT_SENTINEL)
 
 
 def test_edit_never_externalizes_a_long_body(tmp_path):

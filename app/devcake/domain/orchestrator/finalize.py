@@ -215,9 +215,10 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
                 await restore_after_failure(mgr, run)
             log.warning("run %s failed (exit %s, attempt %d)",
                         run.run_id, exit_code, run.attempt_of_step)
-            await status_comment.refresh(mgr, pmo_id, reason="failed", run=run)
+            act = await status_comment.refresh(mgr, pmo_id, reason="failed",
+                                               run=run)
             await activity_payload_mod.record_activity(
-                mgr, pmo_id, run.pmo_kind, run.mission_key, "failed")
+                mgr, pmo_id, run.pmo_kind, run.mission_key, "failed", act=act)
             return
 
         # 2b — ADR-0033 harvest bookkeeping (label, pending set, routing
@@ -266,10 +267,11 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
                     await restore_after_failure(mgr, run)
                 log.warning("run %s failed with DEV_BAD_OUTPUT: %s",
                             run.run_id, e)
-                await status_comment.refresh(mgr, pmo_id, reason="bad_output",
-                                             run=run)
+                act = await status_comment.refresh(
+                    mgr, pmo_id, reason="bad_output", run=run)
                 await activity_payload_mod.record_activity(
-                    mgr, pmo_id, run.pmo_kind, run.mission_key, "bad_output")
+                    mgr, pmo_id, run.pmo_kind, run.mission_key, "bad_output",
+                    act=act)
                 return
             if _pre_wipe(mgr, run):
                 return
@@ -290,11 +292,12 @@ async def _finalize(mgr, run: Run, payload: dict) -> None:
         log.info("finalized %s (%s)", run.run_id, outcome)
         # ADR-0042 §5 — the LAST statement of the close: the status comment
         # says what the record now says (best-effort, never a gate)
-        await status_comment.refresh(mgr, pmo_id, reason="finalize", run=run)
+        act = await status_comment.refresh(mgr, pmo_id, reason="finalize",
+                                           run=run)
         # ADR-0043 §1 — then the record: the activity repository holds what
-        # the feed now holds (best-effort, never a gate)
+        # the feed now holds (best-effort, never a gate); the same read
         await activity_payload_mod.record_activity(
-            mgr, pmo_id, run.pmo_kind, run.mission_key, "finalize")
+            mgr, pmo_id, run.pmo_kind, run.mission_key, "finalize", act=act)
 
 
 def dev_failure_error(mgr, run: Run, payload: dict) -> str:

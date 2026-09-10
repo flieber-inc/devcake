@@ -936,6 +936,17 @@ until that run exists, field evidence below stays operator-self-reported.
   ADR-0009, CHANGELOG.
 ### Field evidence (receipted)
 
+- **Discoveries in full + the status comment's Discoveries section**
+  (2026-09-10, ADR-0042 addendum): the steward's leads notice lost its
+  inline ceiling — `Record` carries every finding in full (`render_entry_lines
+  (full=True)`), head quotes excerpts, `_feed(externalize=False)` pages on
+  capped vendors; the card's outgoing section unchanged (golden folder
+  byte-identical). `discovery.digest_lines(entries)` builds the status
+  comment's `Discoveries` section (no markers, no file tokens, budgeted);
+  `status_comment.refresh` reads the feed once (full) and returns the
+  `Activity`, which the ADR-0043 `record_activity(act=)` reuses at all 8
+  boundaries; the steward refreshes the recipient after a delivery;
+  `stalls._status` renders with entries too.
 - **Stalled dispatches surfaced** (2026-09-10, ADR-0042 addendum): a
   decomposition child sat 8 days because its archived original made the
   ancestor walk gap and strict sourcing deferred every cycle — visible in

@@ -612,30 +612,38 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
             head = [f"`devcake:discovery-in:v1 src={skey} step={step}`",
                     f"🔎 [{skey} · step {step} · {utcnow():%Y-%m-%d}] — "
                     f"leads, not truths: verify against the source before "
-                    f"relying. Full record: `DISCOVERY_{step}.md` on "
+                    f"relying. Source record: `DISCOVERY_{step}.md` on "
                     f"{skey}.",
                     *(f"`devcake:finding:v1 sha="
                       f"{finding_fingerprint(x['entry'])}`" for x in fresh)]
+            # the Record carries every finding IN FULL (finding, evidence,
+            # scope) — the recipient's Dev reads it from its own folder and
+            # never sees the source mission's file; the head quotes an
+            # excerpt of each for the reader
             body_lines: list[str] = []
+            excerpts: list[str] = []
             for x in fresh:
-                body_lines += render_entry_lines(
+                body_lines += render_entry_lines([x["entry"]], full=True)
+                excerpts += render_entry_lines(
                     [x["entry"]], cap=DISCOVERY_IN_EXCERPT_MAX)
                 if x["because"]:
-                    body_lines.append(f"*— steward: {defang(x['because'])}*")
-            parts.append((skey, step, head, body_lines, fresh))
+                    note = f"*— steward: {defang(x['because'])}*"
+                    body_lines.append(note)
+                    excerpts.append(note)
+            parts.append((skey, step, head, body_lines, fresh, excerpts))
             landed.extend(fresh)
         if not parts:
             continue
-        body = _leads_notice(mgr, parts, findings=True)
-        if len(body) > FEED_INLINE_MAX:
-            # marker + provenance must stay inline — re-render from the
-            # parts with the findings dropped from head and record alike;
-            # the marker, pointer and fingerprint lines stay (never
-            # externalize a counted marker)
-            body = _leads_notice(mgr, parts, findings=False)
+        # never externalized (a counted marker stays in the feed body); a
+        # vendor with a comment cap pages it, markers on part 1
+        body = _leads_notice(mgr, parts)
         try:
             await mgr._feed(tgt_id, "issue", body, externalize=False)
             delivered += len(landed)
+            # the recipient's status comment gathers what it was handed
+            # (ADR-0042 §5 addendum) — best-effort, never gates the delivery
+            from . import status_comment
+            await status_comment.refresh(mgr, tgt_id, reason="leads_delivered")
         except Exception as ex:  # noqa: BLE001 — nothing landed; hold the
             # batch so phase 3 cannot stamp to=- (the sweep re-drives)
             for x in landed:
@@ -707,39 +715,34 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     return delivered, rejected
 
 
-def _leads_notice(mgr, parts, *, findings: bool) -> str:
+def _leads_notice(mgr, parts) -> str:
     """The delivery as a notice (ADR-0042 §6): `📨 Leads from KEY, step N.`
-    with the findings quoted in the head, and the Record the delivery
-    comment as it was — one `---`-separated section per (source, step):
-    the elevated pair marker, the pointer line, the fingerprints, then the
-    finding blocks. `findings=False` is the inline-ceiling fallback: the
-    finding blocks are dropped from head and record alike while every
-    marker line stays, so the elevated marker, the pair dedup and the
-    content dedup all survive a truncated delivery."""
+    with an excerpt of each finding quoted in the head, and the Record —
+    one `---`-separated section per (source, step): the elevated pair
+    marker, the provenance line, the fingerprints, then every finding IN
+    FULL (finding, evidence, scope). There is no inline ceiling: the
+    notice is never externalized (a counted marker stays in the feed
+    body) and a capped vendor pages it, so a long delivery loses nothing
+    — the recipient's Dev reads the findings from its own ACTIVITY.md."""
     record = "\n\n---\n\n".join(
-        "\n\n".join(head + (body_lines if findings else []))
-        for _skey, _step, head, body_lines, _fresh in parts)
+        "\n\n".join(head + body_lines)
+        for _skey, _step, head, body_lines, _fresh, _ex in parts)
     skey, step = parts[0][0], parts[0][1]
-    others = [f"{s} step {n}" for s, n, _h, _b, _f in parts[1:]]
-    n_leads = sum(len(fresh) for _s, _n, _h, _b, fresh in parts)
+    others = [f"{s} step {n}" for s, n, _h, _b, _f, _e in parts[1:]]
+    n_leads = sum(len(fresh) for _s, _n, _h, _b, fresh, _e in parts)
     what = (f"{n_leads} lead{'' if n_leads == 1 else 's'}"
             + (f", also from {', '.join(others)}" if others else "")
             + " — leads, not truths: verify against the source before "
-            "relying on them; the full record is the DISCOVERY file on the "
-            "source mission.")
-    if not findings:
-        what += (" The findings were over the inline budget and are not "
-                 "repeated here.")
+            "relying on them. The findings are in full in the record below.")
     quoted: list[str] = []
-    if findings:
-        for _s, _n, _head, body_lines, _fresh in parts:
-            for block in body_lines:
-                if block.startswith("**"):
-                    continue                    # the numbering line
-                if block.startswith("*— steward:"):
-                    quoted.append(feed.blockquote(block.strip("*")))
-                    continue
-                quoted.append(block)            # already `>`-quoted
+    for _s, _n, _head, _body, _fresh, excerpts in parts:
+        for block in excerpts:
+            if block.startswith("**"):
+                continue                        # the numbering line
+            if block.startswith("*— steward:"):
+                quoted.append(feed.blockquote(block.strip("*")))
+                continue
+            quoted.append(block)                # already `>`-quoted
     head_text = what + ("\n\n" + "\n\n".join(quoted) if quoted else "")
     return feed.notice(mgr, feed.leads_lead(skey, step), head_text, record)
 

@@ -25,8 +25,8 @@ from ..model import (LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                      LABEL_NEEDS_HUMAN, LABEL_PLAN, LABEL_REVIEW, LABEL_SKIP,
                      Mission, MissionRef)
 from ..run import Run, aware, utcnow
-from .feed import (SECTION_RECORD, FoldSection, collapsible_of, format_duration,
-                   render_fold)
+from .feed import (SECTION_DISCOVERIES, SECTION_RECORD, FoldSection,
+                   collapsible_of, format_duration, render_fold)
 from .markers import STATUS_MARKER, decomposition_parent_ref
 
 log = logging.getLogger("devcake.missions")
@@ -117,7 +117,8 @@ def _now_line(mission: Mission, runs: list[Run], pr_url: str,
 
 
 def render(mgr, mission: Mission, runs: list[Run], *, pr_url: str | None,
-           collapsible: str, waiting: str | None = None) -> str:
+           collapsible: str, waiting: str | None = None,
+           entries=None) -> str:
     """The comment body (sentinel-free; the chokepoints seal it). Pure —
     everything comes from the record. Never a file token, never a
     `Part i of n` line, no marker but the status marker (each pinned)."""
@@ -154,10 +155,19 @@ def render(mgr, mission: Mission, runs: list[Run], *, pr_url: str | None,
             c = run_cost(mgr, r)
             lines.append(f"| {seq} · {r.mission_type} | {glyph} {word}{attempt} "
                          f"| {dur} | {'$%.2f' % c if c is not None else '—'} |")
-    record = FoldSection(SECTION_RECORD, (
+    sections = []
+    if entries:
+        # ADR-0042 §5 addendum — one place for what this mission discovered
+        # and was handed (a view over the record: no marker, no scan)
+        from .discovery import digest_lines
+        digest = digest_lines(entries)
+        if digest:
+            sections.append(FoldSection(SECTION_DISCOVERIES, "\n\n".join(digest)))
+    sections.append(FoldSection(SECTION_RECORD, (
         f"{STATUS_MARKER}\nupdated {utcnow():%Y-%m-%d %H:%M} UTC · instance "
-        f"{getattr(mgr, 'instance_name', '')}"))
-    lines += ["", render_fold([record], collapsible=collapsible, summary="Record")]
+        f"{getattr(mgr, 'instance_name', '')}")))
+    summary = "Discoveries · record" if len(sections) > 1 else "Record"
+    lines += ["", render_fold(sections, collapsible=collapsible, summary=summary)]
     return "\n".join(lines)
 
 
@@ -222,11 +232,14 @@ def _known_entry(mgr, pmo_id: str, run: Run | None) -> str:
 
 async def refresh(mgr, pmo_id: str, *, reason: str, run: Run | None = None,
                   mission: Mission | None = None,
-                  pr_url: str | None = None) -> None:
-    """Rebuild the body from the record and edit it in place. At most ONE
-    cheap `pmo.get` when the caller has no fresh mission. Catches
-    everything: a refused budget, a transient, a vanished entry (the
-    cached id is dropped so the next dispatch re-creates it)."""
+                  pr_url: str | None = None, act=None):
+    """Rebuild the body from the record and edit it in place. ONE full
+    feed read (the Discoveries section is a view over the feed) unless the
+    caller hands over the Activity it already read (`act`); the read is
+    returned so the boundary's record push (ADR-0043) reuses it — one read
+    per boundary. Catches everything: a refused budget, a transient, a
+    vanished entry (the cached id is dropped so the next dispatch
+    re-creates it). Returns the Activity read, None when nothing was."""
     entry_id = _known_entry(mgr, pmo_id, run)
     if not entry_id:
         seen = getattr(mgr, "_status_unknown", None)
@@ -239,15 +252,18 @@ async def refresh(mgr, pmo_id: str, *, reason: str, run: Run | None = None,
         if pmo_id not in seen:
             seen.add(pmo_id)
             mgr._audit(pmo_id, "status_comment_unknown", reason)
-        return
+        return act
     try:
+        if act is None:
+            act = await mgr.pmo.get_activity(MissionRef(pmo_id, "issue"),
+                                             full=True)
         if mission is None:
-            mission = await mgr.pmo.get(MissionRef(pmo_id, "issue"))
+            mission = act.mission
         runs = runs_of(mgr, pmo_id)
         if run is not None and all(r.run_id != run.run_id for r in runs):
             runs.append(run)
         body = render(mgr, mission, runs, pr_url=pr_url,
-                      collapsible=collapsible_of(mgr))
+                      collapsible=collapsible_of(mgr), entries=act.entries)
         await mgr._edit(pmo_id, "issue", entry_id, body)
         _cache(mgr)[pmo_id] = entry_id
     except PMOTransient as e:
@@ -262,3 +278,4 @@ async def refresh(mgr, pmo_id: str, *, reason: str, run: Run | None = None,
             except Exception:  # noqa: BLE001 — best-effort bookkeeping
                 log.debug("status entry reset not saved for %s", run.run_id,
                           exc_info=True)
+    return act

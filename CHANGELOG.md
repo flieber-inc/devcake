@@ -13,6 +13,21 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Fixed — routed discoveries reach the mission they were sent to, in
+  full.** A leads delivery carried excerpts, and a long one carried
+  nothing but a pointer to a file on the source mission that the
+  recipient's Dev never receives. The delivery's record now carries every
+  finding in full, with no inline ceiling; the head quotes an excerpt of
+  each. The recipient's Dev reads them from its own activity folder.
+
+- **Added — one place to read a mission's discoveries.** The status
+  comment's fold gains a Discoveries section: what the mission reported,
+  with the record-file link, and every lead it received, in full. It is a
+  view over the feed with no marker, no file token and no provenance line,
+  so nothing that scans the feed counts it, the freshness check ignores
+  it, and no Dev sees it. The status refresh now reads the feed once and
+  the record push at the same boundary reuses that read.
+
 ## v0.6.3 (2026-09-10)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.

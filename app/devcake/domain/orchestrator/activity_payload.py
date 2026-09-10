@@ -424,7 +424,7 @@ RECORD_KEEP_PREFIXES = ("upstream/",)
 
 
 async def record_activity(mgr, pmo_id: str, kind: str, mission_key: str,
-                          reason: str) -> None:
+                          reason: str, act=None) -> None:
     """ADR-0043 §1: the activity repository is the record of the mission's
     run. Called at every run boundary (step close, completion, hand-off,
     PR closed unmerged, conflict routed) after the feed writes of that
@@ -437,7 +437,7 @@ async def record_activity(mgr, pmo_id: str, kind: str, mission_key: str,
         return
     try:
         payload = await activity_payload(mgr, pmo_id, kind,
-                                         include_upstream=False)
+                                         include_upstream=False, act=act)
         name = await mgr.internal_forge.ensure_activity_repo(
             mgr.instance_name, mission_key)
         await mgr.internal_forge.push_activity_snapshot(
@@ -495,7 +495,8 @@ def _discovery_lines(entries) -> list[str]:
             ts = getattr(e, "ts", None)
             date = f" · {ts:%Y-%m-%d}" if ts else ""
             out.append(f"{len(out) + 1}. [{src} · step {step}{date}] — the "
-                       f"routed delivery is in ACTIVITY.md; full record: "
+                       f"findings, in full, are in ACTIVITY.md under "
+                       f"\"Leads from {src}, step {step}\"; source record: "
                        f"`DISCOVERY_{step}.md` on {src}.")
     return out
 
@@ -511,7 +512,8 @@ def _doc_filename(title: str) -> str:
 
 async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
                            blocker_notes: list[dict] | None = None,
-                           *, include_upstream: bool = True) -> dict:
+                           *, include_upstream: bool = True,
+                           act=None) -> dict:
     """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
     of the feed — full bodies inline (never externalized), attachments by
     name in feed order, reply nesting; every attachment's bytes ride as
@@ -528,7 +530,8 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     under the attachment byte cap). Gaps land in `upstream_gaps` and as
     honest banners — never silent. Nested rebuilds pass
     `include_upstream=False` to avoid recursion."""
-    act = await mgr.pmo.get_activity(MissionRef(pmo_id, kind), full=True)
+    if act is None:
+        act = await mgr.pmo.get_activity(MissionRef(pmo_id, kind), full=True)
     m = act.mission
     attachments = []
     used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed

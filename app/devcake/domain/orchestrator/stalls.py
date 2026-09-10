@@ -352,13 +352,12 @@ async def _status(mgr, m: Mission, waiting: str | None) -> None:
     """Create the status comment when none exists (one full read to find
     an existing one), else edit it in place with the waiting line."""
     runs = status_comment.runs_of(mgr, m.pmo_id)
-    entry = status_comment._known_entry(mgr, m.pmo_id, None)
-    if not entry:
-        act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
-        entry = feed.find_status_entry(act.entries) or ""
+    act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
+    entry = (status_comment._known_entry(mgr, m.pmo_id, None)
+             or feed.find_status_entry(act.entries) or "")
     body = status_comment.render(mgr, m, runs, pr_url=None,
                                  collapsible=feed.collapsible_of(mgr),
-                                 waiting=waiting)
+                                 waiting=waiting, entries=act.entries)
     if entry:
         await mgr._edit(m.pmo_id, "issue", entry, body)
     else:

@@ -317,3 +317,43 @@ shown on the panel but never written to (its feed is its children's
 context). The ledger persists under `/data/state/stalls.json` so a restart
 keeps the clocks.
 
+## Addendum — discoveries in full, and one place to read them (2026-09-10)
+
+**Context.** A routed discovery delivery (`📨 Leads from KEY, step N`)
+carried its findings as 700-character excerpts, and when the whole notice
+passed the 2 KB inline ceiling it was re-rendered with the findings dropped
+altogether and a pointer to the source mission's `DISCOVERY_N.md` — a file
+the recipient's Dev never receives. The findings were lost exactly where
+they were meant to land. And a reader had to open every card and every
+delivery to know what a mission discovered and was handed.
+
+**Decision.**
+
+- **The delivery's `Record` carries every finding in full** — finding,
+  evidence, scope — however long; the head quotes an excerpt of each. There
+  is no inline ceiling any more: a delivery is never externalized (its
+  counted markers stay in the feed body) and a vendor with a comment cap
+  pages it, markers on the first page. The recipient's Dev reads the
+  findings from its own ACTIVITY.md; MISSION.md's leads list points there.
+  The card's own `Discoveries` section is unchanged (excerpts + the record
+  file): the mission's Dev already holds `DISCOVERY_N.md`, and the golden
+  projection stays byte-identical.
+- **The status comment gains a `Discoveries` section** in its fold: what
+  the mission reported (per step: count, the record-file link, the card's
+  excerpts) and every lead it received (per source and step: the findings
+  in full as the delivery carried them). It is a **view over the feed** —
+  `discovery.digest_lines` — and keeps every §5 invariant: no backticked
+  marker, no step-file token, no provenance line, sentinel-signed, dropped
+  by the projection, so no scan counts it, the Freshness Gate ignores it,
+  and no Dev sees it. Over a byte budget the oldest deliveries drop first
+  and the section says so; the record above always has them.
+- **One feed read per boundary.** The refresh reads the feed once (full)
+  to build the section — the ADR-0043 record push at the same boundary
+  reuses that read — and a delivery refreshes the recipient's status
+  comment so the section is current the moment the leads land.
+
+**Consequences.** Nothing a Dev receives changes except that a recipient
+now receives the findings it was promised. One full read replaces the
+status refresh's cheap read at each boundary (the record push already paid
+it). Linear has no comment cap; a capped vendor pages long deliveries.
+

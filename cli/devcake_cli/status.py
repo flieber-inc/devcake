@@ -115,7 +115,7 @@ def harness_lines(health: dict | None) -> list[str]:
             compose = nested.get("compose_ok")
             extra = ("" if compose is None else
                      ", compose too" if compose else
-                     "; docker compose is NOT (see the probe log)")
+                     "; docker compose is not working (see the probe log)")
             out.append(f"  nested engine: ok — Devs can run containers{extra}{tail}")
         else:
             why = str(nested.get("first_red") or "see the probe receipt")

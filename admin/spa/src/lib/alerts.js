@@ -373,8 +373,8 @@ export default function deriveAlerts(health) {
       title: "docker compose does not work inside Dev containers",
       body:
         "Containers run, but the compose step of the nested-engine probe failed — " +
-        "see the newest probe log under .factory/nested_probe/ on the host. Devs " +
-        "are told their engine works; expect compose-based verification to fail.",
+        "see the newest probe log under .factory/nested_probe/ on the host. Each " +
+        "Dev's prompt says compose is not working here; runs still launch.",
     });
   }
   if (nested && typeof nested === "object" && nested.rig_ok === false) {
@@ -386,8 +386,10 @@ export default function deriveAlerts(health) {
         (nested.first_red ? `${String(nested.first_red)}. ` : "") +
         "Runs still launch and each Dev is told the nested engine is " +
         "unavailable. On an AppArmor host, load the devcake-nested profile " +
-        "(devcake doctor prints the two commands), then devcake up; the next " +
-        "bake re-measures (docs/13).",
+        "(devcake doctor prints the two commands), then devcake up — the " +
+        "receipt is re-measured within a tick. On other hosts, run " +
+        "scripts/harness_probe/nested_probe.sh by hand and read its log " +
+        "(docs/13).",
     });
   }
 

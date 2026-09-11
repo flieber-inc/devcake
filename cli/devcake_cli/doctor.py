@@ -642,15 +642,18 @@ def _daemon_has_apparmor(runner, docker: str | None) -> bool | None:
     if proc.returncode != 0:
         return None
     try:
-        opts = json.loads((proc.stdout or "").strip() or "[]")
+        opts = json.loads((proc.stdout or "").strip() or "null")
     except json.JSONDecodeError:
         return None
-    return any(str(o).startswith("name=apparmor") for o in (opts or []))
+    if not isinstance(opts, list):
+        return None                      # a daemon that answers null: unknown
+    return any(str(o).startswith("name=apparmor") for o in opts)
 
 
 def _probe_image(runner, docker: str) -> str | None:
     """A local image to start a throwaway container from — hello (this
-    stack's own), else the pinned redis, else any tagged image."""
+    stack's own) or the pinned redis; never an arbitrary local image (its
+    /bin/true is its own code)."""
     try:
         proc = runner([docker, "images", "--format", "{{.Repository}}:{{.Tag}}"],
                       capture_output=True, text=True, timeout=30)
@@ -664,7 +667,7 @@ def _probe_image(runner, docker: str) -> str | None:
         for r in refs:
             if r.startswith(pref):
                 return r
-    return refs[0] if refs else None
+    return None
 
 
 def _profile_applies(runner, docker: str, image: str) -> bool | None:
@@ -672,6 +675,9 @@ def _profile_applies(runner, docker: str, image: str) -> bool | None:
     (True) or fails to apply it (False). Anything else: unknown."""
     try:
         proc = runner([docker, "run", "--rm", "--network", "none",
+                       "--user", "65534:65534", "--cap-drop", "ALL",
+                       "--security-opt", "no-new-privileges",
+                       "--pids-limit", "8", "--memory", "32m", "--read-only",
                        "--security-opt", f"apparmor={APPARMOR_PROFILE_NAME}",
                        "--entrypoint", "/bin/true", image],
                       capture_output=True, text=True, timeout=90)
@@ -743,15 +749,37 @@ def apparmor_install_commands(repo_root: Path | None) -> str:
 
 
 def _env_apparmor_value(repo_root: Path | None) -> str:
+    """The value as compose reads it: last assignment, `export ` and quotes
+    stripped, an unquoted trailing ` # comment` dropped — the same shape the
+    baker's reader applies (scripts/harness_probe/env_value.py)."""
     if repo_root is None:
         return ""
     env_path = repo_root / ".env"
     if not env_path.is_file():
         return ""
+    value = ""
     try:
-        return (envfile.parse_env_file(env_path).get("DEVCAKE_APPARMOR_PROFILE") or "").strip()
+        lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return ""
+    for raw in lines:
+        line = raw.strip().lstrip("\ufeff")
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() != "DEVCAKE_APPARMOR_PROFILE":
+            continue
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        else:
+            v = v.split(" #", 1)[0].rstrip()
+        value = v
+    return value
 
 
 def check_apparmor_profile(
@@ -773,14 +801,15 @@ def check_apparmor_profile(
                    "containers relies on the seccomp profile alone")
     cmds = apparmor_install_commands(repo_root)
     if not f.usable:
-        if f.applies is False:
-            why = ("the daemon cannot apply it (installed under /etc/apparmor.d/ "
-                   "but not loaded by the kernel — an older apparmor_parser "
-                   "rejects the profile's userns rule; check `apparmor_parser "
-                   "--version`, 4.0 or newer is needed)")
-        elif f.compiles is False:
+        if f.compiles is False:
             why = ("this host's apparmor_parser rejects the profile (4.0 or newer "
-                   "is needed for the userns rule)")
+                   "is needed for the userns rule; check `apparmor_parser --version`)")
+        elif f.applies is False and f.installed:
+            why = ("the daemon cannot apply it — the file is installed but the "
+                   "kernel has no such profile (unloaded, or never loaded); the "
+                   "second command below loads it")
+        elif f.applies is False:
+            why = "the daemon cannot apply it — the kernel has no such profile"
         else:
             why = "it is not loaded"
         need = ("" if f.parser else

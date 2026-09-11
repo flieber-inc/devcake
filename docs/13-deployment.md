@@ -23,8 +23,8 @@ engine inside a Dev cannot even set up its storage. The checkout ships a
 profile that keeps Docker's default denials and adds the user-namespace
 and mount rules the rootless engine needs inside the namespaces it creates
 (`scripts/apparmor/devcake-nested`, doctrine in ADR-0023). Loading it is
-the one root step of a deployment, printed by `devcake doctor` and never
-run by the CLI:
+the one root step this feature adds to a deployment, printed by
+`devcake doctor` and never run by the CLI:
 
 ```bash
 sudo install -m 0644 scripts/apparmor/devcake-nested /etc/apparmor.d/ \
@@ -36,7 +36,10 @@ Then `devcake up` (again, on an existing host): it derives
 is loaded, `docker-default` otherwise, with the two commands printed as a
 warning — and compose hands the name to the dev-run DAG, which names it on
 both Dev steps. The value is a snapshot taken at `devcake up` time. A file
-under `/etc/apparmor.d/` is reloaded at boot, so the step survives reboots;
+under `/etc/apparmor.d/` is loaded at boot by the AppArmor service, which
+stock Ubuntu cloud images enable (checked on the reference host; a reboot
+itself was not exercised — `devcake doctor` after the first reboot is the
+proof);
 `devcake doctor` reports `apparmor_profile` — ok, not loaded (with the
 commands), or **outdated** when a later release changed the shipped profile
 (re-run the same two commands). Naming a profile the kernel does not have
@@ -45,17 +48,23 @@ profile … no such file or directory`; the app's watchdog then reports each
 run as dead before it started (about 90 seconds each) and the daemon's
 message stays in the Dagu run log, not on the mission — so `devcake up`
 and `devcake doctor` ask the daemon before trusting a file: they start a
-throwaway container that names the profile (a local image, no network)
-and only write `devcake-nested` when the daemon accepted it; where no
-image exists yet they fall back to the installed file compiled by the
-host's own parser (the `userns` rule needs AppArmor 4.0 or newer — Ubuntu
+throwaway container that names the profile (this stack's hello image or
+the pinned redis, no network, no capabilities, as an unprivileged user)
+and only write `devcake-nested` when the daemon accepted it; where neither
+image exists yet (a virgin host before its first bake) they fall back to
+the installed file compiled by the host's own parser (the `userns` rule needs AppArmor 4.0 or newer — Ubuntu
 24.04 and Debian 13 ship it, Ubuntu 22.04 and Debian 12 do not, and there
 the install succeeds while the load fails). A profile removed by hand
-after `up` still produces the failure: run `devcake up` again, and
-`devcake doctor` says when `.env` names a profile the host cannot apply. Hosts without AppArmor (WSL2, Docker Desktop, most
+after `up` still produces the failure — and the baker notices within a
+minute: it asks the daemon the same question on every publication and
+flips the receipt red ("the Docker host no longer applies the AppArmor
+profile the stack names"), so the Overview, `devcake status` and the Dev's
+prompt say so; run `devcake up` again, and `devcake doctor` says when
+`.env` names a profile the host cannot apply. Hosts without AppArmor (WSL2, Docker Desktop, most
 Fedora/Arch installs) need nothing: Docker drops a named profile there,
-`doctor` says "no AppArmor on this host", and the nested engine relies on
-the seccomp profile alone. Remove the profile with
+`doctor` says "no AppArmor on the Docker host" (the daemon's host is what
+counts: Docker Desktop's VM has none whatever the machine runs), and the
+nested engine relies on the seccomp profile alone. Remove the profile with
 `sudo apparmor_parser -R /etc/apparmor.d/devcake-nested && sudo rm
 /etc/apparmor.d/devcake-nested`, then `devcake up` (§8).
 
@@ -73,9 +82,12 @@ dispatched Dev's prompt carries one line saying containers are unavailable
 here — so a Dev verifies with local services instead of burning turns on
 the engine. Fix the host (load the profile, `devcake up`): the baker
 re-measures within a tick, because the receipt no longer matches the
-profile the stack runs; a red receipt under an unchanged contract waits
-for the next harness bake, or for the script run by hand — every receipt,
-hand-run included, is read on every tick. The first receipt on a fresh or
+profile the stack runs — the same happens after a kernel or Docker engine
+upgrade, which the receipt records; a red receipt under an unchanged
+contract waits for the next harness bake, or for the script run by hand —
+every receipt, hand-run included, is read on every tick. The probe needs
+`python3` on the operator host (stock macOS: the Xcode command-line tools
+provide it). The first receipt on a fresh or
 upgraded host arrives after the first harness bake, so a Dev dispatched
 during that bake's probe (a few minutes at most) gets no engine verdict in
 its prompt. A red run names the first failing step (uid_map →
@@ -253,7 +265,7 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 
 ## 4. Dagu configuration
 
-- **Version pinned** (`devcake up --release` archives the Dagu state volume under `.factory/backups/` before a re-pinned Dagu first starts — a backup, not a migration; Dagu migrates its own store — and prints the archive command when it cannot; the live drill on each bump also records `docker inspect` of `MaskedPaths`/`ReadonlyPaths` empty on a Dev container; `2.13.0` since the 2026-08-13 ops bump; `2.11.3` since ADR-0024; originally verified live against v2.10.5 end-to-end at M1. The 2.11.3 bump re-measured the volume probes and audited the release notes: the v2.11.0 CORS hardening does not apply — DevCake calls the API server-side and the SPA only LINKS to Dagu's own same-origin UI — and the v2.10.6 token-TTL cap is moot under basic auth. The 2.13.0 bump audited the 2.12/2.13 release notes — no REST-API or container-schema changes (UI, webhook, documents, build-workflow features) — and was **live-drilled 2026-08-13**: healthcheck + init hook green, `dev-run.yaml` loads unchanged, executor REST start/status/stop verified (stop kills the container), hello battery green twice, and the ADR-0024 guarantees re-measured (provision `/mirrors=RW:false` — `:ro` kernel-enforced; dev step workspace-only; `${params.*}` interpolation in volume sources works). **One real break found and fixed:** the 2.12 wiki/documents store defaults to `<dags_dir>/wiki` and crash-loops the server against our deliberately-RO dags bind — no disable knob exists, so compose sets `DAGU_WIKI_DIR=/var/lib/dagu/wiki` (the writable state volume; the feature stays unused). Back up `dagu_data` before upgrading (a state-format migration could make rollback to 2.11.3 lossy — acceptable, dagu history is advisory, the board is truth. The step `container:` schema still has no HostConfig fields at 2.13.0, and the docker-executor form's `host:` block passes Docker SDK HostConfig fields **with a measured trap**: only strings and string-arrays decode at the top level — the cgroup numerics (`Memory`/`NanoCpus`/`PidsLimit`) and struct-arrays (`Devices`) live in HostConfig's EMBEDDED `Resources` struct, which the 2.13.0 decoder SILENTLY DROPPED unless they rode a nested `resources:` key (missing mapstructure `Squash` — dagucloud/dagu#2557, our upstream fix, shipped in 2.14.0). That nested form DELIVERED the per-container limits 2026-08-13 (dev-run.yaml migrated onto the docker.run action form; `AppConfig.container_limits` rides as per-start params) — never quote the first half of this sentence without the trap. **Host block decode at 2.16.3:** since 2.14.0 (dagucloud/dagu#2557, our upstream fix) Dagu decodes the `host:` map twice — nested `resources:` first, then squashed — so the flat form (Docker's own HostConfig JSON shape) lands and wins on conflict; the DAG uses the flat form only. The 2.16.3 bump was **live-drilled**: `dagu_data` backed up first (three persistence refactors landed in 2.14–2.16), healthcheck + init hook green (the stock entrypoint now creates the docker group itself with `groupadd -o`; our hook is idempotent with it), `dev-run.yaml` loads, executor REST start/status/stop verified, `docker inspect` of a run container shows `Memory`/`NanoCpus`/`PidsLimit` and both devices, the exit handler still fires on a REST stop (2.15.0 stops a step's containers on timeout, #2566 — the intended semantics), `DAGU_WIKI_DIR` still honored. `scripts/check_image_pins.py` trips on any tag change until the drill is recorded and `DAGU_COUPLED_TAG` is bumped. **Back up `dagu_data` before every Dagu bump**. Also measured at 2.13.0: `docker.run`'s documented `env:` key is silently dropped — env rides the SDK `container: {Env: [K=V…]}` list). Controller/LLM/human-task DAG features stay deliberately NOT adopted: all business logic stays in the app, the DAG remains a dumb launcher. The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
+- **Version pinned at `2.16.3`** (the live drill on each bump records `docker inspect` of Memory/NanoCpus/PidsLimit, both devices, `MaskedPaths`/`ReadonlyPaths` empty and `AppArmorProfile` naming what `.env` says, on a Dev container launched by Dagu. `devcake up` archives the Dagu state volume under `.factory/backups/` before a Dagu the volume was not last used with starts — on any `up`, stack running or stopped, dagu stopped first for a quiet copy; a backup, not a migration: Dagu migrates its own store, nothing reads the archive back; 0600, the newest three kept; the archive command is printed when it cannot be taken. `2.13.0` since the 2026-08-13 ops bump; `2.11.3` since ADR-0024; originally verified live against v2.10.5 end-to-end at M1. The 2.11.3 bump re-measured the volume probes and audited the release notes: the v2.11.0 CORS hardening does not apply — DevCake calls the API server-side and the SPA only LINKS to Dagu's own same-origin UI — and the v2.10.6 token-TTL cap is moot under basic auth. The 2.13.0 bump audited the 2.12/2.13 release notes — no REST-API or container-schema changes (UI, webhook, documents, build-workflow features) — and was **live-drilled 2026-08-13**: healthcheck + init hook green, `dev-run.yaml` loads unchanged, executor REST start/status/stop verified (stop kills the container), hello battery green twice, and the ADR-0024 guarantees re-measured (provision `/mirrors=RW:false` — `:ro` kernel-enforced; dev step workspace-only; `${params.*}` interpolation in volume sources works). **One real break found and fixed:** the 2.12 wiki/documents store defaults to `<dags_dir>/wiki` and crash-loops the server against our deliberately-RO dags bind — no disable knob exists, so compose sets `DAGU_WIKI_DIR=/var/lib/dagu/wiki` (the writable state volume; the feature stays unused). Back up `dagu_data` before upgrading (a state-format migration could make rollback to 2.11.3 lossy — acceptable, dagu history is advisory, the board is truth. The step `container:` schema still has no HostConfig fields at 2.13.0, and the docker-executor form's `host:` block passes Docker SDK HostConfig fields **with a measured trap**: only strings and string-arrays decode at the top level — the cgroup numerics (`Memory`/`NanoCpus`/`PidsLimit`) and struct-arrays (`Devices`) live in HostConfig's EMBEDDED `Resources` struct, which the 2.13.0 decoder SILENTLY DROPPED unless they rode a nested `resources:` key (missing mapstructure `Squash` — dagucloud/dagu#2557, our upstream fix, shipped in 2.14.0). That nested form DELIVERED the per-container limits 2026-08-13 (dev-run.yaml migrated onto the docker.run action form; `AppConfig.container_limits` rides as per-start params) — never quote the first half of this sentence without the trap. **Host block decode at 2.16.3:** since 2.14.0 (dagucloud/dagu#2557, our upstream fix) Dagu decodes the `host:` map twice — nested `resources:` first, then squashed — so the flat form (Docker's own HostConfig JSON shape) lands and wins on conflict; the DAG uses the flat form only. The 2.16.3 bump was **live-drilled**: `dagu_data` backed up first (three persistence refactors landed in 2.14–2.16), healthcheck + init hook green (the stock entrypoint now creates the docker group itself with `groupadd -o`; our hook is idempotent with it), `dev-run.yaml` loads, executor REST start/status/stop verified, `docker inspect` of a run container shows `Memory`/`NanoCpus`/`PidsLimit` and both devices, the exit handler still fires on a REST stop (2.15.0 stops a step's containers on timeout, #2566 — the intended semantics), `DAGU_WIKI_DIR` still honored. `scripts/check_image_pins.py` trips on any tag change until the drill is recorded and `DAGU_COUPLED_TAG` is bumped. **Back up `dagu_data` before every Dagu bump**. Also measured at 2.13.0: `docker.run`'s documented `env:` key is silently dropped — env rides the SDK `container: {Env: [K=V…]}` list). Controller/LLM/human-task DAG features stay deliberately NOT adopted: all business logic stays in the app, the DAG remains a dumb launcher. The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
 - **Auth (verified at M1):** v2.10.5 locks the API by default (401). We run `DAGU_AUTH_MODE=basic` with `DAGU_AUTH_BASIC_USERNAME/PASSWORD` (env names confirmed from the source's config loader); the app sends HTTP Basic on every call; `/api/v1/health` stays open for the compose healthcheck.
 - **docker.sock access (verified at M1):** the image's entrypoint always drops to uid 1000 via sudo. Its `DOCKER_GID` group setup was broken on the ubuntu base until 2.14.0 (alpine-only `addgroup`; fixed upstream by dagucloud/dagu#2565 with a portable `groupadd -o`). Our `dagu/init/10-docker-group.sh` (mounted at `/etc/custom-init.d/`) still creates the docker group first — idempotent with the fixed entrypoint, a belt on older images — so the daemon runs as `dagu:docker` — least privilege, no root daemon. Stock `/entrypoint.sh` only runs custom-init scripts that are `+x`, and the bind is `:ro`, so a non-executable host file is a silent skip → `sudo: unknown group #$DOCKER_GID` crash-loop. Compose therefore wraps the entrypoint and always invokes hooks via `sh` before handing off (does not depend on the host execute bit; git still tracks the script as `100755`).
 - **Step ids are `^[a-zA-Z][a-zA-Z0-9_]*$`** (verified) — underscores, not dashes: the DAG's steps are `provision` and `run_dev` (ADR-0025).
@@ -427,8 +439,10 @@ derives `docker-default` again and the next bake's receipt records the
 engine as unavailable. Rolling Dagu back = the previous release checkout
 (`devcake up --release <tag>`) plus the `dagu_data` archive `up --release`
 wrote under `.factory/backups/` before the re-pinned Dagu first started
-(§4); restore it into the volume with the shipped restore helper's
-`tar` step before bringing the old Dagu up.
+(§4); the archive is a plain `tar` of the volume, so restore it by hand
+before bringing the old Dagu up — with the stack down:
+`docker run --rm --mount type=volume,src=<project>_dagu_data,dst=/to --mount type=bind,src=$PWD/.factory/backups,dst=/from,readonly <the pinned backup helper image> sh -c 'rm -rf /to/* && tar xzf /from/dagu_data-<stamp>.tgz -C /to'`.
+The archive holds run params and step output in clear (`14` §9).
 
 **Restore proof in CI:** `scripts/ci_backup_restore.sh` runs after the ordinary
 runtime checks on a disposable GitHub-hosted runner. It stops app/Gitea for
@@ -469,6 +483,7 @@ GNU tar. BusyBox tar is incompatible with this archive-writing command.
 > import-compatible during the transition (Decision 5).
 
 - **First run (virgin host):** install the CLI (`uv tool install devcake-cli` from PyPI, `uv tool install .` / `pipx install .` as a checkout snapshot — add the `[mcp]` extra when a coding agent will hold DevCake's tools, ADR-0041 — or `uv pip install -e .` into a venv — editable, tracks the tree) → `devcake doctor` (fix host preconditions; on an AppArmor host, run the two profile commands it prints — the one `sudo` step, §0) → `devcake up --bake` (auto-inits `.env` bootstrap secrets, discovers `DOCKER_GID`, computes `DEVCAKE_APP_DIGEST`, bakes **control plane + hello**, `compose up -d`, starts the **host baker**) → optionally `devcake setup --same-harness <template> --json` (and/or connection / `--import` flags) to seed the Executor/Judge/Steward roster and wire connections non-interactively. Open `http://localhost:8080` → **PMO** (`#/pmo`, Connections) + **Repositories** (`#/repos`) for connections and forge tokens, and **Fleet → Dev Types** (`#/fleet/dev-types`) for harness/model credentials → connection tests (SPA first-setup remains valid when you prefer the wizard). Saving Dev Types publishes `/data/harness_keep_set.json`; the host baker compiles those pins, probes them, and writes receipts. **The first mission refuses until that second bake finishes** — the editor says “baking” / “waiting,” not a host command to run. Day-to-day restarts: `devcake up` (refreshes launchd / systemd `--user` / flock respawn; `--foreground-baker` when automation reaps detached children). Absent keep-set = control plane + hello only; the baker never parses Dev Type YAML. `devcake up` never bakes a Dev image; `docker buildx bake all` by hand compiles the full harness matrix for development. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
+- **Upgrading an existing AppArmor host to a release with the nested-engine profile:** `devcake up --release <tag>` warns that the profile is not loaded and carries on under `docker-default`; run the two commands from the top of this document, then `devcake up` again — the receipt goes green within a tick.
 - **Status on the host:** `devcake status` prints the compose and baker snapshot plus the PMO request budgets the app measures — about N requests/hour per credential against the tracker's limit, rejections by the tracker in the last hour, and the alarm text when a limit was reached — by reading `/health` through the loopback admin proxy with the checkout's `ADMIN_USER` / `ADMIN_PASSWORD` (never via an `http_proxy`); when the stack does not answer the line says why (`--json` carries `health_error`).
 - **Upgrading across the default-branch change (ADR-0024 addendum):** a repository card whose `default_branch` names a branch the repository does not have now fails its mirror sync loud instead of mounting an empty tree, and every mission on that board defers with the card named on its row and on Overview. Nothing is migrated for you: open Connections → Repositories, run ⋯ → **Discover default branches for all repositories…**, review, Save — dispatch resumes on the next cycle. Cards left blank ask the repository's HEAD before every sync (one extra round trip per card per dispatch); on a board with many reference cards, either pin them via Discover or raise `repo_mirror.sync_max_age_seconds` (`10-persistence.md`, the `repo_mirror` block of the config sample; a changed pin always resyncs regardless of the window, and so does a repository DevCake itself just changed or found changed — a finished run, a merged pull request, a claims push or prune) so rapid successive dispatches reuse one sync. A settings bundle exported after this change carries blank branches that an older app refuses to import.
 - **Boards that raised `poll_interval_seconds` for tracker quota:** on a tracker whose item `updated_at` moves with every comment (the adapter declares `updated_at_tracks_comments`), a labelled mission's feed is re-read only when the mission changed or DevCake wrote to it, so a board's request demand no longer grows with the number of labelled missions. If the poll interval was raised to stay under the quota, it can come back down; `/health.pmo_budget_warnings` still names the instances whose measured demand is near the limit, and the board listing keeps its per-page cost.

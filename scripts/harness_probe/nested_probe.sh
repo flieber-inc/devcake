@@ -22,7 +22,8 @@
 #   NESTED_TEST_IMAGE overrides the inner image (default docker.io/library/
 #   alpine — the nested pull needs egress from inside the Dev container).
 #   NESTED_PROBE_TIMEOUT caps the outer run in seconds (default 300).
-#   DEVCAKE_APPARMOR_PROFILE overrides the .env value (default docker-default).
+#   The AppArmor profile name comes from .env (what compose handed the DAG),
+#   then the process env, then docker-default — the baker's order.
 # Receipt: .factory/nested_probe/receipt-<utc>.json (log + sent profile beside
 # it); the newest five receipts are kept.
 set -euo pipefail
@@ -54,24 +55,7 @@ fi
 # then Docker's default — the same order the baker resolves it in.
 ENV_PROFILE=""
 if [[ -f .env ]]; then
-  ENV_PROFILE="$(python3 - <<'PYENV'
-import re, sys
-val = ""
-for raw in open(".env", encoding="utf-8", errors="replace"):
-    line = raw.strip().rstrip("\r")
-    if not line or line.startswith("#"):
-        continue
-    if line.startswith("export "):
-        line = line[7:].lstrip()
-    m = re.match(r"DEVCAKE_APPARMOR_PROFILE\s*=\s*(.*)$", line)
-    if m:
-        v = m.group(1).strip()
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
-            v = v[1:-1]
-        val = v
-sys.stdout.write(val)
-PYENV
-)"
+  ENV_PROFILE="$(python3 scripts/harness_probe/env_value.py .env DEVCAKE_APPARMOR_PROFILE)"
 fi
 APPARMOR_PROFILE="${ENV_PROFILE:-${DEVCAKE_APPARMOR_PROFILE:-docker-default}}"
 PROBE_TIMEOUT="${NESTED_PROBE_TIMEOUT:-300}"
@@ -136,7 +120,6 @@ echo "NP_SUBUID_RC=$rc"
 # Compose through the docker symlink (podman's compose subcommand → the
 # image's pinned provider): a compose-created network exercises netavark,
 # which a bare `podman run` never does. Recorded, not part of rig_ok.
-mkdir -p /workspace/np_compose
 printf 'services:\n  hello:\n    image: %s\n    command: ["sh", "-c", "echo compose-nested-ok"]\n' "$NP_TEST_IMAGE" > /workspace/np_compose/compose.yaml
 out="$(cd /workspace/np_compose && docker compose up --abort-on-container-exit 2>&1)"; rc=$?
 (cd /workspace/np_compose && docker compose down >/dev/null 2>&1)
@@ -157,10 +140,15 @@ NET_ARGS=()
 if [[ -n "$RUN_NETWORK" ]]; then NET_ARGS=(--network "$RUN_NETWORK"); fi
 # Portable cap (no GNU timeout on stock macOS): a named container and a
 # background watchdog that force-removes it — the daemon kills the whole
-# process tree, so a wedged inner pull cannot outlive the probe.
-NP_NAME="np-$STAMP"
-( sleep "$PROBE_TIMEOUT"; docker rm -f "$NP_NAME" >/dev/null 2>&1 ) &
+# process tree, so a wedged inner pull cannot outlive the probe. The
+# watchdog holds no fd of ours (a caller capturing our output would
+# otherwise wait for its sleep) and is killed with its sleep on exit.
+NP_NAME="np-$STAMP-$$"
+( sleep "$PROBE_TIMEOUT"; docker rm -f "$NP_NAME" >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
 WATCHDOG=$!
+# the compose step writes a project dir as the image's uid-1000 user; an
+# operator-owned 0777 dir keeps it unlinkable-by-us like the rest of $WS
+mkdir -p "$WS/np_compose" && chmod 777 "$WS/np_compose"
 set +e
 docker run --rm --name "$NP_NAME" \
   --security-opt seccomp="$(pwd)/$SECCOMP" \
@@ -175,6 +163,7 @@ docker run --rm --name "$NP_NAME" \
 DOCKER_RC=$?
 set -e
 if kill -0 "$WATCHDOG" 2>/dev/null; then
+  pkill -P "$WATCHDOG" 2>/dev/null || true       # the sleep, not just the subshell
   kill "$WATCHDOG" 2>/dev/null; wait "$WATCHDOG" 2>/dev/null || true
 else
   echo "NP_TIMEOUT=1 (outer run exceeded ${PROBE_TIMEOUT}s)" >> "$LOG"
@@ -225,20 +214,27 @@ if [[ "$NESTED_OK" = true && "${SUBUID_RC:-1}" = "0" \
   RIG_OK=true
 fi
 
-# The first red step, named for the receipt (and for the surfaces that
-# read it — the panel, `devcake status`, the Dev's prompt line).
+# The first red step, named for the receipt from a FIXED vocabulary — this
+# sentence reaches the panel, `devcake status` and every Dev's prompt, so no
+# daemon or nested-image text rides it; the raw line goes to first_red_detail
+# (receipt file only) and the log.
 FIRST_RED=""
+FIRST_RED_DETAIL=""
 if [[ "$RIG_OK" != true ]]; then
   if grep -q "^NP_TIMEOUT=1" "$LOG"; then
-    FIRST_RED="the probe container did not finish within ${PROBE_TIMEOUT}s"
+    FIRST_RED="the probe did not finish within ${PROBE_TIMEOUT} seconds"
   elif [[ "$DOCKER_RC" -ne 0 && -z "${INNER_UID:-}" ]]; then
-    FIRST_RED="the Dev container could not start ($(grep -m1 -i 'error' "$LOG" | cut -c1-200 || true))"
+    FIRST_RED="the Dev container could not start under the run contract"
+    FIRST_RED_DETAIL="$(grep -m1 -i 'error' "$LOG" | cut -c1-300 || true)"
   elif [[ "${UIDMAP_RC:-1}" != "0" ]]; then
-    FIRST_RED="the engine cannot create a user namespace (uid_map: $(grep -m1 '^NP_UIDMAP_ERR: ' "$LOG" | cut -d' ' -f2- | cut -c1-200 || true))"
+    FIRST_RED="the engine cannot create a user namespace"
+    FIRST_RED_DETAIL="$(grep -m1 '^NP_UIDMAP_ERR: ' "$LOG" | cut -d' ' -f2- | cut -c1-300 || true)"
   elif [[ "${GRAPH_RC:-1}" != "0" ]]; then
-    FIRST_RED="nested storage setup failed ($(val NP_GRAPH | cut -c1-200))"
+    FIRST_RED="nested storage could not be set up"
+    FIRST_RED_DETAIL="$(val NP_GRAPH | cut -c1-300)"
   elif [[ "${NESTED_RC:-1}" != "0" ]]; then
-    FIRST_RED="a nested container run failed ($(grep -m1 '^NP_NESTED_OUT: ' "$LOG" | cut -d' ' -f2- | cut -c1-200 || true))"
+    FIRST_RED="a nested container could not run"
+    FIRST_RED_DETAIL="$(grep -m1 '^NP_NESTED_OUT: ' "$LOG" | cut -d' ' -f2- | cut -c1-300 || true)"
   elif [[ "${SUBUID_RC:-1}" != "0" ]]; then
     FIRST_RED="a nested non-root user could not write the workspace bind"
   elif [[ "$RECLAIM_SUBUID_UID" != "1000" ]]; then
@@ -252,7 +248,7 @@ NP_RECEIPT="$RECEIPT" NP_IMAGE="$IMAGE" NP_TEST_IMG="$NESTED_TEST_IMAGE" \
 NP_STAMP="$STAMP" NP_ENGINE="$ENGINE" NP_KERNEL="$KERNEL" NP_HOST_OS="$HOST_OS" \
 NP_ARCH="$ARCH" NP_SECOPTS="$SECOPTS" NP_SECCOMP_SHA="$SECCOMP_SHA" \
 NP_APPARMOR="$APPARMOR_PROFILE" NP_NETWORK="${RUN_NETWORK:-bridge}" \
-NP_FIRST_RED="$FIRST_RED" NP_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo unknown)" \
+NP_FIRST_RED="$FIRST_RED" NP_FIRST_RED_DETAIL="$FIRST_RED_DETAIL" NP_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo unknown)" \
 NP_DOCKER_RC="$DOCKER_RC" NP_INNER_UID="${INNER_UID:-}" \
 NP_INNER_KERNEL="${INNER_KERNEL:-}" NP_UIDMAP_RC="${UIDMAP_RC:-}" \
 NP_UIDMAP="${UIDMAP:-}" NP_GRAPH_RC="${GRAPH_RC:-}" NP_GRAPH="${GRAPH:-}" \
@@ -279,6 +275,7 @@ receipt = {
     "network": e["NP_NETWORK"],
     "image_id": e["NP_IMAGE_ID"],
     "first_red": e["NP_FIRST_RED"],
+    "first_red_detail": e["NP_FIRST_RED_DETAIL"],
     "container": {"uid": e["NP_INNER_UID"], "kernel": e["NP_INNER_KERNEL"]},
     "docker_run_rc": int(e["NP_DOCKER_RC"]),
     "uid_map": {"rc": e["NP_UIDMAP_RC"], "first_row": e["NP_UIDMAP"]},
@@ -318,5 +315,6 @@ rm -rf "$WS" 2>/dev/null \
 ls -1t "$OUTDIR"/receipt-*.json 2>/dev/null | tail -n +6 | while read -r old; do
   stamp="${old##*/receipt-}"; stamp="${stamp%.json}"
   rm -f "$old" "$OUTDIR/container-$stamp.log" "$OUTDIR/seccomp-$stamp.json"
+  rm -rf "$OUTDIR/ws-$stamp" 2>/dev/null || true
 done
 [[ "$RIG_OK" = true ]]

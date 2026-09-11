@@ -222,6 +222,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
         }>
         {describeNestedEngine(healthInfo?.bake_status) && (
           <p className={"mb-4 text-sm " + (healthInfo?.bake_status?.nested?.rig_ok
+            && healthInfo?.bake_status?.nested?.compose_ok !== false
             ? "text-neutral-600 dark:text-neutral-300"
             : "text-amber-700 dark:text-amber-400")}>
             {describeNestedEngine(healthInfo?.bake_status)}

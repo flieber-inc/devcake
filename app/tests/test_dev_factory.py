@@ -2364,6 +2364,12 @@ def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
     assert due(receipt=old)
     assert not due(receipt=old, apparmor_profile="docker-default")   # red, same contract
     assert not due(receipt=None)
+    # a kernel or engine upgrade is drift too; a fact the baker could not
+    # read this tick (empty) never is
+    assert due(kernel="7.1")
+    assert due(engine="30.0")
+    assert not due(kernel="7.0", engine="29.7")
+    assert not due(kernel="", engine="")
 
     # the fact rides every status until a tick sets it anew
     previous = {"state": "ready", "nested": proj}
@@ -2386,6 +2392,11 @@ def test_apparmor_profile_comes_from_the_checkout_env_file(tmp_path):
     assert factory.resolve_apparmor_profile(tmp_path, {"DEVCAKE_APPARMOR_PROFILE": "x"}) == "devcake-nested"
     (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=\n")
     assert factory.resolve_apparmor_profile(tmp_path, {}) == "docker-default"
+    # compose drops an unquoted trailing comment; a quoted one stays
+    (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=devcake-nested # note\n")
+    assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "devcake-nested"
+    (tmp_path / ".env").write_text("\ufeffDEVCAKE_APPARMOR_PROFILE = 'a # b'\n")
+    assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "a # b"
     assert factory.env_file_value(tmp_path / "missing", "K") is None
 
 
@@ -2410,3 +2421,11 @@ def test_newest_receipt_is_attached_on_every_publication(tmp_path):
         {"measured_at": "20260911T010000Z", "rig_ok": True, "first_red": ""}))
     got = factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)
     assert got["nested"]["rig_ok"] is True
+    # the daemon no longer applies the named profile → the green receipt
+    # measured a host that no longer exists
+    gone = factory.attach_newest_nested({"state": "ready"}, tmp_path, prev, profile_applies=False)
+    assert gone["nested"]["rig_ok"] is False and "no longer applies" in gone["nested"]["first_red"]
+    assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev, profile_applies=None)["nested"]["rig_ok"] is True
+    # a stray non-UTF-8 file never kills the loop
+    (d / "receipt-20260911T020000Z.json").write_bytes(b"\xff\xfe{")
+    assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)["nested"]["rig_ok"] is True

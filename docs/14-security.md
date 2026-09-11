@@ -377,8 +377,10 @@ Not claimed:
      `/proc/interrupts`, `/proc/scsi`, `/proc/acpi`, and world-readable
      firmware tables under `/sys/firmware` — host information, not
      control. `/proc/kcore`, `/proc/timer_list`, `/proc/sysrq-trigger` and
-     every write under `/proc/sys` stay closed by ordinary file
-     permissions. On AppArmor hosts running under `devcake-nested` the
+     writes under `/proc/sys` stay closed by ordinary file permissions —
+     except the network and IPC sysctls of a namespace the Dev itself
+     created, which are its own to set (that is how the rootless engine
+     configures its networks). On AppArmor hosts running under `devcake-nested` the
      profile denies those paths again, and CI checks that its deny list
      covers everything the daemon masks today
      (`scripts/check_apparmor_masks.py`) — but AppArmor rules are
@@ -505,7 +507,11 @@ dismiss.
 10. Store **settings export bundles** like credential dumps: prefer
     encrypted, never plaintext off the box, delete plaintext exports after
     use. Same handling for `gitea_data` backups (repo content + Gitea's
-    credential DB).
+    credential DB) and for the Dagu state archives `devcake up` writes
+    under `.factory/backups/` before a Dagu re-pin: they hold every run's
+    parameters (the per-run Redis credentials among them) and every step's
+    output in clear — written 0600 to the operator, never copied off the
+    box unencrypted.
 11. On an AppArmor host, `devcake doctor` shows **`apparmor_profile` ok**
     (the daemon applies `devcake-nested` to a throwaway container, and the
     installed file matches this checkout's — the doctor compares files,

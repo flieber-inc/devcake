@@ -59,23 +59,30 @@ def deny_rules(profile_text: str) -> list[tuple[str, str]]:
 
 
 def _covered(path: str, rules: list[tuple[str, str]], need: str) -> bool:
-    """A deny rule covers `path` when its pattern is the path itself, the
-    path plus a trailing tree glob, or the path's parent tree, with every
-    permission in `need`."""
+    """A deny rule covers `path` when, with every permission in `need`:
+    its pattern is the path itself; or the path plus a trailing tree glob
+    (`/**`, `/{,**}`, `{,/**}`); or a LITERAL parent's tree glob; or a
+    single-level glob (`/*`) whose parent is the path's own parent. A
+    single-level rule never covers deeper paths, and a parent with a
+    character class or glob in it (e.g. `/sys/[^f]*`) is never trusted."""
     for rule_path, perms in rules:
         if not set(need) <= set(perms):
             continue
-        base = rule_path
-        for suffix in ("/**", "/{,**}", "{,/**}", "/*"):
-            if base.endswith(suffix):
-                base = base[: -len(suffix)]
+        if rule_path == path:
+            return True
+        for suffix in ("/**", "/{,**}", "{,/**}"):
+            if rule_path.endswith(suffix):
+                base = rule_path[: -len(suffix)]
+                if "*" in base or "[" in base or "?" in base:
+                    break
+                if base == path or path.startswith(base + "/"):
+                    return True
                 break
-        if rule_path == path or base == path:
-            return True
-        # a parent-tree rule such as /sys/[^f]*/** does not cover /sys/firmware;
-        # only literal parents count
-        if "*" not in base and "[" not in base and path.startswith(base + "/"):
-            return True
+        if rule_path.endswith("/*"):
+            base = rule_path[:-2]
+            if "*" not in base and "[" not in base and "?" not in base \
+                    and path.rsplit("/", 1)[0] == base and path != base:
+                return True
     return False
 
 

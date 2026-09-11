@@ -172,16 +172,16 @@ def derive_apparmor_profile(repo: Path) -> tuple[str, str, str]:
     if not f.enabled:
         return (DOCKER_DEFAULT_PROFILE,
                 f"── DEVCAKE_APPARMOR_PROFILE={DOCKER_DEFAULT_PROFILE}  "
-                "(no AppArmor on this host)", "")
+                "(no AppArmor on the Docker host)", "")
     cmds = apparmor_install_commands(repo)
     if not f.usable:
         need = ("" if f.parser else
                 "install the apparmor package (apparmor_parser) first, then ")
-        why = ("the daemon cannot apply it — installed but not loaded; an older "
-               "apparmor_parser rejects the profile (4.0 or newer is needed)"
-               if f.applies is False else
-               "this host's apparmor_parser rejects the profile (4.0 or newer is needed)"
-               if f.compiles is False else "not loaded")
+        why = ("rejected by this host's apparmor_parser (4.0 or newer is needed)"
+               if f.compiles is False else
+               "installed but not loaded by the kernel"
+               if f.applies is False and f.installed else
+               "not loaded")
         return (DOCKER_DEFAULT_PROFILE,
                 f"── DEVCAKE_APPARMOR_PROFILE={DOCKER_DEFAULT_PROFILE}  "
                 f"(AppArmor active, {APPARMOR_PROFILE_NAME} {why})",
@@ -660,8 +660,11 @@ def _dagu_volume(repo: Path) -> str | None:
 
 
 def _running_dagu_image(repo: Path) -> str:
+    """The image the dagu service last ran — stopped containers included
+    (`ps -a`: an operator who ran `devcake down` first has no running
+    one). Empty when compose knows no dagu container at all."""
     ps = subprocess.run(
-        ["docker", "compose", "ps", "--format", "json", "dagu"],
+        ["docker", "compose", "ps", "-a", "--format", "json", "dagu"],
         cwd=str(repo), text=True, capture_output=True, timeout=60)
     rows: list = []
     text = (ps.stdout or "").strip()
@@ -676,36 +679,61 @@ def _running_dagu_image(repo: Path) -> str:
 
 
 def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
-    """Archive the Dagu state volume under .factory/backups/ BEFORE the
+    """Archive the Dagu state volume under .factory/backups/ BEFORE a
     re-pinned Dagu starts and migrates it (docs/13 §4): the archive is the
-    rollback path — an older Dagu cannot read a migrated store. This is a
-    backup, not a migration; Dagu does its own on first start. A failed
-    archive warns and the bring-up continues (an offline host must still
-    upgrade); the printed command archives by hand."""
+    rollback path — an older Dagu cannot read a migrated store. A backup,
+    not a migration: Dagu does its own on first start; nothing here reads
+    the archive back. Taken whenever the checkout pins a Dagu the volume
+    was not last used with — and, when compose knows no dagu container at
+    all (the stack was taken down), whenever the volume exists, since the
+    previous version is then unknown. The archive holds run params and
+    step output in clear (docs/14 §9), so it is written 0600, owned by the
+    operator, in a 0700 directory; the newest three are kept. dagu is
+    stopped first (a quiet copy), the bring-up restarts it. A failed
+    archive warns and the bring-up continues; the printed command archives
+    by hand."""
     try:
-        moved = dagu_pin_moved((repo / "docker-compose.yml").read_text(),
-                               _running_dagu_image(repo))
+        running = _running_dagu_image(repo)
+        pinned = _DAGU_PIN.search((repo / "docker-compose.yml").read_text())
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return
-    if not moved:
+    if not pinned:
         return
     volume = _dagu_volume(repo)
+    if running:
+        moved = dagu_pin_moved((repo / "docker-compose.yml").read_text(), running)
+        if not moved:
+            return
+        head = (f"── this release re-pins Dagu {moved[0]} → {moved[1]}; its state "
+                "store is migrated on first start.")
+    elif volume:
+        head = (f"── no dagu container is known (stack down?) and the checkout pins "
+                f"Dagu {pinned.group(1)}; the store's previous version is unknown, "
+                "so it is archived first.")
+    else:
+        return
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     dest_dir = repo / ".factory" / "backups"
     archive = dest_dir / f"dagu_data-{stamp}.tgz"
-    cmd = ["docker", "run", "--rm", "-v", f"{volume or '<project>_dagu_data'}:/from:ro",
-           "-v", f"{dest_dir}:/to", _BACKUP_IMAGE,
-           "tar", "czf", f"/to/{archive.name}", "-C", "/from", "."]
-    head = (f"── this release re-pins Dagu {moved[0]} → {moved[1]}; its state store "
-            "is migrated on first start.")
+    uid, gid = os.getuid(), os.getgid()
+    inner = (f"umask 077 && tar czf /to/{archive.name} -C /from . "
+             f"&& chown {uid}:{gid} /to/{archive.name}")
+    cmd = ["docker", "run", "--rm", "--network", "none",
+           "--mount", f"type=volume,src={volume or '<project>_dagu_data'},dst=/from,readonly",
+           "--mount", f"type=bind,src={dest_dir},dst=/to",
+           _BACKUP_IMAGE, "sh", "-c", inner]
+    shown = " ".join(cmd[:-1]) + " " + repr(inner)
     if dry_run or volume is None:
         why = ("" if volume else
                " (the Dagu volume could not be identified — archive by hand)")
-        _log(f"{head} {'Would archive' if dry_run else 'Archive'} it first{why}:\n   "
-             + " ".join(cmd), as_json=as_json)
+        _log(f"{head} {'Would archive' if dry_run else 'Archive'} it{why}:\n   {shown}",
+             as_json=as_json)
         return
     dest_dir.mkdir(parents=True, exist_ok=True)
-    _log(f"{head} Archiving it first → {archive}", as_json=as_json)
+    os.chmod(dest_dir, 0o700)
+    _log(f"{head} Stopping dagu and archiving → {archive}", as_json=as_json)
+    subprocess.run(["docker", "compose", "stop", "dagu"], cwd=str(repo),
+                   capture_output=True, timeout=120)
     err = ""
     try:
         proc = subprocess.run(cmd, cwd=str(repo), text=True, capture_output=True,
@@ -718,10 +746,16 @@ def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
         _log("── WARNING: the Dagu archive failed"
              + (f" ({err[:200]})" if err else "")
              + " — continuing; rolling Dagu back needs an archive, so take one "
-             "by hand now if the run history matters:\n   " + " ".join(cmd),
+             "by hand now if the run history matters:\n   " + shown,
              as_json=as_json)
         return
-    _log(f"── Dagu state archived ({archive.stat().st_size // 1024} KiB); "
+    os.chmod(archive, 0o600)
+    for old in sorted(dest_dir.glob("dagu_data-*.tgz"))[:-3]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    _log(f"── Dagu state archived ({archive.stat().st_size // 1024} KiB, 0600); "
          "rollback: docs/13 §8", as_json=as_json)
 
 
@@ -877,7 +911,10 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
         if not opts.bake:
             opts.bake = True          # the control plane; never a Dev image
             opts.bake_targets = []
-        _dagu_backup(root, as_json=opts.as_json, dry_run=opts.dry_run)
+
+    # a re-pinned Dagu (a release, or a plain pull) migrates its store on
+    # first start: archive it first, whatever brought the new pin here
+    _dagu_backup(root, as_json=opts.as_json, dry_run=opts.dry_run)
 
     try:
         plan, _ = prepare_env(root, opts, mutate=not opts.dry_run)

@@ -624,6 +624,65 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     return status
 
 
+_APPLY_CACHE: dict = {"at": 0.0, "profile": "", "value": None}
+APPLY_CHECK_INTERVAL_S = 60.0
+
+
+def profile_still_applies(now: float | None = None) -> bool | None:
+    """Ask the daemon, at most once a minute, whether it still applies the
+    profile .env names — the one drift the receipt cannot see (the profile
+    removed by hand or lost at boot leaves .env, the receipt and the DAG
+    agreeing while every run dies at create). None = not applicable
+    (docker-default) or unknown (no image to try, daemon unreachable)."""
+    profile = resolve_apparmor_profile(REPO, os.environ)
+    if profile == "docker-default":
+        return None
+    t = time.time() if now is None else now
+    if (_APPLY_CACHE["profile"] == profile
+            and t - _APPLY_CACHE["at"] < APPLY_CHECK_INTERVAL_S):
+        return _APPLY_CACHE["value"]
+    value: bool | None = None
+    try:
+        images = subprocess.run(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+            capture_output=True, text=True, timeout=30, check=False).stdout
+        image = next((r for r in images.splitlines()
+                      if r.startswith("devcake/dev-hello:") and not r.endswith(":<none>")),
+                     None)
+        if image:
+            proc = subprocess.run(
+                ["docker", "run", "--rm", "--network", "none", "--user", "65534:65534",
+                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                 "--pids-limit", "8", "--memory", "32m", "--read-only",
+                 "--security-opt", f"apparmor={profile}", "--entrypoint", "/bin/true",
+                 image], capture_output=True, text=True, timeout=90, check=False)
+            if proc.returncode == 0:
+                value = True
+            elif "apparmor" in (proc.stderr or "").lower():
+                value = False
+    except (OSError, subprocess.TimeoutExpired):
+        value = None
+    _APPLY_CACHE.update(at=t, profile=profile, value=value)
+    return value
+
+
+def _host_facts() -> tuple[str, str]:
+    """(kernel, engine) as the probe records them; empty when unreadable."""
+    out = []
+    for fmt in ("{{.KernelVersion}}", "{{.ServerVersion}}"):
+        try:
+            proc = subprocess.run(["docker", "info", "--format", fmt],
+                                  capture_output=True, text=True, timeout=30, check=False)
+            out.append((proc.stdout or "").strip() if proc.returncode == 0 else "")
+        except (OSError, subprocess.TimeoutExpired):
+            out.append("")
+    return out[0], out[1]
+
+
+_PROBE_BACKOFF: dict = {"until": 0.0}
+PROBE_RETRY_BACKOFF_S = 600.0
+
+
 def _dag_seccomp_sha256() -> str:
     """The sha of the seccomp blob the DAG ships now — the probe records
     the one it sent, so a DAG change makes the last verdict stale."""
@@ -655,12 +714,19 @@ def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
     factory = REPO / ".factory"
     receipt = newest_nested_receipt(factory)
     profile = resolve_apparmor_profile(REPO, os.environ)
+    kernel, engine = _host_facts()
     due = nested_probe_due(baked_now=bool(baked), receipt=receipt,
                            apparmor_profile=profile,
-                           seccomp_sha256=_dag_seccomp_sha256())
+                           seccomp_sha256=_dag_seccomp_sha256(),
+                           kernel=kernel, engine=engine)
     candidates = probe_image_candidates(local_images, tag=tag)
     image = baked[-1] if baked else (candidates[0] if candidates else "")
+    # a probe that produced no receipt (script error, timeout) must not
+    # re-run every tick: one retry every ten minutes until it does
+    if due and not baked and time.time() < _PROBE_BACKOFF["until"]:
+        due = False
     if due and image:
+        before = (receipt or {}).get("measured_at")
         p0 = time.time_ns()
         _, sid = new_ids()
         print(f"dev_factory: nested-engine probe on {image} "
@@ -674,13 +740,18 @@ def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
             print(f"dev_factory: nested-engine probe failed to run ({exc})", flush=True)
             rc = 1
         receipt = newest_nested_receipt(factory)
+        if (receipt or {}).get("measured_at") == before:
+            _PROBE_BACKOFF["until"] = time.time() + PROBE_RETRY_BACKOFF_S
+            print("dev_factory: the nested-engine probe wrote no receipt — "
+                  "next try in 10 minutes", flush=True)
         emit_event(work, span_record(
             name="baker.nested_probe", trace_id=trace_id or new_ids()[0],
             span_id=sid, parent=parent, start_ns=p0, end_ns=time.time_ns(),
             status="ok" if rc == 0 else "error", image=image,
             apparmor_profile=profile,
             first_red=str((receipt or {}).get("first_red") or "")))
-    return attach_newest_nested(status, factory, previous)
+    return attach_newest_nested(status, factory, previous,
+                                profile_applies=profile_still_applies())
 
 
 def _watch_log_path() -> Path:
@@ -747,9 +818,11 @@ def main(argv: list[str] | None = None) -> int:
                     current = json.loads(path.read_text())
                 except (OSError, json.JSONDecodeError):
                     current = {}
-            # a hand-run nested probe must show within a tick, idle or not
+            # a hand-run nested probe must show within a tick, idle or not;
+            # a profile the daemon no longer applies flips a green receipt
             publish_status(work, attach_newest_nested(
-                current or {"state": "ready", "jobs": []}, REPO / ".factory"))
+                current or {"state": "ready", "jobs": []}, REPO / ".factory",
+                profile_applies=profile_still_applies()))
             # Wake often enough to see a prune request; skip_reconcile already
             # avoided the digest/bake work.
             time.sleep(INTERVAL)

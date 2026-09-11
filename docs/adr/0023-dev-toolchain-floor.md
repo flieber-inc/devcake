@@ -187,7 +187,7 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    and a host that has not loaded the profile runs under `docker-default`
    with the engine unavailable — never a refusal to launch. Both Dev steps
    also launch with Docker's masked and read-only system paths removed
-   (`MaskedPaths: []`, `ReadonlyPaths: []`). Measured: on a cloud Ubuntu
+   (`MaskedPaths: []`, `ReadonlyPaths: []`). Measured 2026-09-10: on a cloud Ubuntu
    24.04 host (kernel 7.0, engine 29.7) with the profile loaded and the
    16-syscall rule in place, the nested container's own `mount proc`
    returns EPERM while Docker's default masks are present and succeeds

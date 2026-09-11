@@ -217,12 +217,17 @@ def test_apparmor_profile_check_asks_the_daemon_first(tmp_path, monkeypatch):
     assert ok.ok and "the daemon applies it" in ok.detail
     assert facts().usable and facts().applies is True and facts().compiles is True
 
-    # installed but the daemon refuses it (older parser: install ok, load failed)
+    # installed but the daemon refuses it; the host parser compiles it →
+    # the file was never loaded (or unloaded): the second command loads it
     world["run_rc"], world["run_err"] = 125, "unable to apply apparmor profile: no such file"
-    world["parser_rc"] = 1
     refused = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert not refused.ok and "daemon cannot apply it" in refused.detail
-    assert "4.0 or newer" in refused.detail and not facts().usable
+    assert "never loaded" in refused.detail and "4.0" not in refused.detail
+    assert not facts().usable
+    # the host parser rejects it too → the parser is too old, say so
+    world["parser_rc"] = 1
+    old_parser = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert "apparmor_parser rejects the profile (4.0 or newer" in old_parser.detail
     # ... and a .env that still names it is called out
     (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=devcake-nested\n")
     stale = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())

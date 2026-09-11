@@ -31,7 +31,8 @@ See the living log and open candidates in
   compiled in CI) that the operator loads once (`devcake doctor` prints
   the two commands, never runs them); `devcake up` derives the profile
   name into `.env` — asking the daemon first, so a profile the host cannot
-  apply is never named — the run DAG names it on both Dev steps, allows
+  apply is never named (a virgin host with no image yet falls back to the
+  installed file compiled by the host's own parser) — the run DAG names it on both Dev steps, allows
   the one extra syscall the runtime needs, and launches with Docker's
   masked system paths removed. **Security posture, stated plainly:** on
   Ubuntu hosts the profile lifts the default restriction on unprivileged
@@ -44,9 +45,13 @@ See the living log and open candidates in
   publishes the newest receipt: the Overview warns, the Dev Types panel
   and `devcake status` name the first red step, and a Dev on a red host
   is told in its prompt that containers are unavailable — runs still
-  launch. `devcake up --release` archives the Dagu state volume
-  under `.factory/backups/` before a re-pinned Dagu first starts (a backup
-  for rollback, not a migration), and prints the command when it cannot.
+  launch. `devcake up` archives the Dagu state volume under
+  `.factory/backups/` (0600, newest three kept) before a re-pinned Dagu
+  first starts — stack running or stopped, dagu stopped first — a backup
+  for rollback, not a migration; the command is printed when it cannot be
+  taken. The baker re-measures the nested-engine receipt after a kernel or
+  engine upgrade and asks the daemon every minute whether it still applies
+  the named profile.
   Every Dev prompt now carries a short section saying what `docker` is
   inside the container.
 - **Changed — Dagu 2.13.0 → 2.16.3.** The release that carries our
@@ -54,8 +59,8 @@ See the living log and open candidates in
   Docker's own flat form instead of the nested workaround the old decoder
   needed. Also in the range: a step's containers are stopped on timeout,
   the docker group is created by the stock entrypoint, and the Dagu state
-  layout was refactored — back up the Dagu volume before re-pinning a
-  host.
+  layout was refactored — `devcake up` archives the Dagu volume before the
+  re-pinned Dagu first starts (below).
 
 ## v0.6.4 (2026-09-10)
 

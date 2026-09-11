@@ -453,6 +453,9 @@ def nested_projection(receipt: Mapping | None) -> dict | None:
                  "os": str(host.get("os") or ""),
                  "security_options": str(host.get("security_options") or "")},
         "first_red": str(receipt.get("first_red") or ""),
+        # False only when the daemon refuses the profile .env names: then
+        # no Dev container starts at all (see attach_newest_nested)
+        "runs_launch": True,
         # `docker compose up` through the symlink — its own verdict, not
         # part of rig_ok (None when the receipt predates the compose step)
         "compose_ok": (bool(receipt["compose"].get("ok"))
@@ -499,10 +502,11 @@ def attach_newest_nested(status: dict, factory_dir: Path | str, previous=None,
     except Exception:  # noqa: BLE001 — a stray file must never kill the loop
         proj = None
     if proj is not None:
-        if profile_applies is False and proj.get("rig_ok"):
-            proj = {**proj, "rig_ok": False,
+        if profile_applies is False:
+            proj = {**proj, "rig_ok": False, "runs_launch": False,
                     "first_red": "the Docker host no longer applies the AppArmor "
-                                 "profile the stack names — run devcake doctor"}
+                                 "profile the stack names, so no Dev container "
+                                 "can start until it is loaded again"}
         return {**status, "nested": proj}
     return carry_last(previous, status, "nested")
 

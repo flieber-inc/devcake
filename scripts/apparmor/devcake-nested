@@ -1,5 +1,5 @@
 # devcake-nested — AppArmor profile for DevCake Dev containers.
-# version: 2026-09-11
+# version: 2026-09-11.2
 #
 # Docker's default container profile with three additions, so the rootless
 # engine inside a Dev container can create user namespaces and mount inside
@@ -59,8 +59,8 @@ profile devcake-nested flags=(attach_disconnected,mediate_deleted) {
   deny /sys/fs/[^c]*/** wklx,
   deny /sys/fs/c[^g]*/** wklx,
   deny /sys/fs/cg[^r]*/** wklx,
-  deny /sys/firmware/** rwklx,
-  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/firmware/{,**} rwklx,
+  deny /sys/devices/virtual/powercap/{,**} rwklx,
   deny /sys/kernel/security/** rwklx,
 
   # suppress ptrace denials when using 'docker ps' or using 'ps' inside a container

@@ -456,31 +456,6 @@ def test_up_release_prints_the_dagu_backup_line_only_on_a_moved_pin():
     assert up_mod.dagu_pin_moved("", "ghcr.io/dagucloud/dagu:2.13.0") is None
 
 
-def test_status_says_whether_devs_can_run_containers():
-    """docs/11 `bake_status.nested`: the newest nested-engine receipt, one
-    line — green, or the first red step in plain words."""
-    _ensure_cli_importable()
-    from devcake_cli.status import harness_lines
-    health = {"harness_pins": {"templates": {}}, "bake_status": {
-        "state": "ready", "jobs": [], "baker_alive": True,
-        "nested": {"rig_ok": True, "measured_at": "20260910T235021Z",
-                   "first_red": ""}}}
-    lines = harness_lines(health)
-    assert "  nested engine: ok — Devs can run containers (measured 2026-09-10 23:50 UTC)" in lines
-    health["bake_status"]["nested"]["compose_ok"] = True
-    assert any("containers, compose too (measured" in line for line in harness_lines(health))
-    health["bake_status"]["nested"]["compose_ok"] = False
-    assert any("docker compose is not working" in line for line in harness_lines(health))
-    health["bake_status"]["nested"] = {
-        "rig_ok": False, "measured_at": "20260910T220000Z",
-        "first_red": "the engine cannot create a user namespace (uid_map: EPERM)"}
-    lines = harness_lines(health)
-    assert ("  nested engine: unavailable — the engine cannot create a user "
-            "namespace (uid_map: EPERM) (measured 2026-09-10 22:00 UTC)") in lines
-    del health["bake_status"]["nested"]
-    assert not any("nested engine" in line for line in harness_lines(health))
-
-
 def test_up_archives_dagu_state_before_a_re_pinned_dagu_starts(monkeypatch, tmp_path, capsys):
     """A re-pinned Dagu migrates its state store on first start; the
     archive taken first is the rollback path — on every `up`, for a
@@ -493,10 +468,12 @@ def test_up_archives_dagu_state_before_a_re_pinned_dagu_starts(monkeypatch, tmp_
         "services:\n  dagu:\n    image: ghcr.io/dagucloud/dagu:2.16.3@sha256:abc\n")
     monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "ghcr.io/dagucloud/dagu:2.13.0")
     monkeypatch.setattr(up_mod, "_dagu_volume", lambda repo: "devcake_dagu_data")
+    monkeypatch.setattr(up_mod, "_dagu_tag_seen_locally", lambda repo, tag: False)
     up_mod._dagu_backup(tmp_path, as_json=False, dry_run=True)
     out = capsys.readouterr().out
     assert "re-pins Dagu 2.13.0 → 2.16.3" in out and "Would archive" in out
-    assert "src=devcake_dagu_data,dst=/from,readonly" in out and "umask 077" in out
+    assert "devcake_dagu_data:/from:ro" in out and "umask 077" in out
+    assert "dagu_data-from-2.13.0-" in out
     assert not (tmp_path / ".factory" / "backups").exists()
 
     calls = []
@@ -514,18 +491,26 @@ def test_up_archives_dagu_state_before_a_re_pinned_dagu_starts(monkeypatch, tmp_
     assert "Dagu state archived (2 KiB, 0600)" in out
     assert calls[0][:4] == ["docker", "compose", "stop", "dagu"]      # a quiet copy
     assert calls[1][:2] == ["docker", "run"] and "--network" in calls[1]
+    assert calls[2][:4] == ["docker", "compose", "start", "dagu"]     # never left down
     backups = tmp_path / ".factory" / "backups"
     assert oct(backups.stat().st_mode & 0o777) == "0o700"
     archive = next(backups.glob("dagu_data-*.tgz"))
     assert oct(archive.stat().st_mode & 0o777) == "0o600"
 
-    # the stack is down: compose knows no container, the volume exists →
-    # the previous version is unknown, so the store is archived anyway
+    # the stack is down: compose knows no container. The pinned tag was
+    # never pulled here → the previous version is unknown → archived
     monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "")
     calls.clear()
     up_mod._dagu_backup(tmp_path, as_json=False)
     out = capsys.readouterr().out
-    assert "no dagu container is known" in out and "archived" in out and calls
+    assert "never run here" in out and "archived" in out and calls
+    assert any("dagu_data-from-unknown-" in part for part in calls[1][-1:])
+    # ... but a routine down/up with the pin already pulled says nothing
+    monkeypatch.setattr(up_mod, "_dagu_tag_seen_locally", lambda repo, tag: True)
+    calls.clear()
+    up_mod._dagu_backup(tmp_path, as_json=False)
+    assert capsys.readouterr().out == "" and not calls
+    monkeypatch.setattr(up_mod, "_dagu_tag_seen_locally", lambda repo, tag: False)
 
     # ... and without a volume there is nothing to archive, silently
     monkeypatch.setattr(up_mod, "_dagu_volume", lambda repo: None)
@@ -534,11 +519,16 @@ def test_up_archives_dagu_state_before_a_re_pinned_dagu_starts(monkeypatch, tmp_
     monkeypatch.setattr(up_mod, "_dagu_volume", lambda repo: "devcake_dagu_data")
     monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "ghcr.io/dagucloud/dagu:2.13.0")
 
-    monkeypatch.setattr(up_mod.subprocess, "run",
-                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "no space"))
+    failing = []
+
+    def fail_run(cmd, **kw):
+        failing.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 1, "", "no space")
+    monkeypatch.setattr(up_mod.subprocess, "run", fail_run)
     up_mod._dagu_backup(tmp_path, as_json=False)
     out = capsys.readouterr().out
     assert "WARNING: the Dagu archive failed (no space)" in out and "continuing" in out
+    assert failing[-1][:4] == ["docker", "compose", "start", "dagu"]  # restarted even so
 
     # same pin → nothing said
     monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "ghcr.io/dagucloud/dagu:2.16.3")

@@ -51,10 +51,29 @@ def test_doctor_help_exits_zero():
     assert cli_main.main(["doctor", "--help"]) == 0
 
 
+def _env_value_src() -> Path:
+    """scripts/harness_probe/env_value.py — beside the checkout, or bound at
+    /srv/repo-scripts in the container runner."""
+    for p in (Path(__file__).resolve().parents[2] / "scripts" / "harness_probe" / "env_value.py",
+              Path("/srv/repo-scripts/harness_probe/env_value.py")):
+        if p.is_file():
+            return p
+    raise AssertionError("env_value.py not found — bind scripts → /srv/repo-scripts")
+
+
+def _no_daemon(monkeypatch):
+    """Hermetic: the AppArmor check never asks this developer's daemon."""
+    from devcake_cli import doctor
+    monkeypatch.setattr(doctor, "apparmor_facts", lambda **_: doctor.ApparmorFacts(
+        enabled=False, loaded=None, installed=False, current=None, parser=False,
+        compiles=None, applies=None))
+
+
 def test_doctor_json_schema_and_catalog_ids(monkeypatch, tmp_path, capsys):
     """``doctor --json`` emits schema_version + checks with the sealed ids."""
     _ensure_cli_importable()
     import devcake_cli.main as cli_main
+    _no_daemon(monkeypatch)
 
     # Point checkout checks at a minimal fake repo root.
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
@@ -92,6 +111,7 @@ def test_doctor_failure_prints_remedy_human(monkeypatch, tmp_path, capsys):
     """Human mode prints a one-time remedy; never runs sudo/usermod/linger."""
     _ensure_cli_importable()
     import devcake_cli.main as cli_main
+    _no_daemon(monkeypatch)
 
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     (tmp_path / "docker-bake.hcl").write_text("group \"default\" {}\n")
@@ -218,17 +238,28 @@ def test_apparmor_profile_check_asks_the_daemon_first(tmp_path, monkeypatch):
     assert facts().usable and facts().applies is True and facts().compiles is True
 
     # installed but the daemon refuses it; the host parser compiles it →
-    # the file was never loaded (or unloaded): the second command loads it
+    # the file was never loaded (or unloaded): the second command loads it,
+    # and the daemon's own line is quoted
     world["run_rc"], world["run_err"] = 125, "unable to apply apparmor profile: no such file"
     refused = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert not refused.ok and "daemon cannot apply it" in refused.detail
     assert "never loaded" in refused.detail and "4.0" not in refused.detail
+    assert "[daemon: unable to apply apparmor profile: no such file]" in refused.detail
     assert not facts().usable
+    # ANY failure of the throwaway counts as a refusal — the file tier is
+    # never trusted once the daemon was asked
+    world["run_err"] = "docker: Error response from daemon: cgroup limits unsupported"
+    assert facts().applies is False and not facts().usable
+    world["run_err"] = "unable to apply apparmor profile: no such file"
     # the host parser rejects it too → the parser is too old, say so
     world["parser_rc"] = 1
     old_parser = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert "apparmor_parser rejects the profile (4.0 or newer" in old_parser.detail
-    # ... and a .env that still names it is called out
+    # ... and a .env that still names it is called out (the checkout's
+    # dotenv reader is the one the baker and the probe use)
+    (tmp_path / "scripts" / "harness_probe").mkdir(parents=True, exist_ok=True)
+    import shutil as _sh
+    _sh.copy(_env_value_src(), tmp_path / "scripts" / "harness_probe" / "env_value.py")
     (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=devcake-nested\n")
     stale = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert ".env still names it — run devcake up" in stale.detail
@@ -251,10 +282,17 @@ def test_apparmor_profile_check_asks_the_daemon_first(tmp_path, monkeypatch):
     assert not outdated.ok and "outdated" in outdated.detail and "apparmor_parser -r" in outdated.detail
     installed.write_text("profile devcake-nested {}\n")
 
-    # usable, but .env still names docker-default → run devcake up
+    # usable, but .env still names docker-default, or lacks the key → run devcake up
+    import shutil as _sh
+    _sh.copy(_env_value_src(), tmp_path / "scripts" / "harness_probe" / "env_value.py")
     (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=docker-default\n")
     switch = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert not switch.ok and "still names docker-default" in switch.detail
+    (tmp_path / ".env").write_text("DEVCAKE_TAG=v1\n")
+    missing_key = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not missing_key.ok and "does not name it yet" in missing_key.detail
+    (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=devcake-nested\n")
+    assert doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts()).ok
     (tmp_path / ".env").unlink()
 
     # the kernel list readable and naming it, daemon says yes

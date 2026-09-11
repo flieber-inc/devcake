@@ -606,6 +606,7 @@ class ApparmorFacts:
     parser: bool                  # apparmor_parser found
     compiles: bool | None         # host parser compiles the checkout's file; None = no parser
     applies: bool | None          # docker run --security-opt apparmor=<name> succeeded; None = not tried
+    applies_error: str = ""       # the daemon's first error line when it refused
 
     @property
     def usable(self) -> bool:
@@ -670,24 +671,24 @@ def _probe_image(runner, docker: str) -> str | None:
     return None
 
 
-def _profile_applies(runner, docker: str, image: str) -> bool | None:
+def _profile_applies(runner, docker: str, image: str) -> tuple[bool | None, str]:
     """Ask the daemon: a container that names the profile either starts
-    (True) or fails to apply it (False). Anything else: unknown."""
+    (True) or does not (False, with the daemon's first error line — any
+    failure counts, since the file tier must never be trusted after the
+    daemon was asked). None only when the daemon could not be asked."""
     try:
         proc = runner([docker, "run", "--rm", "--network", "none",
                        "--user", "65534:65534", "--cap-drop", "ALL",
-                       "--security-opt", "no-new-privileges",
-                       "--pids-limit", "8", "--memory", "32m", "--read-only",
+                       "--security-opt", "no-new-privileges", "--read-only",
                        "--security-opt", f"apparmor={APPARMOR_PROFILE_NAME}",
                        "--entrypoint", "/bin/true", image],
                       capture_output=True, text=True, timeout=90)
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, ""
     if proc.returncode == 0:
-        return True
-    if "apparmor" in (proc.stderr or "").lower():
-        return False
-    return None
+        return True, ""
+    first = next((ln.strip() for ln in (proc.stderr or "").splitlines() if ln.strip()), "")
+    return False, first[:200]
 
 
 def apparmor_facts(
@@ -732,13 +733,15 @@ def apparmor_facts(
         except (OSError, subprocess.TimeoutExpired):
             compiles = None
     applies: bool | None = None
+    applies_error = ""
     if enabled and docker_bin and (installed or loaded):
         image = _probe_image(runner, docker_bin)
         if image:
-            applies = _profile_applies(runner, docker_bin, image)
+            applies, applies_error = _profile_applies(runner, docker_bin, image)
     return ApparmorFacts(enabled=enabled, loaded=loaded, installed=installed,
                          current=current, parser=bool(parser_bin),
-                         compiles=compiles, applies=applies)
+                         compiles=compiles, applies=applies,
+                         applies_error=applies_error)
 
 
 def apparmor_install_commands(repo_root: Path | None) -> str:
@@ -748,38 +751,22 @@ def apparmor_install_commands(repo_root: Path | None) -> str:
             f"sudo apparmor_parser -r {APPARMOR_INSTALLED_PATH}")
 
 
-def _env_apparmor_value(repo_root: Path | None) -> str:
-    """The value as compose reads it: last assignment, `export ` and quotes
-    stripped, an unquoted trailing ` # comment` dropped — the same shape the
-    baker's reader applies (scripts/harness_probe/env_value.py)."""
+def _env_apparmor_value(repo_root: Path | None) -> str | None:
+    """The value as compose reads it, through the checkout's one dotenv
+    reader (scripts/harness_probe/env_value.py — the baker and the probe
+    use the same file). None when there is no .env at all (no stack has
+    been brought up yet); empty when the key is absent or blank."""
     if repo_root is None:
-        return ""
+        return None
+    src = repo_root / "scripts" / "harness_probe" / "env_value.py"
     env_path = repo_root / ".env"
-    if not env_path.is_file():
-        return ""
-    value = ""
-    try:
-        lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    for raw in lines:
-        line = raw.strip().lstrip("\ufeff")
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        if k.strip() != "DEVCAKE_APPARMOR_PROFILE":
-            continue
-        v = v.strip()
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
-            v = v[1:-1]
-        else:
-            v = v.split(" #", 1)[0].rstrip()
-        value = v
-    return value
+    if not src.is_file() or not env_path.is_file():
+        return None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("devcake_env_value", src)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return (mod.env_file_value(env_path, "DEVCAKE_APPARMOR_PROFILE") or "").strip()
 
 
 def check_apparmor_profile(
@@ -807,9 +794,11 @@ def check_apparmor_profile(
         elif f.applies is False and f.installed:
             why = ("the daemon cannot apply it — the file is installed but the "
                    "kernel has no such profile (unloaded, or never loaded); the "
-                   "second command below loads it")
+                   "second command below loads it"
+                   + (f" [daemon: {f.applies_error}]" if f.applies_error else ""))
         elif f.applies is False:
-            why = "the daemon cannot apply it — the kernel has no such profile"
+            why = ("the daemon cannot apply it — the kernel has no such profile"
+                   + (f" [daemon: {f.applies_error}]" if f.applies_error else ""))
         else:
             why = "it is not loaded"
         need = ("" if f.parser else
@@ -831,16 +820,19 @@ def check_apparmor_profile(
                     "differs from this checkout's (outdated, or loaded from "
                     "elsewhere). Re-run (printed only; this CLI will not run it): "
                     f"{cmds}"))
-    if env_value and env_value != APPARMOR_PROFILE_NAME:
+    if env_value is not None and env_value != APPARMOR_PROFILE_NAME:
+        names = f"still names {env_value}" if env_value else "does not name it yet"
         return CheckResult(
             id="apparmor_profile", ok=False, hard=False,
-            detail=(f"{APPARMOR_PROFILE_NAME} is usable but .env still names "
-                    f"{env_value} — run devcake up to switch the Dev containers "
-                    "to it"))
+            detail=(f"{APPARMOR_PROFILE_NAME} is usable but .env {names} — Dev "
+                    "containers run under docker-default (no nested engine) "
+                    "until devcake up writes it"))
     how = ("the daemon applies it" if f.applies else
            "loaded" if f.loaded else
            "installed under /etc/apparmor.d/ and compiled by this host's parser "
-           "(loaded state unreadable without root)")
+           "(loaded state unreadable without root)" if f.compiles else
+           "installed under /etc/apparmor.d/ (loaded state unreadable without "
+           "root, no parser verdict)")
     return CheckResult(
         id="apparmor_profile", ok=True, hard=False,
         detail=f"{APPARMOR_PROFILE_NAME}: {how} — Dev containers get the nested engine")

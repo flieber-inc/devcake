@@ -2397,6 +2397,14 @@ def test_apparmor_profile_comes_from_the_checkout_env_file(tmp_path):
     assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "devcake-nested"
     (tmp_path / ".env").write_text("\ufeffDEVCAKE_APPARMOR_PROFILE = 'a # b'\n")
     assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "a # b"
+    # a quoted value followed by a comment or stray text: the quoted part
+    # only, as compose reads it (measured against `docker compose config`)
+    (tmp_path / ".env").write_text('DEVCAKE_APPARMOR_PROFILE="devcake-nested" # c\n')
+    assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "devcake-nested"
+    (tmp_path / ".env").write_text('DEVCAKE_APPARMOR_PROFILE="a"b\n')
+    assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "a"
+    (tmp_path / ".env").write_text('DEVCAKE_APPARMOR_PROFILE=v#x\n')
+    assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "v#x"
     assert factory.env_file_value(tmp_path / "missing", "K") is None
 
 
@@ -2425,6 +2433,9 @@ def test_newest_receipt_is_attached_on_every_publication(tmp_path):
     # measured a host that no longer exists
     gone = factory.attach_newest_nested({"state": "ready"}, tmp_path, prev, profile_applies=False)
     assert gone["nested"]["rig_ok"] is False and "no longer applies" in gone["nested"]["first_red"]
+    assert gone["nested"]["runs_launch"] is False          # no Dev container starts at all
+    assert "devcake" not in gone["nested"]["first_red"]      # a Dev never sees an operator remedy
+    assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)["nested"]["runs_launch"] is True
     assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev, profile_applies=None)["nested"]["rig_ok"] is True
     # a stray non-UTF-8 file never kills the loop
     (d / "receipt-20260911T020000Z.json").write_bytes(b"\xff\xfe{")

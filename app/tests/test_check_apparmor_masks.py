@@ -30,23 +30,43 @@ def test_coverage_logic_is_not_fooled_by_single_level_or_class_rules():
         "deny @{PROC}/{acpi,asound,scsi}/{,**} rwklx,\n"
         "deny @{PROC}/{bus,fs,irq}/** wklx,\n"
         "deny /sys/[^f]*/** wklx,\n"
-        "deny /sys/firmware/** rwklx,\n"
+        "deny /sys/firmware/{,**} rwklx,\n"
+        "deny /sys/kernel/security/** rwklx,\n"
         "deny @{PROC}/kcore rwklx,\n")
     assert m._covered("/proc/kcore", rules, "r")
     assert m._covered("/proc/acpi", rules, "r") and m._covered("/proc/scsi/x", rules, "r")
-    assert m._covered("/proc/bus", rules, "w") and m._covered("/proc/irq/9", rules, "w")
-    assert m._covered("/sys/firmware", rules, "r")
+    assert m._covered("/sys/firmware", rules, "r") and m._covered("/sys/firmware/dmi", rules, "r")
+    # `X/**` denies what is BELOW X, never X itself
+    assert m._covered("/sys/kernel/security/x", rules, "r")
+    assert not m._covered("/sys/kernel/security", rules, "r")
+    assert m._covered("/proc/bus", rules, "w")               # itself via /proc/* (one level)
+    assert not m._covered("/sys/kernel/security", rules, "w")   # /** only, nothing for itself
+    assert m._covered("/proc/irq/9", rules, "w")
     # `/proc/*` is ONE level: it covers /proc/foo, never /proc/foo/bar
     assert m._covered("/proc/foo", rules, "w")
-    assert m._covered("/proc/sys", rules, "w")
     assert not m._covered("/proc/foo/bar", rules, "w")
-    assert not m._covered("/proc/newthing/sub", rules, "w")
     # a character-class parent never counts as a literal parent
-    assert m._covered("/sys/firmware/x", rules, "w")            # the literal rule
-    assert not m._covered("/sys/kernel/debug", rules, "w")      # only /sys/[^f]*/**
+    assert not m._covered("/sys/kernel/debug", rules, "w")
     # the permission asked for must be in the rule
-    assert not m._covered("/proc/bus", rules, "r")
     assert not m._covered("/proc/foo", rules, "r")
+    # a read-only TREE needs the path and everything below it
+    assert m._tree_covered("/sys/firmware", rules, "r")
+    assert m._tree_covered("/proc/bus", rules, "w")          # itself via /proc/*, below via /**
+    assert not m._tree_covered("/proc/foo", rules, "w")      # one level only, nothing below
+    assert not m._tree_covered("/sys/kernel/security", rules, "r")   # below yes, itself no
+
+
+def test_a_profile_missing_a_deny_fails_the_check(monkeypatch, tmp_path):
+    """The checker exists for the day Docker extends its lists: a profile
+    lacking one deny must fail, not pass."""
+    m = _mod()
+    weak = tmp_path / "weak"
+    weak.write_text("deny @{PROC}/* w,\ndeny /sys/firmware/** rwklx,\n")   # dir itself open
+    monkeypatch.setattr(m, "docker_lists", lambda image: (["/sys/firmware"], ["/proc/bus"]))
+    assert m.main(["x", str(weak)]) == 1
+    good = tmp_path / "good"
+    good.write_text("deny /sys/firmware/{,**} rwklx,\ndeny @{PROC}/bus/{,**} wklx,\n")
+    assert m.main(["x", str(good)]) == 0
 
 
 def test_the_shipped_profile_covers_dockers_current_lists():

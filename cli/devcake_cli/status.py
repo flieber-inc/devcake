@@ -120,6 +120,9 @@ def harness_lines(health: dict | None) -> list[str]:
         else:
             why = str(nested.get("first_red") or "see the probe receipt")
             out.append(f"  nested engine: unavailable — {why}{tail}")
+            if nested.get("runs_launch") is False:
+                out.append("    ! every run fails at container create until the profile "
+                           "is loaded again or devcake up is run")
     prune = bake.get("prune")
     if isinstance(prune, dict):
         when = str(prune.get("at") or "")[11:16]

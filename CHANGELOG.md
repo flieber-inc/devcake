@@ -46,12 +46,20 @@ See the living log and open candidates in
   and `devcake status` name the first red step, and a Dev on a red host
   is told in its prompt that containers are unavailable — runs still
   launch. `devcake up` archives the Dagu state volume under
-  `.factory/backups/` (0600, newest three kept) before a re-pinned Dagu
-  first starts — stack running or stopped, dagu stopped first — a backup
-  for rollback, not a migration; the command is printed when it cannot be
-  taken. The baker re-measures the nested-engine receipt after a kernel or
-  engine upgrade and asks the daemon every minute whether it still applies
-  the named profile.
+  `.factory/backups/` (0600, named with the version it came from, newest
+  three kept) when the checkout pins a Dagu the volume was not last used
+  with — stack running or stopped; dagu is stopped for the copy and
+  started again at once — a backup for rollback, not a migration; the
+  command is printed when it cannot be taken. The baker re-measures the
+  nested-engine receipt after a kernel or engine upgrade and asks the
+  daemon every minute whether it still applies the named profile; when it
+  no longer does, every surface says that no Dev container can start until
+  the profile is loaded again or `devcake up` is run.
+- **Changed — `devcake-cli` 0.1.9.** The host CLI carries the AppArmor
+  derivation, the doctor check and the Dagu archive; a release checkout
+  refuses `devcake up --release` under an older installed CLI, so upgrade
+  the CLI first (`uv tool install --reinstall '.[mcp]'` from the checkout,
+  or the PyPI release of the same version).
   Every Dev prompt now carries a short section saying what `docker` is
   inside the container.
 - **Changed — Dagu 2.13.0 → 2.16.3.** The release that carries our
@@ -60,7 +68,7 @@ See the living log and open candidates in
   needed. Also in the range: a step's containers are stopped on timeout,
   the docker group is created by the stock entrypoint, and the Dagu state
   layout was refactored — `devcake up` archives the Dagu volume before the
-  re-pinned Dagu first starts (below).
+  re-pinned Dagu first starts (the "Fixed" bullet above).
 
 ## v0.6.4 (2026-09-10)
 

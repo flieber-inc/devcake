@@ -682,6 +682,33 @@ def _host_facts() -> tuple[str, str]:
 _PROBE_BACKOFF: dict = {"until": 0.0}
 PROBE_RETRY_BACKOFF_S = 600.0
 
+_DRIFT_CACHE: dict = {"at": 0.0, "value": False}
+DRIFT_CHECK_INTERVAL_S = 60.0
+
+
+def nested_drift_pending(now: float | None = None) -> bool:
+    """Once a minute on idle ticks: does the newest receipt still describe
+    the contract the stack runs (profile, seccomp blob, kernel, engine)?
+    True forces a full tick, whose publish_nested re-probes — so an engine
+    upgrade without a reboot re-measures without waiting for a bake or a
+    restart. Never re-probes on its own."""
+    t = time.time() if now is None else now
+    if t - _DRIFT_CACHE["at"] < DRIFT_CHECK_INTERVAL_S:
+        return bool(_DRIFT_CACHE["value"])
+    try:
+        receipt = newest_nested_receipt(REPO / ".factory")
+        kernel, engine = _host_facts()
+        value = nested_probe_due(
+            baked_now=False, receipt=receipt,
+            apparmor_profile=resolve_apparmor_profile(REPO, os.environ),
+            seccomp_sha256=_dag_seccomp_sha256(), kernel=kernel, engine=engine)
+        if value and t < _PROBE_BACKOFF["until"]:
+            value = False
+    except Exception:  # noqa: BLE001 — a drift check must never kill the loop
+        value = False
+    _DRIFT_CACHE.update(at=t, value=value)
+    return value
+
 
 def _dag_seccomp_sha256() -> str:
     """The sha of the seccomp blob the DAG ships now — the probe records
@@ -808,7 +835,7 @@ def main(argv: list[str] | None = None) -> int:
         trees = trees_mtime(REPO)
         keep_m = keep_set_mtime()
         prune_pending = compose_read(PRUNE_REQUEST) is not None
-        if (not prune_pending and skip_reconcile(
+        if (not prune_pending and not nested_drift_pending() and skip_reconcile(
                 state=last_state, trees=trees, keep=keep_m,
                 last_trees=last_trees, last_keep=last_keep)):
             path = work / STATUS

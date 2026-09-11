@@ -5,7 +5,9 @@ the nested probe (a bash script, via `python3 env_value.py FILE KEY`) and
 any other host-side reader take the SAME value `devcake up` wrote and
 compose handed to the dagu service — last assignment wins, `export ` and
 surrounding quotes stripped, an unquoted trailing ` # comment` dropped,
-CR and a BOM ignored. Never a second parser.
+CR and a BOM ignored. `$VAR` references are NOT expanded (compose expands
+them; devcake up writes literal values, so a hand-written reference is the
+operator's to avoid). Never a second parser.
 """
 from __future__ import annotations
 
@@ -32,8 +34,11 @@ def env_file_value(path: Path | str, key: str) -> str | None:
         if k.strip() != key:
             continue
         v = v.strip()
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
-            v = v[1:-1]
+        if v[:1] in ("'", '"'):
+            # the quoted part only (compose ignores anything after the
+            # closing quote — a comment, stray text); unterminated → literal
+            close = v.find(v[0], 1)
+            v = v[1:close] if close > 0 else v[1:]
         else:
             v = v.split(" #", 1)[0].rstrip()
         value = v

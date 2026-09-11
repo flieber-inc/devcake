@@ -154,7 +154,7 @@ echoes the work-repo token for whatever host a Dev fetches.
 - Success metric vs the incident workload: per-run forge transfer drops
   from ~300 MB × N Devs to delta fetches from one app IP.
 
-### 7 — Dagu 2.10.5 → 2.11.3 → 2.13.0 (severable rider)
+### 7 — Dagu 2.10.5 → 2.11.3 → 2.13.0 → 2.16.3 (severable rider)
 
 Audited: two breaking changes in range, neither applies (v2.11.0 CORS
 hardening — DevCake talks server-side, the SPA only links to Dagu's own
@@ -173,6 +173,16 @@ webhook, documents, build-workflow — nothing on our six endpoints) and
 live-drilled per `13-deployment.md` §4; §4 above records the volume
 probes re-measured on 2.13.0. One real break (2.12 wiki store vs our RO
 dags bind) fixed in compose via `DAGU_WIKI_DIR`.
+
+2.16.3: the bump that carries our upstream fix (dagucloud/dagu#2557, in
+2.14.0): the `host:` block is decoded nested-then-squashed, so the DAG
+moved to the flat HostConfig form (one form only). Audited 2.14–2.16
+notes: step timeout now stops the step's containers (#2566, intended),
+docker group created upstream (#2565, our hook idempotent), three
+persistence refactors (`dagu_data` backed up before the bump), server IP
+allowlist off by default, no change on our six endpoints (`api/v1/api.yaml`
+diffed: zero paths removed). Live-drilled per `13-deployment.md` §4 with the
+`docker inspect` proof of limits and devices.
 
 ## Addendum — the repository's HEAD is the truth; a wrong pin is loud (2026-09-05)
 

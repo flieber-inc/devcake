@@ -52,20 +52,19 @@ def test_both_steps_share_exactly_the_per_run_workspace():
     assert steps["run_dev"]["with"]["volumes"] == [ws]
 
 
-def test_both_steps_thread_the_container_limits_nested():
-    """ContainerLimits ride the NESTED `resources:` key on BOTH steps —
-    nested ON PURPOSE at Dagu 2.13.0 (its host: decode lacks mapstructure
-    Squash, so the flat form silently drops embedded Resources fields —
-    measured; upstream fix dagucloud/dagu#2557). When a future bump ships
-    the fix, the nested form stops matching: FLATTEN the keys into host:
-    and update this pin WITH a live inspect proof (Memory lands nonzero)."""
+def test_both_steps_thread_the_container_limits_flat():
+    """ContainerLimits ride FLAT under `host:` on BOTH steps — Docker's own
+    HostConfig JSON shape, which Dagu decodes since 2.14.0 (dagucloud/
+    dagu#2557: the map is decoded nested then squashed, flat wins on
+    conflict; at 2.13.0 only the nested `resources:` key landed). Never
+    both forms. Live inspect proof on every Dagu bump (docs/13 §4)."""
     steps = _steps()
     for sid in ("provision", "run_dev"):
         host = steps[sid]["with"]["host"]
-        res = host["resources"]
-        assert res["Memory"] == "${params.MEMORY_BYTES}"
-        assert res["NanoCPUs"] == "${params.NANO_CPUS}"
-        assert res["PidsLimit"] == "${params.PIDS}"
+        assert "resources" not in host, "one form only — flat under host:"
+        assert host["Memory"] == "${params.MEMORY_BYTES}"
+        assert host["NanoCPUs"] == "${params.NANO_CPUS}"
+        assert host["PidsLimit"] == "${params.PIDS}"
         assert host["NetworkMode"] == "devcake_runtime"
         # env must ride the SDK container.Env list — the docker.run `env:`
         # key is silently DROPPED by 2.13.0's decode (measured: a hello run
@@ -146,8 +145,8 @@ def test_both_steps_carry_the_nested_engine_knobs():
     userns/mount syscall set — inline in the DAG (the Docker API takes
     profile CONTENT; only the docker CLI reads files). NOT unconfined: this
     pin json-parses the blob and asserts the rule, so a lazy
-    'seccomp=unconfined' can never slip in. /dev/fuse rides the nested
-    Resources block (embedded-struct decode, dagucloud/dagu#2557) as the
+    'seccomp=unconfined' can never slip in. /dev/fuse rides `host:` flat
+    (Docker's HostConfig shape, decoded since dagucloud/dagu#2557) as the
     fuse-overlayfs fallback for kernels <5.13."""
     import json
     steps = _steps()
@@ -173,7 +172,7 @@ def test_both_steps_carry_the_nested_engine_knobs():
                    and not r.get("includes") and not r.get("excludes")
                    for r in prof["syscalls"]), \
             "the exact 15-syscall nested-engine allow rule is gone"
-        devs = host["resources"]["Devices"]
+        devs = host["Devices"]
         assert {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse",
                 "CgroupPermissions": "rwm"} in devs
         assert {"PathOnHost": "/dev/net/tun",

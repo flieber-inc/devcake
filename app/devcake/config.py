@@ -388,8 +388,8 @@ class Concurrency(BaseModel):
     # concurrency caps remain the fleet-level throttle; PER-CONTAINER hard
     # limits are real since the 2026-08-13 dev-run migration to Dagu's
     # docker-executor form (ContainerLimits below — the old "Dagu cannot
-    # apply HostConfig limits" era ended with 2.13.0 + the nested-resources
-    # decode, docs/07 §7)
+    # apply HostConfig limits" era ended with 2.13.0; flat under host: since
+    # 2.16.3, docs/07 §7)
     global_max: int = Field(3, ge=1)
 
 

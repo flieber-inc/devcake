@@ -66,7 +66,7 @@ def test_a_profile_missing_a_deny_fails_the_check(monkeypatch, tmp_path):
     m = _mod()
     weak = tmp_path / "weak"
     weak.write_text("deny @{PROC}/* w,\ndeny /sys/firmware/** rwklx,\n")   # dir itself open
-    monkeypatch.setattr(m, "docker_lists", lambda image: (["/sys/firmware"], ["/proc/bus"], {"/proc/bus"}))
+    monkeypatch.setattr(m, "docker_lists", lambda: (["/sys/firmware"], ["/proc/bus"], {"/proc/bus"}))
     assert m.main(["x", str(weak)]) == 1
     good = tmp_path / "good"
     good.write_text("deny /sys/firmware/{,**} rwklx,\ndeny @{PROC}/bus/{,**} wklx,\n")

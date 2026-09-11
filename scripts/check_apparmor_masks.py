@@ -6,7 +6,7 @@ Docker has extended its lists before; this check asks the local daemon
 what it masks TODAY and fails when the profile lacks a deny for any of it.
 
 Runs where Docker is available (CI, an operator host); stdlib-only.
-Usage: check_apparmor_masks.py [profile-path] [image]
+Usage: check_apparmor_masks.py [profile-path]
 """
 from __future__ import annotations
 
@@ -17,14 +17,15 @@ import sys
 from pathlib import Path
 
 PROFILE = Path(__file__).resolve().parents[1] / "scripts" / "apparmor" / "devcake-nested"
-IMAGE = "alpine:3.20"
+# digest-pinned like every other image reference in ops scripts (audit A14)
+IMAGE = "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 
 
-def docker_lists(image: str) -> tuple[list[str], list[str], set[str]]:
+def docker_lists() -> tuple[list[str], list[str], set[str]]:
     """Docker's masked and read-only lists for a default container, and
     which of those paths are directories (a read-only DIRECTORY needs the
     whole tree denied; a file needs only itself)."""
-    cid = subprocess.run(["docker", "create", image, "true"], check=True,
+    cid = subprocess.run(["docker", "create", IMAGE, "true"], check=True,
                          capture_output=True, text=True).stdout.strip()
     try:
         out = subprocess.run(
@@ -37,7 +38,7 @@ def docker_lists(image: str) -> tuple[list[str], list[str], set[str]]:
     probe = " ".join(f'[ -d "{p}" ] && echo "{p}";' for p in readonly)
     dirs = subprocess.run(
         ["docker", "run", "--rm", "--network", "none", "--security-opt", "systempaths=unconfined",
-         image, "sh", "-c", probe], check=False, capture_output=True, text=True).stdout.split()
+         IMAGE, "sh", "-c", probe], check=False, capture_output=True, text=True).stdout.split()
     return masked, readonly, set(dirs)
 
 
@@ -143,8 +144,7 @@ def _tree_covered(path: str, rules: list[tuple[str, str]], need: str,
 
 def main(argv: list[str]) -> int:
     profile = Path(argv[1]) if len(argv) > 1 else PROFILE
-    image = argv[2] if len(argv) > 2 else IMAGE
-    masked, readonly, dirs = docker_lists(image)
+    masked, readonly, dirs = docker_lists()
     rules = deny_rules(profile.read_text())
     problems = []
     for p in masked:

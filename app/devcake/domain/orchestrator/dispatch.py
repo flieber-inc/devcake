@@ -412,31 +412,38 @@ def _reference_repos_note(mgr, primary: str) -> str:
     return body
 
 
-def _nested_engine_note(mgr=None) -> str:
-    """One honest line for the Dev when the host's newest nested-engine
-    receipt is red (docs/11 `bake_status.nested`, ADR-0023 addendum): the
-    engine inside the container will not work here, so the Dev should not
-    spend turns on it or report it as a discovery. Empty when the receipt
-    is green or absent — the note is environment, not playbook content,
-    so it rides every stage prompt after the playbook, whatever template
-    the operator chose."""
+def _environment_note() -> str:
+    """One code-owned section about THIS host's container engine, on every
+    stage prompt after the playbook (docs/07 §7a): what `docker` is inside
+    the container, and — when the host's newest nested-engine receipt is
+    red (docs/11 `bake_status.nested`, ADR-0023 addendum) — that it will
+    not work here, so the Dev verifies otherwise, spends no turns on it,
+    and does not report the environment as a discovery. Appended as a
+    kwarg, never a template placeholder an operator override could drop."""
     from ...bake_status import read_bake_status
     try:
         nested = (read_bake_status() or {}).get("nested")
     except Exception:  # noqa: BLE001 — a status hiccup never blocks a dispatch
-        return ""
+        nested = None
     if not isinstance(nested, dict) or nested.get("rig_ok"):
-        return ""
+        return ENVIRONMENT_NOTE
     why = str(nested.get("first_red") or "the host's nested-engine probe is red")
-    return NESTED_ENGINE_UNAVAILABLE_NOTE.format(why=why)
+    return ENVIRONMENT_NOTE + NESTED_ENGINE_UNAVAILABLE_NOTE.format(why=why)
 
 
-NESTED_ENGINE_UNAVAILABLE_NOTE = """
-### This host: nested containers are unavailable
-`docker` / `podman` inside this container will not work here — the host's
-nested-engine probe is red: {why}. Verify with local services and test
-doubles instead of `docker compose`; do not spend turns on the engine, and
-facts about this run's environment are not discoveries.
+ENVIRONMENT_NOTE = """
+### This host's container engine
+`docker` here is a rootless engine (podman) inside your own container: no
+daemon socket (tools that need `DOCKER_HOST` or `/var/run/docker.sock` will
+not find one), images are pulled per run and count against registry
+pull limits, and the host is reachable as `host.containers.internal`.
+"""
+
+NESTED_ENGINE_UNAVAILABLE_NOTE = """**Nested containers are unavailable on this host** — the host's
+nested-engine probe is red: {why}. `docker` / `podman` will not work here.
+Verify with local services and test doubles instead of `docker compose`;
+do not spend turns on the engine, and facts about this run's environment
+are not discoveries.
 """
 
 
@@ -676,7 +683,7 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         ref_note = _reference_repos_note(mgr, repo_name)
-        env_note = _nested_engine_note(mgr)
+        env_note = _environment_note()
         ident = _identifying_prompt(mgr, dev_type)
         playbook = _pb(mtype.value)
         prompt = {

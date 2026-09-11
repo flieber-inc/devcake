@@ -27,11 +27,12 @@ from .core import (
     drop_receipts_missing_images,
     house_from_dockerfile,
     pins_moved_with_tag,
-    carry_last,
+    attach_newest_nested,
     carry_last_prune,
     nested_probe_due,
-    nested_projection,
     newest_nested_receipt,
+    probe_image_candidates,
+    resolve_apparmor_profile,
     prune_outcome,
     receipts_to_push,
     image_ref,
@@ -612,7 +613,7 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     status = carry_last_prune(previous, status)
     status = publish_nested(
         work=work, previous=previous, status=status, baked=baked_images,
-        local_images=listed, trace_id=trace_id, parent=root_id)
+        local_images=listed, tag=tag, trace_id=trace_id, parent=root_id)
     write_status(work / STATUS, status)     # the local copy is what the
     #                                         heartbeat and the next tick read
     try:
@@ -640,23 +641,25 @@ def _dag_seccomp_sha256() -> str:
 
 
 def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
-                   local_images, trace_id: str = "", parent: str = "") -> dict:
+                   local_images, tag: str, trace_id: str = "",
+                   parent: str = "") -> dict:
     """The nested-engine receipt in the bake status. After a green harness
     bake — or when the newest receipt no longer describes the contract
     the stack runs — the probe replays the dev-run contract against a
     harness image; the newest receipt (hand-run ones included) is then
     published as `nested`. Never fatal, never gating: a red rig degrades
-    Devs and says so on every surface, it does not unstaff them."""
+    Devs and says so on every surface, it does not unstaff them. The
+    profile name comes from the checkout's .env — what compose handed the
+    DAG — never from this process's environment alone (a supervised baker
+    has none of it)."""
     factory = REPO / ".factory"
     receipt = newest_nested_receipt(factory)
-    profile = os.environ.get("DEVCAKE_APPARMOR_PROFILE", "docker-default")
+    profile = resolve_apparmor_profile(REPO, os.environ)
     due = nested_probe_due(baked_now=bool(baked), receipt=receipt,
                            apparmor_profile=profile,
                            seccomp_sha256=_dag_seccomp_sha256())
-    image = baked[-1] if baked else next(
-        (str(ref) for ref in (local_images or [])
-         if str(ref).startswith("devcake/dev-")
-         and not str(ref).startswith("devcake/dev-hello")), "")
+    candidates = probe_image_candidates(local_images, tag=tag)
+    image = baked[-1] if baked else (candidates[0] if candidates else "")
     if due and image:
         p0 = time.time_ns()
         _, sid = new_ids()
@@ -677,10 +680,7 @@ def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
             status="ok" if rc == 0 else "error", image=image,
             apparmor_profile=profile,
             first_red=str((receipt or {}).get("first_red") or "")))
-    proj = nested_projection(receipt)
-    if proj is not None:
-        return {**status, "nested": proj}
-    return carry_last(previous, status, "nested")
+    return attach_newest_nested(status, factory, previous)
 
 
 def _watch_log_path() -> Path:
@@ -747,7 +747,9 @@ def main(argv: list[str] | None = None) -> int:
                     current = json.loads(path.read_text())
                 except (OSError, json.JSONDecodeError):
                     current = {}
-            publish_status(work, current or {"state": "ready", "jobs": []})
+            # a hand-run nested probe must show within a tick, idle or not
+            publish_status(work, attach_newest_nested(
+                current or {"state": "ready", "jobs": []}, REPO / ".factory"))
             # Wake often enough to see a prune request; skip_reconcile already
             # avoided the digest/bake work.
             time.sleep(INTERVAL)

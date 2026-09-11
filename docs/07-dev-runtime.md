@@ -378,9 +378,12 @@ for EVERY container the DAG launches, hello included — the accepted-risk
 row lives in `14` §6. Whether the engine actually works on THIS host is a
 measured fact, not a promise: the host baker replays the contract after
 every harness bake (`13` §0 rig receipt, `/health` `bake_status.nested`),
-and when it is red the Dev's prompt ends with one line saying containers
-are unavailable here — verify with local services, spend no turns on the
-engine, and do not report the environment as a discovery.
+and every Dev prompt ends its playbook with a short code-owned section
+saying what `docker` is inside the container (a rootless engine, no daemon
+socket, images pulled per run, the host's name); when the receipt is red
+the section adds that containers are unavailable here — verify with local
+services, spend no turns on the engine, and do not report the environment
+as a discovery.
 Nested storage lives under $HOME → per-run ephemeral; nested writes onto
 the /workspace BIND persist past the run as foreign-uid files, so the DAG's
 exit handler re-chowns the workspace to uid 1000 at run end (success,

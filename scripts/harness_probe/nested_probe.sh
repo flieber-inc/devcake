@@ -50,10 +50,30 @@ fi
 # The profile name the real runs use: devcake up derives it into .env and
 # compose hands it to the DAG — the receipt must replay THAT value, so a
 # process-env override is honored only when set on purpose.
-if [[ -z "${DEVCAKE_APPARMOR_PROFILE:-}" && -f .env ]]; then
-  DEVCAKE_APPARMOR_PROFILE="$(sed -n 's/^DEVCAKE_APPARMOR_PROFILE=//p' .env | tail -1)"
+# .env first (the value compose handed the DAG), then the process env,
+# then Docker's default — the same order the baker resolves it in.
+ENV_PROFILE=""
+if [[ -f .env ]]; then
+  ENV_PROFILE="$(python3 - <<'PYENV'
+import re, sys
+val = ""
+for raw in open(".env", encoding="utf-8", errors="replace"):
+    line = raw.strip().rstrip("\r")
+    if not line or line.startswith("#"):
+        continue
+    if line.startswith("export "):
+        line = line[7:].lstrip()
+    m = re.match(r"DEVCAKE_APPARMOR_PROFILE\s*=\s*(.*)$", line)
+    if m:
+        v = m.group(1).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        val = v
+sys.stdout.write(val)
+PYENV
+)"
 fi
-APPARMOR_PROFILE="${DEVCAKE_APPARMOR_PROFILE:-docker-default}"
+APPARMOR_PROFILE="${ENV_PROFILE:-${DEVCAKE_APPARMOR_PROFILE:-docker-default}}"
 PROBE_TIMEOUT="${NESTED_PROBE_TIMEOUT:-300}"
 # The DAG launches Dev containers on the run network; when the stack is
 # up the receipt replays that too, otherwise Docker's default bridge.
@@ -122,14 +142,14 @@ chmod 644 "$WS/np_inner.sh"
 echo "── nested_probe: $IMAGE on ${HOST_OS} kernel ${KERNEL} (engine ${ENGINE}, ${ARCH}) apparmor=${APPARMOR_PROFILE} network=${RUN_NETWORK:-bridge}"
 NET_ARGS=()
 if [[ -n "$RUN_NETWORK" ]]; then NET_ARGS=(--network "$RUN_NETWORK"); fi
-# GNU timeout is absent on stock macOS — the cap is best-effort there.
-TIMEOUT_CMD=()
-if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_CMD=(timeout --kill-after=15 "$PROBE_TIMEOUT")
-fi
+# Portable cap (no GNU timeout on stock macOS): a named container and a
+# background watchdog that force-removes it — the daemon kills the whole
+# process tree, so a wedged inner pull cannot outlive the probe.
+NP_NAME="np-$STAMP"
+( sleep "$PROBE_TIMEOUT"; docker rm -f "$NP_NAME" >/dev/null 2>&1 ) &
+WATCHDOG=$!
 set +e
-${TIMEOUT_CMD[@]+"${TIMEOUT_CMD[@]}"} \
-docker run --rm \
+docker run --rm --name "$NP_NAME" \
   --security-opt seccomp="$(pwd)/$SECCOMP" \
   --security-opt apparmor="$APPARMOR_PROFILE" \
   --security-opt systempaths=unconfined \
@@ -141,9 +161,12 @@ docker run --rm \
   "$IMAGE" /workspace/np_inner.sh > "$LOG" 2>&1
 DOCKER_RC=$?
 set -e
-if [[ "$DOCKER_RC" -eq 124 || "$DOCKER_RC" -eq 137 ]]; then
+if kill -0 "$WATCHDOG" 2>/dev/null; then
+  kill "$WATCHDOG" 2>/dev/null; wait "$WATCHDOG" 2>/dev/null || true
+else
   echo "NP_TIMEOUT=1 (outer run exceeded ${PROBE_TIMEOUT}s)" >> "$LOG"
 fi
+docker rm -f "$NP_NAME" >/dev/null 2>&1 || true
 sed 's/^/   /' "$LOG"
 
 np_uid() {

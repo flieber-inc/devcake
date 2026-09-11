@@ -376,7 +376,8 @@ def test_up_derives_the_apparmor_profile_and_never_refuses(monkeypatch, tmp_path
         monkeypatch.setattr(up_mod, name, lambda *a, **k: None)
 
     def host(**kw):
-        base = dict(enabled=True, loaded=None, installed=False, current=None, parser=True)
+        base = dict(enabled=True, loaded=None, installed=False, current=None, parser=True,
+                    compiles=None, applies=None)
         base.update(kw)
         monkeypatch.setattr(up_mod, "apparmor_facts",
                             lambda **_: doctor.ApparmorFacts(**base))
@@ -400,6 +401,14 @@ def test_up_derives_the_apparmor_profile_and_never_refuses(monkeypatch, tmp_path
     out = capsys.readouterr().out
     assert "DEVCAKE_APPARMOR_PROFILE=devcake-nested" in (tmp_path / ".env").read_text()
     assert "WARNING" not in out
+
+    # installed but the daemon refuses it (older parser, load failed):
+    # docker-default, with the cause named
+    host(enabled=True, loaded=None, installed=True, compiles=False, applies=False)
+    assert up_mod.run_up(up_mod.UpOptions(), repo=tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "DEVCAKE_APPARMOR_PROFILE=docker-default" in (tmp_path / ".env").read_text()
+    assert "daemon cannot apply it" in out and "4.0 or newer" in out
 
     host(enabled=True, loaded=True, installed=True, current=False)
     assert up_mod.run_up(up_mod.UpOptions(), repo=tmp_path) == 0
@@ -436,12 +445,54 @@ def test_status_says_whether_devs_can_run_containers():
         "nested": {"rig_ok": True, "measured_at": "20260910T235021Z",
                    "first_red": ""}}}
     lines = harness_lines(health)
-    assert "  nested engine: ok — Devs can run containers (measured 23:50 UTC)" in lines
+    assert "  nested engine: ok — Devs can run containers (measured 2026-09-10 23:50 UTC)" in lines
     health["bake_status"]["nested"] = {
         "rig_ok": False, "measured_at": "20260910T220000Z",
         "first_red": "the engine cannot create a user namespace (uid_map: EPERM)"}
     lines = harness_lines(health)
     assert ("  nested engine: unavailable — the engine cannot create a user "
-            "namespace (uid_map: EPERM) (measured 22:00 UTC)") in lines
+            "namespace (uid_map: EPERM) (measured 2026-09-10 22:00 UTC)") in lines
     del health["bake_status"]["nested"]
     assert not any("nested engine" in line for line in harness_lines(health))
+
+
+def test_up_release_archives_dagu_state_before_the_re_pin(monkeypatch, tmp_path, capsys):
+    """A re-pinned Dagu migrates its state store on first start; the
+    archive taken first is the rollback path. Dry-run prints the command;
+    a failed archive warns and never blocks the bring-up."""
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n  dagu:\n    image: ghcr.io/dagucloud/dagu:2.16.3@sha256:abc\n")
+    monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "ghcr.io/dagucloud/dagu:2.13.0")
+    monkeypatch.setattr(up_mod, "_dagu_volume", lambda repo: "devcake_dagu_data")
+    up_mod._dagu_backup(tmp_path, as_json=False, dry_run=True)
+    out = capsys.readouterr().out
+    assert "re-pins Dagu 2.13.0 → 2.16.3" in out and "Would archive" in out
+    assert "devcake_dagu_data:/from:ro" in out and "tar czf /to/dagu_data-" in out
+    assert not (tmp_path / ".factory" / "backups").exists()
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        dest = tmp_path / ".factory" / "backups"
+        for part in cmd:
+            if part.startswith("/to/"):
+                (dest / part[4:]).write_bytes(b"x" * 2048)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(up_mod.subprocess, "run", fake_run)
+    up_mod._dagu_backup(tmp_path, as_json=False)
+    out = capsys.readouterr().out
+    assert "Dagu state archived (2 KiB)" in out and calls and calls[0][0] == "docker"
+
+    monkeypatch.setattr(up_mod.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "no space"))
+    up_mod._dagu_backup(tmp_path, as_json=False)
+    out = capsys.readouterr().out
+    assert "WARNING: the Dagu archive failed (no space)" in out and "continuing" in out
+
+    # same pin → nothing said
+    monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "ghcr.io/dagucloud/dagu:2.16.3")
+    up_mod._dagu_backup(tmp_path, as_json=False)
+    assert capsys.readouterr().out == ""

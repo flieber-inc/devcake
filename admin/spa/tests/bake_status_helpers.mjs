@@ -47,11 +47,11 @@ check("nested engine: no receipt → empty; green and red sentences", () => {
   assert.equal(describeNestedEngine({ state: "ready" }), "");
   assert.equal(
     describeNestedEngine({ nested: { rig_ok: true, measured_at: "20260910T235021Z", first_red: "" } }),
-    "Nested engine: Devs can run containers on this host (measured 23:50 UTC).");
+    "Nested engine: Devs can run containers on this host (measured 2026-09-10 23:50 UTC).");
   assert.equal(
     describeNestedEngine({ nested: { rig_ok: false, measured_at: "20260910T220000Z",
       first_red: "the engine cannot create a user namespace (uid_map: EPERM)" } }),
-    "Nested engine unavailable: the engine cannot create a user namespace (uid_map: EPERM) (measured 22:00 UTC). Devs are told so in their prompt; runs still launch.");
+    "Nested engine unavailable: the engine cannot create a user namespace (uid_map: EPERM) (measured 2026-09-10 22:00 UTC). Devs are told so in their prompt; runs still launch.");
   assert.equal(
     describeNestedEngine({ nested: { rig_ok: false } }),
     "Nested engine unavailable: see the probe receipt. Devs are told so in their prompt; runs still launch.");

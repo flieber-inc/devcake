@@ -148,12 +148,15 @@ def test_version_pin_check_reports_drift_between_checkout_and_stack(tmp_path, mo
     assert not scratch.ok and "override is set in this shell" in scratch.detail
 
 
-def test_apparmor_profile_check_reads_the_host_in_two_tiers(tmp_path, monkeypatch):
-    """docs/13: the Dev-container AppArmor profile is soft everywhere. No
-    AppArmor → ok. AppArmor active: loaded per the kernel's list → ok;
-    list unreadable (stock Ubuntu without root) → the file under
-    /etc/apparmor.d/ stands in; absent → the two install commands, printed
-    only; installed but not this checkout's bytes → outdated."""
+def test_apparmor_profile_check_asks_the_daemon_first(tmp_path, monkeypatch):
+    """docs/13: the Dev-container AppArmor profile is soft everywhere.
+    Evidence order: the daemon (docker info says whether AppArmor is on at
+    all; a throwaway container names the profile — definitive), the
+    kernel's profile list (root-only on stock Ubuntu), then the installed
+    file plus the host parser compiling the checkout's copy (an older
+    parser rejects the userns rule: install succeeds, load fails). The
+    check also flags a .env that names a profile the host cannot apply."""
+    import subprocess
     from test_devcake_cli_setup import _ensure_cli_importable
     _ensure_cli_importable()
     from devcake_cli import doctor
@@ -164,37 +167,92 @@ def test_apparmor_profile_check_reads_the_host_in_two_tiers(tmp_path, monkeypatc
     enabled = tmp_path / "enabled"
     profiles = tmp_path / "profiles"
     installed = tmp_path / "etc-devcake-nested"
+    world = {"info": '["name=apparmor","name=seccomp"]', "images": "devcake/dev-hello:v1\n",
+             "run_rc": 0, "run_err": "", "parser_rc": 0}
+    seen: list[list[str]] = []
+
+    def run(cmd, **kw):
+        seen.append(list(cmd))
+        name = cmd[0].rsplit("/", 1)[-1]
+        if name == "docker" and cmd[1] == "info":
+            return subprocess.CompletedProcess(cmd, 0, world["info"], "")
+        if name == "docker" and cmd[1] == "images":
+            return subprocess.CompletedProcess(cmd, 0, world["images"], "")
+        if name == "docker" and cmd[1] == "run":
+            return subprocess.CompletedProcess(cmd, world["run_rc"], "", world["run_err"])
+        if name == "apparmor_parser":
+            return subprocess.CompletedProcess(cmd, world["parser_rc"], "", "")
+        raise AssertionError(cmd)
+
+    parser = "apparmor_parser"
 
     def facts():
-        return doctor.apparmor_facts(repo_root=tmp_path, enabled_path=enabled,
+        return doctor.apparmor_facts(repo_root=tmp_path, run=run, docker="docker",
+                                     parser=parser, enabled_path=enabled,
                                      profiles_path=profiles, installed_path=installed)
 
+    # the daemon has no AppArmor (WSL2, Desktop, SELinux distros) → ok, nothing asked
+    world["info"] = '["name=seccomp"]'
     off = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
-    assert off.ok and not off.hard and "no AppArmor on this host" in off.detail
+    assert off.ok and not off.hard and "no AppArmor on the Docker host" in off.detail
+    assert not any(c[1] == "run" for c in seen)
 
-    enabled.write_text("Y\n")
+    # the daemon is unreachable → the CLI host's kernel decides
+    world["info"] = ""
+    monkeypatch.setattr(doctor, "_daemon_has_apparmor", lambda *a: None)
+    enabled.write_text("N\n")
+    assert not facts().enabled
+    monkeypatch.undo()
+
+    world["info"] = '["name=apparmor","name=seccomp"]'
     missing = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert not missing.ok and not missing.hard
-    assert "not loaded" in missing.detail and "printed only" in missing.detail
+    assert "unusable: it is not loaded" in missing.detail and "printed only" in missing.detail
     assert f"sudo install -m 0644 {ours / 'devcake-nested'} /etc/apparmor.d/" in missing.detail
     assert "sudo apparmor_parser -r /etc/apparmor.d/devcake-nested" in missing.detail
 
-    # tier 2: the kernel list is unreadable; the installed file stands in
+    # installed, kernel list unreadable, the daemon applies it → ok (definitive)
     installed.write_text("profile devcake-nested {}\n")
+    ok = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert ok.ok and "the daemon applies it" in ok.detail
+    assert facts().usable and facts().applies is True and facts().compiles is True
+
+    # installed but the daemon refuses it (older parser: install ok, load failed)
+    world["run_rc"], world["run_err"] = 125, "unable to apply apparmor profile: no such file"
+    world["parser_rc"] = 1
+    refused = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not refused.ok and "daemon cannot apply it" in refused.detail
+    assert "4.0 or newer" in refused.detail and not facts().usable
+    # ... and a .env that still names it is called out
+    (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=devcake-nested\n")
+    stale = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert ".env still names it — run devcake up" in stale.detail
+    (tmp_path / ".env").unlink()
+
+    # no image to probe with and no parser on the host → the file stands in
+    world["run_rc"], world["run_err"], world["parser_rc"] = 0, "", 0
+    world["images"] = ""
+    parser = None
+    monkeypatch.setattr(doctor.shutil, "which", lambda *a, **k: "docker" if a[0] == "docker" else None)
     tier2 = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
     assert tier2.ok and "loaded state unreadable without root" in tier2.detail
+    assert facts().compiles is None and not facts().parser
+    monkeypatch.undo()
+    parser = "apparmor_parser"
+    world["images"] = "devcake/dev-hello:v1\n"
 
     installed.write_text("profile devcake-nested { # older }\n")
-    stale = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
-    assert not stale.ok and "outdated" in stale.detail and "apparmor_parser -r" in stale.detail
-
-    # tier 1: the kernel list is readable and names the profile
-    profiles.write_text("docker-default (enforce)\ndevcake-nested (enforce)\n")
+    outdated = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not outdated.ok and "outdated" in outdated.detail and "apparmor_parser -r" in outdated.detail
     installed.write_text("profile devcake-nested {}\n")
-    loaded = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
-    assert loaded.ok and "devcake-nested loaded" in loaded.detail
-    assert facts().usable
 
-    profiles.write_text("docker-default (enforce)\n")
-    unloaded = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
-    assert not unloaded.ok and "not loaded" in unloaded.detail
+    # usable, but .env still names docker-default → run devcake up
+    (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=docker-default\n")
+    switch = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not switch.ok and "still names docker-default" in switch.detail
+    (tmp_path / ".env").unlink()
+
+    # the kernel list readable and naming it, daemon says yes
+    profiles.write_text("docker-default (enforce)\ndevcake-nested (enforce)\n")
+    loaded = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert loaded.ok and facts().loaded is True

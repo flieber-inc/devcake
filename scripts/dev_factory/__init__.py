@@ -41,7 +41,10 @@ from .core import (
     pins_moved_with_tag,
     carry_last,
     carry_last_prune,
-    nested_key,
+    attach_newest_nested,
+    env_file_value,
+    probe_image_candidates,
+    resolve_apparmor_profile,
     nested_probe_due,
     nested_projection,
     newest_nested_receipt,
@@ -64,7 +67,10 @@ from .core import (
 
 __all__ = [
     "carry_last",
-    "nested_key",
+    "attach_newest_nested",
+    "env_file_value",
+    "probe_image_candidates",
+    "resolve_apparmor_profile",
     "nested_probe_due",
     "nested_projection",
     "newest_nested_receipt",

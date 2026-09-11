@@ -108,7 +108,8 @@ def harness_lines(health: dict | None) -> list[str]:
     nested = bake.get("nested")
     if isinstance(nested, dict):
         when = str(nested.get("measured_at") or "")
-        when = f"{when[9:11]}:{when[11:13]} UTC" if len(when) >= 13 else ""
+        when = (f"{when[0:4]}-{when[4:6]}-{when[6:8]} {when[9:11]}:{when[11:13]} UTC"
+                if len(when) >= 13 else "")
         tail = f" (measured {when})" if when else ""
         if nested.get("rig_ok"):
             out.append(f"  nested engine: ok — Devs can run containers{tail}")

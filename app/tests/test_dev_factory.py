@@ -2349,9 +2349,6 @@ def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
     assert red["rig_ok"] is False and "user namespace" in red["first_red"]
     assert factory.nested_projection(None) is None
 
-    assert factory.nested_key(old) != factory.nested_key(new)   # profile differs
-    assert factory.nested_key(new) == factory.nested_key(dict(new, first_red="x"))
-
     due = lambda **kw: factory.nested_probe_due(**{  # noqa: E731
         "baked_now": False, "receipt": new, "apparmor_profile": "devcake-nested",
         "seccomp_sha256": "aaa", **kw})
@@ -2359,7 +2356,10 @@ def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
     assert not due()                                    # green + current → skip
     assert due(apparmor_profile="docker-default")       # the stack moved
     assert due(seccomp_sha256="bbb")
-    assert not due(receipt=old)                         # red waits for a bake
+    # a RED receipt measured under another profile re-measures too: the
+    # operator loads the profile and runs devcake up, which bakes nothing
+    assert due(receipt=old)
+    assert not due(receipt=old, apparmor_profile="docker-default")   # red, same contract
     assert not due(receipt=None)
 
     # the fact rides every status until a tick sets it anew
@@ -2367,3 +2367,43 @@ def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
     assert factory.carry_last(previous, {"state": "ready"}, "nested")["nested"] == proj
     assert factory.carry_last(previous, {"state": "ready", "nested": red}, "nested")["nested"] == red
     assert "nested" not in factory.carry_last(None, {"state": "ready"}, "nested")
+
+
+def test_apparmor_profile_comes_from_the_checkout_env_file(tmp_path):
+    """The supervised baker's environment carries no DEVCAKE_APPARMOR_PROFILE
+    (its env file is six keys); the value compose handed the DAG is the
+    one in .env, so that is what the probe replays — process env only as
+    a fallback, Docker's default last."""
+    factory = _load_factory()
+    assert factory.resolve_apparmor_profile(tmp_path, {}) == "docker-default"
+    assert factory.resolve_apparmor_profile(tmp_path, {"DEVCAKE_APPARMOR_PROFILE": "x"}) == "x"
+    (tmp_path / ".env").write_text(
+        "# comment\r\nDEVCAKE_TAG=v1\nexport DEVCAKE_APPARMOR_PROFILE=\"devcake-nested\"\r\n")
+    assert factory.env_file_value(tmp_path / ".env", "DEVCAKE_APPARMOR_PROFILE") == "devcake-nested"
+    assert factory.resolve_apparmor_profile(tmp_path, {"DEVCAKE_APPARMOR_PROFILE": "x"}) == "devcake-nested"
+    (tmp_path / ".env").write_text("DEVCAKE_APPARMOR_PROFILE=\n")
+    assert factory.resolve_apparmor_profile(tmp_path, {}) == "docker-default"
+    assert factory.env_file_value(tmp_path / "missing", "K") is None
+
+
+def test_probe_picks_the_current_tag_and_never_hello_or_untagged():
+    factory = _load_factory()
+    imgs = ["devcake/dev-hello:v2", "devcake/dev-grok-build:<none>",
+            "devcake/dev-grok-build:v1-1.0.4", "devcake/dev-claude-code:v2-2.1.229",
+            "nginx:latest"]
+    assert factory.probe_image_candidates(imgs, tag="v2") == [
+        "devcake/dev-claude-code:v2-2.1.229", "devcake/dev-grok-build:v1-1.0.4"]
+    assert factory.probe_image_candidates(None, tag="v2") == []
+
+
+def test_newest_receipt_is_attached_on_every_publication(tmp_path):
+    factory = _load_factory()
+    d = tmp_path / "nested_probe"
+    d.mkdir()
+    assert "nested" not in factory.attach_newest_nested({"state": "ready"}, tmp_path)
+    prev = {"nested": {"rig_ok": False, "first_red": "old"}}
+    assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)["nested"]["first_red"] == "old"
+    (d / "receipt-20260911T010000Z.json").write_text(json.dumps(
+        {"measured_at": "20260911T010000Z", "rig_ok": True, "first_red": ""}))
+    got = factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)
+    assert got["nested"]["rig_ok"] is True

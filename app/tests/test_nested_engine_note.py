@@ -1,10 +1,10 @@
-"""ADR-0023 addendum — the honest line about this host's nested engine.
+"""ADR-0023 addendum — the code-owned section about this host's engine.
 
-The baker publishes the newest nested-engine receipt as `bake_status.nested`
-(docs/11); when it is red, every dispatched Dev's prompt ends its playbook
-with one code-owned section saying containers will not work here — not a
-template placeholder an operator override could drop. Green or absent
-receipt → nothing is added.
+Every dispatched Dev's prompt ends its playbook with one section saying
+what `docker` is inside the container; when the baker's newest
+nested-engine receipt (`bake_status.nested`, docs/11) is red, the section
+adds that containers will not work here — never a template placeholder an
+operator override could drop.
 """
 import json
 
@@ -25,31 +25,35 @@ def _status(tmp_path, monkeypatch, nested):
     (tmp_path / "harness_bake_status.json").write_text(json.dumps(body))
 
 
-def test_note_is_empty_without_a_receipt_or_with_a_green_one(tmp_path, monkeypatch):
+def test_note_describes_the_engine_and_stays_green_without_a_red_receipt(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path / "nothing"))
-    assert dispatch._nested_engine_note() == ""
+    note = dispatch._environment_note()
+    assert note == dispatch.ENVIRONMENT_NOTE
+    assert "rootless engine (podman)" in note and "no\ndaemon socket" in note
+    assert "unavailable" not in note
     _status(tmp_path, monkeypatch, None)
-    assert dispatch._nested_engine_note() == ""
+    assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
     _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": ""})
-    assert dispatch._nested_engine_note() == ""
+    assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
 
 
 def test_note_names_the_first_red_step_in_plain_words(tmp_path, monkeypatch):
     _status(tmp_path, monkeypatch, {
         "rig_ok": False,
         "first_red": "the engine cannot create a user namespace (uid_map: EPERM)"})
-    note = dispatch._nested_engine_note()
-    assert "### This host: nested containers are unavailable" in note
+    note = dispatch._environment_note()
+    assert note.startswith(dispatch.ENVIRONMENT_NOTE)
+    assert "**Nested containers are unavailable on this host**" in note
     assert "uid_map: EPERM" in note
     assert "not discoveries" in note                # the steward rule, restated
     assert "docker compose" in note
     _status(tmp_path, monkeypatch, {"rig_ok": False})
-    assert "probe is red" in dispatch._nested_engine_note()
+    assert "probe is red" in dispatch._environment_note()
 
 
 def test_every_stage_prompt_carries_the_note_after_its_playbook(tmp_path):
     m = mission()
-    note = dispatch.NESTED_ENGINE_UNAVAILABLE_NOTE.format(why="probe red")
+    note = dispatch.ENVIRONMENT_NOTE + dispatch.NESTED_ENGINE_UNAVAILABLE_NOTE.format(why="probe red")
     for build in (
         lambda **kw: onboard_prompt("ID", m, **kw),
         lambda **kw: plan_prompt("ID", m, **kw),
@@ -79,4 +83,5 @@ def test_size_report_counts_the_environment_note(tmp_path):
 def test_dispatch_reads_the_status_without_a_manager(tmp_path, monkeypatch):
     mgr = make_mission_manager(tmp_path)
     _status(tmp_path, monkeypatch, {"rig_ok": False, "first_red": "x"})
-    assert "unavailable" in dispatch._nested_engine_note(mgr)
+    assert "unavailable" in dispatch._environment_note()
+    assert mgr is not None

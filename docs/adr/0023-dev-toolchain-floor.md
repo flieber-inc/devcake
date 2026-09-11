@@ -180,16 +180,24 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    and a host that has not loaded the profile runs under `docker-default`
    with the engine unavailable — never a refusal to launch. Both Dev steps
    also launch with Docker's masked and read-only system paths removed
-   (`MaskedPaths: []`, `ReadonlyPaths: []`): a nested engine's own
-   `mount proc` fails while the parent's `/proc` is partly masked (measured
-   on a current cloud kernel, not on the 6.6 rig), and the profile denies
-   those paths in their place — on hosts without AppArmor that unmasking
-   stands uncompensated, an accepted cost of one static DAG (`14` §6). CI
+   (`MaskedPaths: []`, `ReadonlyPaths: []`). Measured: on a cloud Ubuntu
+   24.04 host (kernel 7.0, engine 29.7) with the profile loaded and the
+   16-syscall rule in place, the nested container's own `mount proc`
+   returns EPERM while Docker's default masks are present and succeeds
+   with them removed; on the WSL2 6.6 rig the nested mount succeeds either
+   way (and a fresh `proc` mounted inside a user namespace shows the
+   masked entries regardless, so on such kernels the masks never guarded
+   a seccomp-widened Dev). The profile denies those paths in their place
+   as path-based hygiene; the unmasking's real exposure is listed in
+   `14` §6 item 2 and is the accepted cost of one static DAG. CI
    compiles the profile (`apparmor_parser`, never loaded there) so a typo
    cannot reach a host.
-4. **Costs, recorded:** the seccomp delta (15 syscalls over default) plus
-   /dev/fuse + /dev/net/tun, applied to EVERY container the dev-run DAG
-   launches, hello included (docs/14 §6); nested images live under the
+4. **Costs, recorded:** the seccomp delta (16 syscalls over default) and
+   the AppArmor profile's `userns`/mount rules — together, a Dev may hold
+   full capabilities inside namespaces it creates, the exposure Ubuntu's
+   unprivileged-userns restriction exists to close (docs/14 §6 item 1) —
+   plus /dev/fuse + /dev/net/tun, applied to EVERY container the dev-run
+   DAG launches, hello included (docs/14 §6); nested images live under the
    harness $HOME → per-run ephemeral (re-pulled each run — egress, no
    cross-run contamination) — with ONE exception: nested writes onto the
    /workspace BIND outlive the run as foreign-uid files, which is why the

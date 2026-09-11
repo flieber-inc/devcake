@@ -414,18 +414,42 @@ def newest_nested_receipt(factory_dir: Path | str) -> dict | None:
     return None
 
 
-def nested_key(receipt: Mapping | None) -> tuple:
-    """What a receipt measured: a change in any of these makes the last
-    verdict stale (a re-pinned profile, a new engine or kernel, a re-baked
-    image, a new seccomp blob) — the same key `nested_probe_due` compares."""
-    if not isinstance(receipt, Mapping):
-        return ()
-    host = receipt.get("host") if isinstance(receipt.get("host"), Mapping) else {}
-    return (str(host.get("kernel") or ""), str(host.get("engine") or ""),
-            str(host.get("security_options") or ""),
-            str(receipt.get("seccomp_sha256") or ""),
-            str(receipt.get("apparmor_profile") or ""),
-            str(receipt.get("image_id") or ""))
+def env_file_value(path: Path | str, key: str) -> str | None:
+    """One value from a dotenv-style file (last assignment wins; quotes,
+    `export `, comments and CR stripped). None when absent or unreadable.
+    Stdlib-only: this runs on the operator host beside the baker."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    value: str | None = None
+    for raw in lines:
+        line = raw.strip().rstrip("\r")
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() != key:
+            continue
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        value = v
+    return value
+
+
+def resolve_apparmor_profile(repo: Path | str, environ: Mapping[str, str]) -> str:
+    """The profile name the run DAG is actually launched with: `.env` as
+    devcake up wrote it (compose hands that value to the dagu service),
+    else the process env, else Docker's default. ONE source for the probe
+    and the baker — a supervised baker has no .env in its environment."""
+    value = env_file_value(Path(repo) / ".env", "DEVCAKE_APPARMOR_PROFILE")
+    if not value:
+        value = (environ.get("DEVCAKE_APPARMOR_PROFILE") or "").strip()
+    return value or "docker-default"
 
 
 def nested_projection(receipt: Mapping | None) -> dict | None:
@@ -452,18 +476,41 @@ def nested_projection(receipt: Mapping | None) -> dict | None:
 def nested_probe_due(*, baked_now: bool, receipt: Mapping | None,
                      apparmor_profile: str, seccomp_sha256: str) -> bool:
     """Run the probe after a green harness bake, and whenever the newest
-    receipt is red or measured a different contract (profile, seccomp) than
-    the stack now runs — never on an ordinary tick with a green, current
-    receipt (the inner alpine pull is egress the baker should not spend
-    every five seconds)."""
+    receipt measured a different contract (profile, seccomp blob) than the
+    stack now runs — red or green, so loading the profile and running
+    devcake up re-measures on the next tick. A receipt that matches the
+    contract is left alone whatever its colour: a red one waits for a bake
+    or a hand-run (the inner image pull is egress the baker should not
+    spend every tick), a green one is the answer."""
     if baked_now:
         return True
     if receipt is None:
         return False            # nothing to compare against; the bake triggers it
-    if not receipt.get("rig_ok"):
-        return False            # red stays red until a bake or a hand-run re-probes
     return (str(receipt.get("apparmor_profile") or "") != apparmor_profile
             or str(receipt.get("seccomp_sha256") or "") != seccomp_sha256)
+
+
+def attach_newest_nested(status: dict, factory_dir: Path | str, previous=None) -> dict:
+    """The newest receipt's projection under `nested` — read on EVERY
+    publication, including the idle tick that skips reconcile, so a
+    hand-run probe is visible within a tick."""
+    proj = nested_projection(newest_nested_receipt(factory_dir))
+    if proj is not None:
+        return {**status, "nested": proj}
+    return carry_last(previous, status, "nested")
+
+
+def probe_image_candidates(local_images, *, tag: str) -> list[str]:
+    """Harness images to probe when no bake happened this tick: the current
+    tag first (the contract the app dispatches), never hello, never an
+    untagged leftover."""
+    refs = [str(r) for r in (local_images or [])
+            if str(r).startswith("devcake/dev-")
+            and not str(r).startswith("devcake/dev-hello")
+            and not str(r).endswith(":<none>")]
+    on_tag = [r for r in refs if r.split(":", 1)[1].startswith(f"{tag}-")
+              or r.split(":", 1)[1] == tag]
+    return on_tag + [r for r in refs if r not in on_tag]
 
 
 def carry_last(previous, status: dict, key: str) -> dict:

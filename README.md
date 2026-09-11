@@ -37,9 +37,32 @@ credentials. Ask your agent to check the
 
 ```bash
 uv tool install .          # install the CLI from the version you will run
-devcake doctor --json      # inspect prerequisites and remedies (AppArmor hosts: run the two commands it prints)
+devcake doctor --json      # inspect prerequisites and remedies
 devcake up --bake          # prepare secrets, build, start, and smoke-test
 ```
+
+**Installing by hand, without an agent.** The doctor prints every failed
+check with its remedy and never runs anything privileged itself. One
+remedy needs `sudo` on hosts that run AppArmor (stock Ubuntu and Debian):
+Devs run a container engine inside their own container, and Docker's
+default profile forbids the mounts that engine needs. The checkout ships a
+profile for Dev containers; install and load it once, between the doctor
+and the bring-up, from the checkout root:
+
+```bash
+sudo install -m 0644 scripts/apparmor/devcake-nested /etc/apparmor.d/
+sudo apparmor_parser -r /etc/apparmor.d/devcake-nested
+```
+
+The first command copies the profile where the AppArmor service loads it at
+every boot; the second loads it now. Then run `devcake up --bake`. Hosts
+without AppArmor (WSL2, Docker Desktop) skip this: the doctor says so and
+nothing else changes. Skipping it on an AppArmor host is not fatal either —
+the stack comes up, Devs simply cannot run containers, and the admin panel,
+`devcake status` and each Dev's own prompt say so until you run the two
+commands and `devcake up` again. A later release may ship a changed
+profile; the doctor then reports it as outdated and the same two commands
+refresh it. Details: [deployment](docs/13-deployment.md).
 
 Have your agent connect a board and repositories with `devcake setup`
 (`--help` lists options), or use the admin UI at

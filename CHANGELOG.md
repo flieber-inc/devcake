@@ -13,6 +13,11 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+## v0.6.5 (2026-09-11)
+
+Patch release in the v0.6 "Kentucky Butter" line. Ships with `devcake-cli` 0.1.9 — upgrade the CLI before `devcake up --release`.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.5).
+
 - **Added — compose inside Dev containers.** The harness images ship a
   pinned podman-compose as the nested engine's compose provider, reached
   through `docker compose` and a `docker-compose` symlink alike, with the

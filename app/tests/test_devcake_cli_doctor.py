@@ -250,6 +250,8 @@ def test_apparmor_profile_check_asks_the_daemon_first(tmp_path, monkeypatch):
     # never trusted once the daemon was asked
     world["run_err"] = "docker: Error response from daemon: cgroup limits unsupported"
     assert facts().applies is False and not facts().usable
+    hiccup = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert "did not attribute to AppArmor" in hiccup.detail and "cgroup limits" in hiccup.detail
     world["run_err"] = "unable to apply apparmor profile: no such file"
     # the host parser rejects it too → the parser is too old, say so
     world["parser_rc"] = 1

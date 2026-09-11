@@ -650,10 +650,13 @@ def profile_still_applies(now: float | None = None) -> bool | None:
                       if r.startswith("devcake/dev-hello:") and not r.endswith(":<none>")),
                      None)
         if image:
+            # the same throwaway the doctor runs (cli/devcake_cli/doctor.py);
+            # here a failure the daemon does not attribute to AppArmor stays
+            # "unknown" — a transient hiccup must not flip every surface red
+            # for a minute, the doctor is where an operator gets the full line
             proc = subprocess.run(
                 ["docker", "run", "--rm", "--network", "none", "--user", "65534:65534",
-                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                 "--pids-limit", "8", "--memory", "32m", "--read-only",
+                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
                  "--security-opt", f"apparmor={profile}", "--entrypoint", "/bin/true",
                  image], capture_output=True, text=True, timeout=90, check=False)
             if proc.returncode == 0:
@@ -752,6 +755,10 @@ def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
     # re-run every tick: one retry every ten minutes until it does
     if due and not baked and time.time() < _PROBE_BACKOFF["until"]:
         due = False
+    if due and not image:
+        # nothing to probe with (no harness image baked yet, or all pruned):
+        # the drift stands until a bake; do not force a tick every minute
+        _PROBE_BACKOFF["until"] = time.time() + PROBE_RETRY_BACKOFF_S
     if due and image:
         before = (receipt or {}).get("measured_at")
         p0 = time.time_ns()

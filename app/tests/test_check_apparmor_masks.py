@@ -54,6 +54,10 @@ def test_coverage_logic_is_not_fooled_by_single_level_or_class_rules():
     assert m._tree_covered("/proc/bus", rules, "w")          # itself via /proc/*, below via /**
     assert not m._tree_covered("/proc/foo", rules, "w")      # one level only, nothing below
     assert not m._tree_covered("/sys/kernel/security", rules, "r")   # below yes, itself no
+    # a literal rule on a DIRECTORY is not a tree; on a file it is enough
+    dir_only = m.deny_rules("deny @{PROC}/bus w,\ndeny @{PROC}/sysrq-trigger rwklx,\n")
+    assert not m._tree_covered("/proc/bus", dir_only, "w", is_dir=True)
+    assert m._tree_covered("/proc/sysrq-trigger", dir_only, "w", is_dir=False)
 
 
 def test_a_profile_missing_a_deny_fails_the_check(monkeypatch, tmp_path):
@@ -62,11 +66,14 @@ def test_a_profile_missing_a_deny_fails_the_check(monkeypatch, tmp_path):
     m = _mod()
     weak = tmp_path / "weak"
     weak.write_text("deny @{PROC}/* w,\ndeny /sys/firmware/** rwklx,\n")   # dir itself open
-    monkeypatch.setattr(m, "docker_lists", lambda image: (["/sys/firmware"], ["/proc/bus"]))
+    monkeypatch.setattr(m, "docker_lists", lambda image: (["/sys/firmware"], ["/proc/bus"], {"/proc/bus"}))
     assert m.main(["x", str(weak)]) == 1
     good = tmp_path / "good"
     good.write_text("deny /sys/firmware/{,**} rwklx,\ndeny @{PROC}/bus/{,**} wklx,\n")
     assert m.main(["x", str(good)]) == 0
+    busonly = tmp_path / "busonly"
+    busonly.write_text("deny /sys/firmware/{,**} rwklx,\ndeny @{PROC}/bus w,\n")   # dir, not tree
+    assert m.main(["x", str(busonly)]) == 1
 
 
 def test_the_shipped_profile_covers_dockers_current_lists():
@@ -81,6 +88,8 @@ def test_the_shipped_profile_covers_dockers_current_lists():
               "/proc/keys", "/proc/latency_stats", "/proc/sched_debug", "/proc/scsi",
               "/proc/timer_list", "/proc/timer_stats", "/sys/devices/virtual/powercap",
               "/sys/firmware"]
-    readonly = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"]
+    readonly = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sysrq-trigger"]
     assert all(m._covered(p, rules, "r") for p in masked)
-    assert all(m._covered(p, rules, "w") for p in readonly)
+    assert all(m._tree_covered(p, rules, "w", is_dir=(p != "/proc/sysrq-trigger"))
+               for p in readonly)
+    assert m._covered("/proc/sys", rules, "w") and "/proc/sys" in m.PARTIAL_READONLY

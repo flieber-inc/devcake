@@ -54,7 +54,7 @@ export function describeNestedEngine(bake) {
   }
   const why = n.first_red ? String(n.first_red) : "see the probe receipt";
   if (n.runs_launch === false) {
-    return `Nested engine unavailable: ${why}${tail}. Every run fails at container create until devcake up is run again.`;
+    return `Nested engine unavailable: ${why}${tail}. Every run fails at container create until the profile is loaded again or devcake up is run.`;
   }
   return `Nested engine unavailable: ${why}${tail}. Devs are told so in their prompt; runs still launch.`;
 }

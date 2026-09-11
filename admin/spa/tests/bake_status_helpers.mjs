@@ -60,7 +60,7 @@ check("nested engine: no receipt → empty; green and red sentences", () => {
     /docker compose is not working/);
   assert.match(
     describeNestedEngine({ nested: { rig_ok: false, runs_launch: false, first_red: "the Docker host no longer applies the AppArmor profile the stack names, so no Dev container can start until it is loaded again" } }),
-    /Every run fails at container create until devcake up is run again\./);
+    /Every run fails at container create until the profile is loaded again or devcake up is run\./);
   assert.equal(
     describeNestedEngine({ nested: { rig_ok: false } }),
     "Nested engine unavailable: see the probe receipt. Devs are told so in their prompt; runs still launch.");

@@ -468,7 +468,7 @@ def test_up_archives_dagu_state_before_a_re_pinned_dagu_starts(monkeypatch, tmp_
         "services:\n  dagu:\n    image: ghcr.io/dagucloud/dagu:2.16.3@sha256:abc\n")
     monkeypatch.setattr(up_mod, "_running_dagu_image", lambda repo: "ghcr.io/dagucloud/dagu:2.13.0")
     monkeypatch.setattr(up_mod, "_dagu_volume", lambda repo: "devcake_dagu_data")
-    monkeypatch.setattr(up_mod, "_dagu_tag_seen_locally", lambda repo, tag: False)
+    monkeypatch.setattr(up_mod, "_dagu_pin_seen_locally", lambda repo, text: False)
     up_mod._dagu_backup(tmp_path, as_json=False, dry_run=True)
     out = capsys.readouterr().out
     assert "re-pins Dagu 2.13.0 → 2.16.3" in out and "Would archive" in out
@@ -506,11 +506,11 @@ def test_up_archives_dagu_state_before_a_re_pinned_dagu_starts(monkeypatch, tmp_
     assert "never run here" in out and "archived" in out and calls
     assert any("dagu_data-from-unknown-" in part for part in calls[1][-1:])
     # ... but a routine down/up with the pin already pulled says nothing
-    monkeypatch.setattr(up_mod, "_dagu_tag_seen_locally", lambda repo, tag: True)
+    monkeypatch.setattr(up_mod, "_dagu_pin_seen_locally", lambda repo, text: True)
     calls.clear()
     up_mod._dagu_backup(tmp_path, as_json=False)
     assert capsys.readouterr().out == "" and not calls
-    monkeypatch.setattr(up_mod, "_dagu_tag_seen_locally", lambda repo, tag: False)
+    monkeypatch.setattr(up_mod, "_dagu_pin_seen_locally", lambda repo, text: False)
 
     # ... and without a volume there is nothing to archive, silently
     monkeypatch.setattr(up_mod, "_dagu_volume", lambda repo: None)
@@ -560,3 +560,56 @@ def test_status_says_whether_devs_can_run_containers():
     del health["bake_status"]["nested"]
     assert not any("nested engine" in line for line in harness_lines(health))
 
+
+
+def test_dagu_pin_seen_locally_asks_for_the_digest_not_the_tag(monkeypatch, tmp_path):
+    """Docker stores no tag for a `tag@digest` pull, only the digest — a
+    tag lookup could never fire (measured on the reference rig); the
+    discriminator inspects the digest the compose file pins."""
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+    compose = ("  dagu:\n    image: ghcr.io/dagucloud/dagu:2.16.3@sha256:"
+               + "6" * 64 + "\n")
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "sha256:abc\n", "")
+    monkeypatch.setattr(up_mod.subprocess, "run", fake_run)
+    assert up_mod._dagu_pin_seen_locally(tmp_path, compose)
+    assert seen[0][:3] == ["docker", "image", "inspect"]
+    assert seen[0][3] == "ghcr.io/dagucloud/dagu@sha256:" + "6" * 64
+    monkeypatch.setattr(up_mod.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "No such image"))
+    assert not up_mod._dagu_pin_seen_locally(tmp_path, compose)
+    assert not up_mod._dagu_pin_seen_locally(tmp_path, "image: ghcr.io/dagucloud/dagu:2.16.3\n")
+
+
+def test_archive_rotation_never_evicts_the_newest_versioned_archive(tmp_path):
+    _ensure_cli_importable()
+    import os
+    import time as _t
+    import devcake_cli.up as up_mod
+    names = ["dagu_data-from-2.13.0-20260901T000000Z.tgz",
+             "dagu_data-from-unknown-20260902T000000Z.tgz",
+             "dagu_data-from-unknown-20260903T000000Z.tgz",
+             "dagu_data-from-unknown-20260904T000000Z.tgz",
+             "dagu_data-from-unknown-20260905T000000Z.tgz"]
+    for i, n in enumerate(names):
+        p = tmp_path / n
+        p.write_bytes(b"x")
+        os.utime(p, (1000 + i, 1000 + i))
+    up_mod._rotate_archives(tmp_path)
+    left = sorted(p.name for p in tmp_path.glob("*.tgz"))
+    assert "dagu_data-from-2.13.0-20260901T000000Z.tgz" in left
+    assert len(left) == 4 and "dagu_data-from-unknown-20260902T000000Z.tgz" not in left
+
+
+def test_compose_project_name_comes_from_the_env_then_the_file(monkeypatch, tmp_path):
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+    (tmp_path / "docker-compose.yml").write_text("name: devcake\nservices: {}\n")
+    monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
+    assert up_mod._compose_project(tmp_path) == "devcake"
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "other")
+    assert up_mod._compose_project(tmp_path) == "other"

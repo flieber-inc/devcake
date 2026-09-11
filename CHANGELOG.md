@@ -48,8 +48,9 @@ See the living log and open candidates in
   launch. `devcake up` archives the Dagu state volume under
   `.factory/backups/` (0600, named with the version it came from, newest
   three kept) when the checkout pins a Dagu the volume was not last used
-  with — stack running or stopped; dagu is stopped for the copy and
-  started again at once — a backup for rollback, not a migration; the
+  with — the last container's image decides, or after `devcake down`
+  whether the pinned image was ever pulled here; dagu is stopped for the
+  copy and started again at once — a backup for rollback, not a migration; the
   command is printed when it cannot be taken. The baker re-measures the
   nested-engine receipt after a kernel or engine upgrade and asks the
   daemon every minute whether it still applies the named profile; when it

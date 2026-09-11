@@ -763,10 +763,13 @@ def _env_apparmor_value(repo_root: Path | None) -> str | None:
     if not src.is_file() or not env_path.is_file():
         return None
     import importlib.util
-    spec = importlib.util.spec_from_file_location("devcake_env_value", src)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return (mod.env_file_value(env_path, "DEVCAKE_APPARMOR_PROFILE") or "").strip()
+    try:
+        spec = importlib.util.spec_from_file_location("devcake_env_value", src)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return (mod.env_file_value(env_path, "DEVCAKE_APPARMOR_PROFILE") or "").strip()
+    except Exception:  # noqa: BLE001 — a broken reader never breaks the doctor
+        return None
 
 
 def check_apparmor_profile(
@@ -791,6 +794,10 @@ def check_apparmor_profile(
         if f.compiles is False:
             why = ("this host's apparmor_parser rejects the profile (4.0 or newer "
                    "is needed for the userns rule; check `apparmor_parser --version`)")
+        elif f.applies is False and "apparmor" not in f.applies_error.lower():
+            why = ("a throwaway container naming it failed for a reason the daemon "
+                   "did not attribute to AppArmor, so the name is not trusted"
+                   + (f" [daemon: {f.applies_error}]" if f.applies_error else ""))
         elif f.applies is False and f.installed:
             why = ("the daemon cannot apply it — the file is installed but the "
                    "kernel has no such profile (unloaded, or never loaded); the "

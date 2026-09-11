@@ -20,7 +20,10 @@ PROFILE = Path(__file__).resolve().parents[1] / "scripts" / "apparmor" / "devcak
 IMAGE = "alpine:3.20"
 
 
-def docker_lists(image: str) -> tuple[list[str], list[str]]:
+def docker_lists(image: str) -> tuple[list[str], list[str], set[str]]:
+    """Docker's masked and read-only lists for a default container, and
+    which of those paths are directories (a read-only DIRECTORY needs the
+    whole tree denied; a file needs only itself)."""
     cid = subprocess.run(["docker", "create", image, "true"], check=True,
                          capture_output=True, text=True).stdout.strip()
     try:
@@ -30,7 +33,12 @@ def docker_lists(image: str) -> tuple[list[str], list[str]]:
             check=True, capture_output=True, text=True).stdout.strip().splitlines()
     finally:
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
-    return json.loads(out[0]) or [], json.loads(out[1]) or []
+    masked, readonly = json.loads(out[0]) or [], json.loads(out[1]) or []
+    probe = " ".join(f'[ -d "{p}" ] && echo "{p}";' for p in readonly)
+    dirs = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--security-opt", "systempaths=unconfined",
+         image, "sh", "-c", probe], check=False, capture_output=True, text=True).stdout.split()
+    return masked, readonly, set(dirs)
 
 
 def _expand(pattern: str) -> list[str]:
@@ -112,16 +120,18 @@ def _covered(path: str, rules: list[tuple[str, str]], need: str) -> bool:
     return False
 
 
-def _tree_covered(path: str, rules: list[tuple[str, str]], need: str) -> bool:
-    """A read-only tree: the path itself AND everything below it must be
-    write-denied — a `X/{,**}` rule at or above, a literal file rule for a
-    file, or a `X/**` rule strictly above plus a rule for the path itself."""
+def _tree_covered(path: str, rules: list[tuple[str, str]], need: str,
+                  is_dir: bool = True) -> bool:
+    """A read-only entry: a FILE needs a rule for itself; a DIRECTORY needs
+    the path itself AND everything below it write-denied — a `X/{,**}`
+    rule at or above, or a `X/**` rule at or above plus a rule for the
+    path itself."""
+    if not is_dir:
+        return _covered(path, rules, need)
     below = False
     for rule_path, perms in rules:
         if not set(need) <= set(perms):
             continue
-        if rule_path == path:                 # a literal rule: a file, fully
-            return True
         base = _tree_base(rule_path)
         if base is not None and (base == path or path.startswith(base + "/")):
             return True
@@ -134,14 +144,14 @@ def _tree_covered(path: str, rules: list[tuple[str, str]], need: str) -> bool:
 def main(argv: list[str]) -> int:
     profile = Path(argv[1]) if len(argv) > 1 else PROFILE
     image = argv[2] if len(argv) > 2 else IMAGE
-    masked, readonly = docker_lists(image)
+    masked, readonly, dirs = docker_lists(image)
     rules = deny_rules(profile.read_text())
     problems = []
     for p in masked:
         if not _covered(p, rules, "r"):
             problems.append(f"masked by Docker but readable under the profile: {p}")
     for p in readonly:
-        if _tree_covered(p, rules, "w"):
+        if _tree_covered(p, rules, "w", is_dir=p in dirs):
             continue
         if p in PARTIAL_READONLY and _covered(p, rules, "w"):
             print(f"check_apparmor_masks: {p} is denied partly, on purpose — "

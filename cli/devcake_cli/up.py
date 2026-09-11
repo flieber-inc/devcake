@@ -634,6 +634,8 @@ def _hello_smoke(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
 
 
 _DAGU_PIN = re.compile(r"ghcr\.io/dagucloud/dagu:([0-9][A-Za-z0-9._-]*)")
+_DAGU_PIN_DIGEST = re.compile(
+    r"(ghcr\.io/dagucloud/dagu):[0-9][A-Za-z0-9._-]*@(sha256:[0-9a-f]{64})")
 
 
 def dagu_pin_moved(compose_text: str, running_image: str) -> tuple[str, str] | None:
@@ -647,9 +649,14 @@ def dagu_pin_moved(compose_text: str, running_image: str) -> tuple[str, str] | N
 
 
 # The helper image the shipped backup scripts use (GNU tar; digest-pinned,
-# same as scripts/backup_data.sh).
-_BACKUP_IMAGE = ("debian:bookworm-slim@sha256:"
-                 "88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171")
+# same default and the same DEVCAKE_BACKUP_IMAGE override as scripts/backup_data.sh).
+_BACKUP_IMAGE_DEFAULT = ("debian:bookworm-slim@sha256:"
+                         "88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171")
+
+
+def _backup_image() -> str:
+    return (os.environ.get("DEVCAKE_BACKUP_IMAGE")
+            or os.environ.get("DEVCAKE_ALPINE_IMAGE") or _BACKUP_IMAGE_DEFAULT)
 
 
 def _compose_project(repo: Path) -> str:
@@ -696,18 +703,42 @@ def _running_dagu_image(repo: Path) -> str:
     return str(rows[0].get("Image") or "") if rows else ""
 
 
-def _dagu_tag_seen_locally(repo: Path, tag: str) -> bool:
-    """Whether the pinned Dagu tag was ever pulled here — compose pulls it
-    the first time a release names it, so a present tag means the volume
-    has already run under it (the stopped-stack discriminator; an operator
-    who pre-pulled the tag by hand loses one archive, documented)."""
+def _dagu_pin_seen_locally(repo: Path, compose_text: str) -> bool:
+    """Whether the pinned Dagu image was ever pulled here — compose pulls it
+    the first time a release names it, so a present image means the
+    volume has already run under this pin (the stopped-stack
+    discriminator). The pin is `tag@digest`, and Docker stores no tag for
+    such a pull — only the digest — so the digest is what is asked for.
+    An operator who pre-pulled the pin by hand loses one archive
+    (documented)."""
+    m = _DAGU_PIN_DIGEST.search(compose_text)
+    if not m:
+        return False
     try:
-        proc = subprocess.run(["docker", "images", "ghcr.io/dagucloud/dagu",
-                               "--format", "{{.Tag}}"],
+        proc = subprocess.run(["docker", "image", "inspect", f"{m.group(1)}@{m.group(2)}",
+                               "--format", "{{.Id}}"],
                               cwd=str(repo), text=True, capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return tag in [ln.strip() for ln in (proc.stdout or "").splitlines()]
+    return proc.returncode == 0 and bool((proc.stdout or "").strip())
+
+
+def _rotate_archives(dest_dir: Path, keep: int = 3) -> None:
+    """Keep the newest `keep` archives by age, and always the newest one
+    that carries a real version (never let `from-unknown` copies evict the
+    pre-migration archive the rollback needs)."""
+    archives = sorted(dest_dir.glob("dagu_data-*.tgz"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    keepers = set(archives[:keep])
+    versioned = [p for p in archives if not p.name.startswith("dagu_data-from-unknown-")]
+    if versioned:
+        keepers.add(versioned[0])
+    for old in archives:
+        if old not in keepers:
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
 
 def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
@@ -744,7 +775,7 @@ def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
         head = (f"── this release re-pins Dagu {moved[0]} → {moved[1]}; its state "
                 "store is migrated on first start.")
     else:
-        if _dagu_tag_seen_locally(repo, pinned.group(1)):
+        if _dagu_pin_seen_locally(repo, compose_text):
             return                      # this pin has run here before
         from_tag = "unknown"
         head = (f"── no dagu container is known and Dagu {pinned.group(1)} has never "
@@ -758,7 +789,7 @@ def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
              f"&& (chown {uid}:{gid} /to/{archive.name} || true)")
     cmd = ["docker", "run", "--rm", "--network", "none",
            "-v", f"{volume}:/from:ro", "-v", f"{dest_dir}:/to",
-           _BACKUP_IMAGE, "sh", "-c", inner]
+           _backup_image(), "sh", "-c", inner]
     shown = " ".join(cmd[:-1]) + " " + repr(inner)
     if dry_run:
         _log(f"{head} Would archive it:\n   {shown}", as_json=as_json)
@@ -797,11 +828,7 @@ def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
         os.chmod(archive, 0o600)
     except OSError:
         pass
-    for old in sorted(dest_dir.glob("dagu_data-*.tgz"))[:-3]:
-        try:
-            old.unlink()
-        except OSError:
-            pass
+    _rotate_archives(dest_dir)
     _log(f"── Dagu state archived ({archive.stat().st_size // 1024} KiB, 0600); "
          "rollback: docs/13 §8", as_json=as_json)
 

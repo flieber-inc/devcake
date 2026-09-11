@@ -446,6 +446,10 @@ def test_status_says_whether_devs_can_run_containers():
                    "first_red": ""}}}
     lines = harness_lines(health)
     assert "  nested engine: ok — Devs can run containers (measured 2026-09-10 23:50 UTC)" in lines
+    health["bake_status"]["nested"]["compose_ok"] = True
+    assert any("containers, compose too (measured" in line for line in harness_lines(health))
+    health["bake_status"]["nested"]["compose_ok"] = False
+    assert any("docker compose is NOT" in line for line in harness_lines(health))
     health["bake_status"]["nested"] = {
         "rig_ok": False, "measured_at": "20260910T220000Z",
         "first_red": "the engine cannot create a user namespace (uid_map: EPERM)"}

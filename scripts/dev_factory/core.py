@@ -469,6 +469,10 @@ def nested_projection(receipt: Mapping | None) -> dict | None:
                  "os": str(host.get("os") or ""),
                  "security_options": str(host.get("security_options") or "")},
         "first_red": str(receipt.get("first_red") or ""),
+        # `docker compose up` through the symlink — its own verdict, not
+        # part of rig_ok (None when the receipt predates the compose step)
+        "compose_ok": (bool(receipt["compose"].get("ok"))
+                       if isinstance(receipt.get("compose"), Mapping) else None),
         "receipt": f"{NESTED_PROBE_DIR}/receipt-{receipt.get('measured_at') or ''}.json",
     }
 

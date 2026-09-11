@@ -207,6 +207,18 @@ check("a red nested-engine receipt is a warning; green and absent are not", () =
   assert.equal(none.some((a) => a.id === "nested-engine"), false);
 });
 
+check("containers green but compose red is its own warning", () => {
+  const hits = deriveAlerts({ bake_status: { baker_alive: true, nested: { rig_ok: true, compose_ok: false } } });
+  const hit = hits.find((a) => a.id === "nested-compose");
+  assert.ok(hit, "nested-compose alert missing");
+  assert.equal(hit.severity, "warning");
+  assert.equal(hits.some((a) => a.id === "nested-engine"), false);
+  const fine = deriveAlerts({ bake_status: { baker_alive: true, nested: { rig_ok: true, compose_ok: true } } });
+  assert.equal(fine.some((a) => a.id === "nested-compose"), false);
+  const unknown = deriveAlerts({ bake_status: { baker_alive: true, nested: { rig_ok: true } } });
+  assert.equal(unknown.some((a) => a.id === "nested-compose"), false);
+});
+
 if (failed) {
   console.error(`alerts.mjs: ${failed} check(s) failed`);
   process.exit(1);

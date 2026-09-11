@@ -68,9 +68,13 @@ jobs:
           PI_PIN=$(sed -n 's/^ARG PI_VERSION=//p' images/Dockerfile)
           OPENCODE_PIN=$(sed -n 's/^ARG OPENCODE_VERSION=//p' images/Dockerfile)
           QWEN_PIN=$(sed -n 's/^ARG QWEN_CODE_VERSION=//p' images/Dockerfile)
-          test -n "$CLAUDE_PIN" && test -n "$CODEX_PIN" && test -n "$GROK_PIN" && test -n "$PI_PIN" && test -n "$OPENCODE_PIN" && test -n "$QWEN_PIN"
+          COMPOSE_PIN=$(sed -n 's/^ARG PODMAN_COMPOSE_VERSION=//p' images/Dockerfile)
+          test -n "$CLAUDE_PIN" && test -n "$CODEX_PIN" && test -n "$GROK_PIN" && test -n "$PI_PIN" && test -n "$OPENCODE_PIN" && test -n "$QWEN_PIN" && test -n "$COMPOSE_PIN"
           docker run --rm --entrypoint sh "devcake/dev-claude-code:${DEVCAKE_TAG}" -ec \
             "id | grep -q uid=1000 && claude --version | grep -F \"$CLAUDE_PIN\" && test -f /dev_entrypoint.py"
+          # the nested engine's compose provider, reachable both ways (shared base layer)
+          docker run --rm --entrypoint sh "devcake/dev-claude-code:${DEVCAKE_TAG}" -ec \
+            "podman-compose --version | grep -F \"$COMPOSE_PIN\" && command -v docker-compose >/dev/null && command -v iptables >/dev/null"
           docker run --rm --entrypoint sh "devcake/dev-codex:${DEVCAKE_TAG}" -ec \
             "id | grep -q uid=1000 && codex --version | grep -F \"$CODEX_PIN\" && test -f /dev_entrypoint.py"
           docker run --rm --entrypoint sh "devcake/dev-grok-build:${DEVCAKE_TAG}" -ec \

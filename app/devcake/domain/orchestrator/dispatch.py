@@ -425,7 +425,11 @@ def _environment_note() -> str:
         nested = (read_bake_status() or {}).get("nested")
     except Exception:  # noqa: BLE001 — a status hiccup never blocks a dispatch
         nested = None
-    if not isinstance(nested, dict) or nested.get("rig_ok"):
+    if not isinstance(nested, dict):
+        return ENVIRONMENT_NOTE
+    if nested.get("rig_ok"):
+        if nested.get("compose_ok") is False:
+            return ENVIRONMENT_NOTE + COMPOSE_UNAVAILABLE_NOTE
         return ENVIRONMENT_NOTE
     why = str(nested.get("first_red") or "the host's nested-engine probe is red")
     return ENVIRONMENT_NOTE + NESTED_ENGINE_UNAVAILABLE_NOTE.format(why=why)
@@ -437,6 +441,15 @@ ENVIRONMENT_NOTE = """
 daemon socket (tools that need `DOCKER_HOST` or `/var/run/docker.sock` will
 not find one), images are pulled per run and count against registry
 pull limits, and the host is reachable as `host.containers.internal`.
+`docker compose` / `docker-compose` is podman-compose: the common compose
+file subset works; `depends_on` conditions on health checks never become
+healthy here (no systemd timers), `build:` needs a Containerfile-compatible
+Dockerfile, and published `ports` bind inside this container only.
+"""
+
+COMPOSE_UNAVAILABLE_NOTE = """**`docker compose` is not working on this host** — containers run, but
+the compose step of the host's nested-engine probe is red. Use `docker run`
+for single services, or local processes and test doubles.
 """
 
 NESTED_ENGINE_UNAVAILABLE_NOTE = """**Nested containers are unavailable on this host** — the host's

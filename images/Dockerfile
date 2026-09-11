@@ -30,6 +30,12 @@ ARG QWEN_CODE_VERSION=0.21.12
 # (admin/spa/package.json playwright-core) so the whole repo speaks one
 # browser stack; python doc/spreadsheet libs pinned like the entrypoint deps.
 ARG PLAYWRIGHT_VERSION=1.61.1
+# Compose for the nested engine (ADR-0023 addendum): podman's `compose`
+# subcommand delegates to an external provider found on PATH — this one,
+# pinned from PyPI, reached through `docker compose` (the docker symlink)
+# and a `docker-compose` symlink alike. Compose v2 semantics for the common
+# subset; the provider's own docs list the gaps.
+ARG PODMAN_COMPOSE_VERSION=1.6.0
 
 # ── Node toolchain (copied into node-based harnesses; no nodesource mess) ────
 FROM ${NODE_IMAGE} AS node-tools
@@ -90,6 +96,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # the ADR-0023 spreadsheet/document floor (pandas/openpyxl — models reach for
 # these before anything else) and uv (root-free env management for Devs).
 # Cache mount speeds rebuilds; mount is never committed into the image layer.
+ARG PODMAN_COMPOSE_VERSION
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         redis==5.2.1 \
@@ -98,7 +105,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         opentelemetry-exporter-otlp-proto-http==1.29.0 \
         openpyxl==3.1.5 \
         pandas==2.2.3 \
-        uv==0.5.11
+        uv==0.5.11 \
+        "podman-compose==${PODMAN_COMPOSE_VERSION}" \
+        PyYAML==6.0.3 \
+        python-dotenv==1.2.3
 
 # Node toolchain in the SHARED base (ADR-0023, class B): the tool floor must
 # be harness-identical — grok Devs could not even `npm run dev` before this —
@@ -138,7 +148,11 @@ ARG PODMAN_STATIC_VERSION=v5.8.4
 # per-arch sha256 (the bake builds the HOST platform; both pinned)
 ARG PODMAN_STATIC_SHA256_AMD64=a58765fe8be6ab3fb79f892f1a027b4ce4a7e8eb589df1ef960c167cbde08d69
 ARG PODMAN_STATIC_SHA256_ARM64=a2f6b73cc0f7018e2e8518338a4ec27db70148e1af86e16719235605aefd1df3
-RUN apt-get update && apt-get install -y --no-install-recommends uidmap libcap2-bin \
+# iptables: netavark needs it for the networks compose creates inside the
+# nested engine (a bare `podman run` on the default network never does;
+# measured — without it every compose service fails to start with
+# "netavark: iptables: No such file or directory").
+RUN apt-get update && apt-get install -y --no-install-recommends uidmap libcap2-bin iptables \
     && rm -rf /var/lib/apt/lists/* \
     # MEASURED 2026-08-13 (WSL2 kernel 6.6, engine 29): Debian's SETUID
     # newuidmap/newgidmap EPERM on the uid_map write inside a container,
@@ -163,6 +177,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends uidmap libcap2-
     && cp -r "/tmp/podman-linux-${arch}/etc/containers/." /etc/containers/ \
     && rm -rf /tmp/podman.tgz "/tmp/podman-linux-${arch}" \
     && ln -s /usr/local/bin/podman /usr/local/bin/docker \
+    && ln -s /usr/local/bin/podman-compose /usr/local/bin/docker-compose \
     && touch /etc/containers/nodocker
     # subordinate id ranges for `dev` come from useradd below (shadow's
     # auto-allocation — one canonical range, no hand-written duplicate)
@@ -179,7 +194,9 @@ RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
     && mkdir -p /workspace /home/dev/.npm-global /home/dev/.local/bin \
     && printf 'prefix=/home/dev/.npm-global\n' > /home/dev/.npmrc \
     && mkdir -p /home/dev/.config/containers \
-    && printf '[engine]\ncgroup_manager = "cgroupfs"\nevents_logger = "file"\n' \
+    # compose_warning_logs off: the ">>>> Executing external compose
+    # provider" banner reads as an error to an agent; the provider is ours.
+    && printf '[engine]\ncgroup_manager = "cgroupfs"\nevents_logger = "file"\ncompose_warning_logs = false\n' \
         > /home/dev/.config/containers/containers.conf \
     && chown -R dev:dev /home/dev /workspace /opt/pw-browsers
 
@@ -208,7 +225,8 @@ RUN su dev -s /bin/sh -c ' \
         python -c "import pandas, openpyxl"; \
         uv --version; \
         podman --version && docker --version; \
-        command -v tini jq rg pandoc pdftotext sqlite3 unzip zip gcc make >/dev/null'
+        podman-compose --version && docker-compose --version >/dev/null; \
+        command -v tini jq rg pandoc pdftotext sqlite3 unzip zip gcc make iptables >/dev/null'
 
 # Shared entrypoint façade + Dev-side package (domain/fault pure; more slices later).
 # Package root is `/` so `import devcake_dev` works; ENTRYPOINT path unchanged.

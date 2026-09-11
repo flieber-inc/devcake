@@ -80,7 +80,9 @@ upgraded host arrives after the first harness bake, so a Dev dispatched
 during that bake's probe (a few minutes at most) gets no engine verdict in
 its prompt. A red run names the first failing step (uid_map →
 the user-namespace path, on Ubuntu the profile; graph → nested storage;
-nested run → seccomp/network). The inner test pull (`docker.io/library/
+nested run → seccomp/network). The receipt also records a `compose` step
+(`docker compose up` through the symlink, a compose-created network) as
+its own field, outside the rig verdict. The inner test pull (`docker.io/library/
 alpine`, override via `NESTED_TEST_IMAGE` on air-gapped hosts) needs egress
 from inside the Dev container; `NESTED_PROBE_TIMEOUT` caps the run (300 s).
 Nested images live under the Dev's home, so every run pulls again from the

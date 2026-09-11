@@ -152,7 +152,14 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    Provenance, recorded: the bundle is `mgoltzsche/podman-static` — an
    UNOFFICIAL upstream, accepted because the artifacts are sha256-pinned
    per arch and no distro ships a rootless-in-container-capable 5.x;
-   revisit when one does.
+   revisit when one does. Compose: `podman-compose` from PyPI, version
+   pinned in the Dockerfile (`podman compose` delegates to it; `docker
+   compose` and a `docker-compose` symlink reach the same provider; the
+   provider banner is silenced in the dev user's containers.conf), plus
+   the `iptables` package netavark needs for compose-created networks
+   (measured: without it every compose service fails to start). The
+   nested probe records a `compose` step in its receipt, separate from
+   the rig verdict.
 2. **Helpers:** Debian's SETUID `newuidmap`/`newgidmap` EPERM on the
    uid_map write inside a container on the measured host while the
    Fedora-style FILE-CAPS flavor works — the base re-packages them with

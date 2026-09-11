@@ -366,8 +366,21 @@ open-ended and runtime `apt` rightly does not exist (no root):
 Deliberately absent: sudo, databases/services, cloud/vendor CLIs, media
 tooling (`adr/0023` records the rationale for each). The container engine
 JOINED the floor 2026-08-13 (`adr/0023` addendum): **rootless podman**
-(`docker` = compat symlink) runs nested containers inside the Dev's own
-namespaces — no `docker.sock`, no privilege. The sandbox boundary is
+(`docker` = compat symlink; `docker compose` and `docker-compose` = the
+image's pinned podman-compose provider. Compose v2 semantics for the common
+subset; the gaps a Dev will meet, told to it in its prompt: `depends_on`
+conditions on health checks never become healthy — podman runs health
+checks from systemd timers and the container has no systemd — so a
+`service_healthy` wait spins to its timeout; nothing that wants a daemon
+socket works (`testcontainers`, a `/var/run/docker.sock` bind, `DOCKER_HOST`
+— the container runs no `podman system service`); the host is
+`host.containers.internal`, not `host.docker.internal`; published `ports`
+bind inside the Dev's own network namespace; `build:` needs a
+Containerfile-compatible Dockerfile; `docker compose ps --format json` and
+`exec`/`logs -f` flag edges differ. A compose v2 binary would need the
+API socket the container does not run — recorded as the upgrade path if
+these gaps bite) runs nested containers
+inside the Dev's own namespaces — no `docker.sock`, no privilege. The sandbox boundary is
 unchanged in KIND, at a stated cost: the dev-run DAG's custom seccomp
 profile (default + one 16-syscall allow rule, never unconfined), on
 AppArmor hosts the `devcake-nested` profile (Docker's default plus the

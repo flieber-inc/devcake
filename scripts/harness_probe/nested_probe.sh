@@ -133,6 +133,19 @@ printf '%s\n' "$out" | sed 's/^/NP_NESTED_OUT: /'
 out="$(podman run --rm --user 4321 -v /workspace:/w "$NP_TEST_IMAGE" sh -c 'echo x > /w/np_write_subuid' 2>&1)"; rc=$?
 echo "NP_SUBUID_RC=$rc"
 [ "$rc" -eq 0 ] || printf '%s\n' "$out" | sed 's/^/NP_SUBUID_ERR: /'
+# Compose through the docker symlink (podman's compose subcommand → the
+# image's pinned provider): a compose-created network exercises netavark,
+# which a bare `podman run` never does. Recorded, not part of rig_ok.
+mkdir -p /workspace/np_compose
+printf 'services:\n  hello:\n    image: %s\n    command: ["sh", "-c", "echo compose-nested-ok"]\n' "$NP_TEST_IMAGE" > /workspace/np_compose/compose.yaml
+out="$(cd /workspace/np_compose && docker compose up --abort-on-container-exit 2>&1)"; rc=$?
+(cd /workspace/np_compose && docker compose down >/dev/null 2>&1)
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q "compose-nested-ok"; then
+  echo "NP_COMPOSE_RC=0"
+else
+  echo "NP_COMPOSE_RC=${rc:-1}"
+  printf '%s\n' "$out" | tail -5 | sed 's/^/NP_COMPOSE_ERR: /'
+fi
 exit 0
 INNER
 chmod 644 "$WS/np_inner.sh"
@@ -194,6 +207,7 @@ GRAPH_RC="$(val NP_GRAPH_RC)"
 GRAPH="$(val NP_GRAPH)"
 NESTED_RC="$(val NP_NESTED_RC)"
 SUBUID_RC="$(val NP_SUBUID_RC)"
+COMPOSE_RC="$(val NP_COMPOSE_RC)"
 INNER_KERNEL="$(val NP_UNAME)"
 INNER_UID="$(val NP_UID)"
 
@@ -244,6 +258,7 @@ NP_INNER_KERNEL="${INNER_KERNEL:-}" NP_UIDMAP_RC="${UIDMAP_RC:-}" \
 NP_UIDMAP="${UIDMAP:-}" NP_GRAPH_RC="${GRAPH_RC:-}" NP_GRAPH="${GRAPH:-}" \
 NP_NESTED_RC="${NESTED_RC:-}" NP_NESTED_OK="$NESTED_OK" \
 NP_SUBUID_RC="${SUBUID_RC:-}" NP_SUBUID_WRITE_UID="$SUBUID_WRITE_UID" \
+NP_COMPOSE_RC="${COMPOSE_RC:-}" \
 NP_RECLAIM_SUBUID_UID="$RECLAIM_SUBUID_UID" NP_RIG_OK="$RIG_OK" \
 NP_WRITE_UID="$WRITE_UID" NP_RECLAIM_UID="$RECLAIM_UID" \
 NP_RECLAIM_RC="$RECLAIM_RC" \
@@ -269,6 +284,8 @@ receipt = {
     "uid_map": {"rc": e["NP_UIDMAP_RC"], "first_row": e["NP_UIDMAP"]},
     "graph_driver": {"rc": e["NP_GRAPH_RC"], "name": e["NP_GRAPH"]},
     "nested_run": {"rc": e["NP_NESTED_RC"], "ok": e["NP_NESTED_OK"] == "true"},
+    # `docker compose up` through the symlink — recorded, not part of rig_ok
+    "compose": {"rc": e["NP_COMPOSE_RC"], "ok": e["NP_COMPOSE_RC"] == "0"},
     "workspace_bind": {
         # nested ROOT maps back to the dev uid; the subuid row is the
         # foreign-uid case the B1 reclaim handler exists for
@@ -292,7 +309,7 @@ if [[ "$RIG_OK" = true ]]; then
 else
   echo "── nested_probe: FAIL — first red NP_ step above; log: $LOG" >&2
 fi
-echo "matrix row: $STAMP | ${HOST_OS} kernel=${KERNEL} engine=${ENGINE} ${ARCH} apparmor=${APPARMOR_PROFILE} | graph=${GRAPH:-?} | uid_map_rc=${UIDMAP_RC:-?} nested_ok=${NESTED_OK} | ws uid root ${WRITE_UID}→${RECLAIM_UID} subuid ${SUBUID_WRITE_UID}→${RECLAIM_SUBUID_UID}"
+echo "matrix row: $STAMP | ${HOST_OS} kernel=${KERNEL} engine=${ENGINE} ${ARCH} apparmor=${APPARMOR_PROFILE} | graph=${GRAPH:-?} | uid_map_rc=${UIDMAP_RC:-?} nested_ok=${NESTED_OK} compose_rc=${COMPOSE_RC:-?} | ws uid root ${WRITE_UID}→${RECLAIM_UID} subuid ${SUBUID_WRITE_UID}→${RECLAIM_SUBUID_UID}"
 rm -rf "$WS" 2>/dev/null \
   || echo "nested_probe: scratch left behind (foreign uids — reclaim red?): $WS" >&2
 # Keep the newest five receipts (with their logs and sent profiles); the

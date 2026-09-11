@@ -2345,6 +2345,9 @@ def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
     assert proj["rig_ok"] is True and proj["apparmor_profile"] == "devcake-nested"
     assert proj["host"]["kernel"] == "7.0" and proj["first_red"] == ""
     assert proj["receipt"] == "nested_probe/receipt-20260910T235021Z.json"
+    assert proj["compose_ok"] is None                      # receipt predates the step
+    assert factory.nested_projection({**new, "compose": {"rc": "1", "ok": False}})["compose_ok"] is False
+    assert factory.nested_projection({**new, "compose": {"rc": "0", "ok": True}})["compose_ok"] is True
     red = factory.nested_projection(old)
     assert red["rig_ok"] is False and "user namespace" in red["first_red"]
     assert factory.nested_projection(None) is None

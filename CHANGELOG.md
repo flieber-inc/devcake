@@ -13,6 +13,15 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Added — compose inside Dev containers.** The harness images ship a
+  pinned podman-compose as the nested engine's compose provider, reached
+  through `docker compose` and a `docker-compose` symlink alike, with the
+  iptables binary netavark needs for compose-created networks and the
+  provider banner silenced; the nested-engine probe records a compose step
+  in its receipt, shown on the Dev Types panel, `devcake status`, an
+  Overview warning and the Dev's prompt when it is red. The Dev's prompt
+  section names the compose gaps (health-check waits, daemon socket, host
+  name). Before this the images carried no compose at all.
 - **Fixed — the nested engine inside Dev containers works on hosts that
   run AppArmor** (ADR-0023 addendum). Under Docker's default profile the
   rootless engine could not mount, and Ubuntu confined it further the

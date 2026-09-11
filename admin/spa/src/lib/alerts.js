@@ -366,6 +366,17 @@ export default function deriveAlerts(health) {
   // means Devs cannot run containers on this host — runs still launch and
   // the Dev is told, so this is a warning, not a critical.
   const nested = bake.nested;
+  if (nested && typeof nested === "object" && nested.rig_ok === true && nested.compose_ok === false) {
+    alerts.push({
+      id: "nested-compose",
+      severity: "warning",
+      title: "docker compose does not work inside Dev containers",
+      body:
+        "Containers run, but the compose step of the nested-engine probe failed — " +
+        "see the newest probe log under .factory/nested_probe/ on the host. Devs " +
+        "are told their engine works; expect compose-based verification to fail.",
+    });
+  }
   if (nested && typeof nested === "object" && nested.rig_ok === false) {
     alerts.push({
       id: "nested-engine",

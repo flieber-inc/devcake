@@ -112,7 +112,11 @@ def harness_lines(health: dict | None) -> list[str]:
                 if len(when) >= 13 else "")
         tail = f" (measured {when})" if when else ""
         if nested.get("rig_ok"):
-            out.append(f"  nested engine: ok — Devs can run containers{tail}")
+            compose = nested.get("compose_ok")
+            extra = ("" if compose is None else
+                     ", compose too" if compose else
+                     "; docker compose is NOT (see the probe log)")
+            out.append(f"  nested engine: ok — Devs can run containers{extra}{tail}")
         else:
             why = str(nested.get("first_red") or "see the probe receipt")
             out.append(f"  nested engine: unavailable — {why}{tail}")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -11,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from . import envfile
+from .doctor import (APPARMOR_PROFILE_NAME, DOCKER_DEFAULT_PROFILE,
+                     apparmor_facts, apparmor_install_commands)
 from .paths import read_version_pin, require_checkout_root
 
 
@@ -65,6 +68,9 @@ class UpPlan:
     env_seeded: bool
     env_generated: list[str]
     release_requested: bool = False
+    # the AppArmor profile dev-run.yaml names on both Dev steps — derived
+    # here at up time (a snapshot: load the profile, run devcake up again)
+    apparmor_profile: str = DOCKER_DEFAULT_PROFILE
 
 
 def discover_docker_gid(repo: Path, sock: str) -> tuple[str, str]:
@@ -157,6 +163,38 @@ def stale_env_tag(env_path: Path, tag: str) -> str:
     return stale if stale and stale != tag else ""
 
 
+def derive_apparmor_profile(repo: Path) -> tuple[str, str, str]:
+    """(value for DEVCAKE_APPARMOR_PROFILE, one status line, warning or "").
+    Never refuses: a host without the profile still launches runs — under
+    docker-default the nested engine inside Devs is unavailable, and the
+    bake receipt, `devcake status` and the Dev's prompt all say so."""
+    f = apparmor_facts(repo_root=repo)
+    if not f.enabled:
+        return (DOCKER_DEFAULT_PROFILE,
+                f"── DEVCAKE_APPARMOR_PROFILE={DOCKER_DEFAULT_PROFILE}  "
+                "(no AppArmor on this host)", "")
+    cmds = apparmor_install_commands(repo)
+    if not f.usable:
+        need = ("" if f.parser else
+                "install the apparmor package (apparmor_parser) first, then ")
+        return (DOCKER_DEFAULT_PROFILE,
+                f"── DEVCAKE_APPARMOR_PROFILE={DOCKER_DEFAULT_PROFILE}  "
+                f"(AppArmor active, {APPARMOR_PROFILE_NAME} not loaded)",
+                "── WARNING: nested containers inside Dev containers are unavailable\n"
+                f"   on this host until the {APPARMOR_PROFILE_NAME} AppArmor profile is\n"
+                "   loaded. One-time fix (printed only; this CLI will not run it):\n"
+                f"   {need}{cmds}\n"
+                "   then run devcake up again.")
+    how = ("loaded" if f.loaded else "installed; loaded state unreadable without root")
+    warn = ""
+    if f.current is False:
+        warn = (f"── WARNING: the loaded {APPARMOR_PROFILE_NAME} profile differs from\n"
+                "   this checkout's. Re-run (printed only; this CLI will not run it):\n"
+                f"   {cmds}")
+    return (APPARMOR_PROFILE_NAME,
+            f"── DEVCAKE_APPARMOR_PROFILE={APPARMOR_PROFILE_NAME}  ({how})", warn)
+
+
 def _log(msg: str, *, as_json: bool) -> None:
     # Progress always on stderr when --json; otherwise human on stdout.
     stream = sys.stderr if as_json else sys.stdout
@@ -203,6 +241,10 @@ def prepare_env(
     if stale:
         _log(f"── .env carried DEVCAKE_TAG={stale}; the pin lives in the "
              f"checkout now and .env is rewritten to {tag}", as_json=opts.as_json)
+    apparmor_profile, apparmor_line, apparmor_warn = derive_apparmor_profile(repo)
+    _log(apparmor_line, as_json=opts.as_json)
+    if apparmor_warn:
+        _log(apparmor_warn, as_json=opts.as_json)
 
     env_seeded = False
     env_generated: list[str] = []
@@ -236,6 +278,7 @@ def prepare_env(
         envfile.upsert_env_var("DOCKER_GID", gid, env_path)
         envfile.upsert_env_var("DEVCAKE_WS_HOST", ws_host, env_path)
         envfile.upsert_env_var("DEVCAKE_TAG", tag, env_path)
+        envfile.upsert_env_var("DEVCAKE_APPARMOR_PROFILE", apparmor_profile, env_path)
         envfile.ensure_permission_floor(env_path)
         Path(ws_host).mkdir(parents=True, exist_ok=True)
         os.chmod(ws_host, 0o700)
@@ -263,6 +306,7 @@ def prepare_env(
         env_seeded=env_seeded,
         env_generated=env_generated,
         release_requested=opts.release is not None,
+        apparmor_profile=apparmor_profile,
     )
     return plan, gid_line
 
@@ -276,6 +320,7 @@ def _print_dry_run(plan: UpPlan, *, as_json: bool) -> None:
             "docker_gid": plan.docker_gid,
             "devcake_ws_host": plan.ws_host,
             "devcake_tag": plan.tag,
+            "devcake_apparmor_profile": plan.apparmor_profile,
             "bake": plan.bake,
             "bake_targets": plan.bake_targets or list(DEFAULT_BAKE_TARGETS),
             "compose_services": plan.compose_services,
@@ -292,6 +337,8 @@ def _print_dry_run(plan: UpPlan, *, as_json: bool) -> None:
         as_json=False,
     )
     _log(f"── would upsert DEVCAKE_TAG={plan.tag} in .env", as_json=False)
+    _log(f"── would upsert DEVCAKE_APPARMOR_PROFILE={plan.apparmor_profile} in .env",
+         as_json=False)
     if plan.env_generated:
         _log(
             f"── would auto-init bootstrap keys: {', '.join(plan.env_generated)}",
@@ -330,6 +377,7 @@ def _compose_env(plan: UpPlan) -> dict[str, str]:
     env["DOCKER_GID"] = plan.docker_gid
     env["DEVCAKE_WS_HOST"] = plan.ws_host
     env["DEVCAKE_TAG"] = plan.tag
+    env["DEVCAKE_APPARMOR_PROFILE"] = plan.apparmor_profile
     return env
 
 
@@ -574,6 +622,53 @@ def _hello_smoke(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
         raise SystemExit(4)
 
 
+_DAGU_PIN = re.compile(r"ghcr\.io/dagucloud/dagu:([0-9][A-Za-z0-9._-]*)")
+
+
+def dagu_pin_moved(compose_text: str, running_image: str) -> tuple[str, str] | None:
+    """(running tag, pinned tag) when the checkout pins a Dagu release the
+    running dagu service is not on; None when equal or unknown."""
+    m = _DAGU_PIN.search(compose_text or "")
+    r = _DAGU_PIN.search(running_image or "")
+    if not m or not r or m.group(1) == r.group(1):
+        return None
+    return r.group(1), m.group(1)
+
+
+def _dagu_backup_reminder(repo: Path, *, as_json: bool) -> None:
+    """Printed, never run: a Dagu re-pin may migrate the state volume
+    (docs/13 §4), and there is no backup verb — the operator archives it
+    first if the run history matters."""
+    try:
+        ps = subprocess.run(
+            ["docker", "compose", "ps", "--format", "json", "dagu"],
+            cwd=str(repo), text=True, capture_output=True, timeout=60)
+        # compose prints one object per line (newer) or one array (older)
+        rows: list = []
+        text = (ps.stdout or "").strip()
+        if text.startswith("["):
+            rows = [r for r in json.loads(text) if isinstance(r, dict)]
+        else:
+            for line in text.splitlines():
+                line = line.strip()
+                if line.startswith("{"):
+                    rows.append(json.loads(line))
+        running = str(rows[0].get("Image") or "") if rows else ""
+        moved = dagu_pin_moved((repo / "docker-compose.yml").read_text(), running)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return
+    if not moved:
+        return
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    _log(
+        f"── this release re-pins Dagu {moved[0]} → {moved[1]}. Its state volume may\n"
+        "   be migrated on first start; to keep a copy first (printed only; this\n"
+        "   CLI will not run it):\n"
+        "   docker run --rm -v devcake_dagu_data:/from -v \"$PWD/.factory/backups:/to\" "
+        f"alpine tar czf /to/dagu_data-{stamp}.tgz -C /from .",
+        as_json=as_json)
+
+
 def _prune_after_release(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
     from .prune import prune_images
     try:
@@ -726,6 +821,8 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
         if not opts.bake:
             opts.bake = True          # the control plane; never a Dev image
             opts.bake_targets = []
+        if not opts.dry_run:
+            _dagu_backup_reminder(root, as_json=opts.as_json)
 
     try:
         plan, _ = prepare_env(root, opts, mutate=not opts.dry_run)

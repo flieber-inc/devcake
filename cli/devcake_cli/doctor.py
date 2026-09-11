@@ -6,6 +6,7 @@ fails (steady-state would not work). Soft / platform-skip checks stay ok.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -28,10 +29,23 @@ CHECK_IDS: tuple[str, ...] = (
     "buildx",
     "checkout_layout",
     "digest_lockstep",
+    "version_pin",
     "user_session_linger",
     "ports",
     "baker_liveness",
+    "apparmor_profile",
 )
+
+# The AppArmor profile dev-run.yaml names on both Dev steps (ADR-0023
+# addendum): the checkout ships it, the operator loads it, `devcake up`
+# writes the resulting name into .env. One detection helper serves both
+# the doctor's check and up's derivation — never derived twice.
+APPARMOR_PROFILE_NAME = "devcake-nested"
+APPARMOR_PROFILE_REL = Path("scripts") / "apparmor" / APPARMOR_PROFILE_NAME
+APPARMOR_INSTALLED_PATH = Path("/etc/apparmor.d") / APPARMOR_PROFILE_NAME
+_APPARMOR_ENABLED_PATH = Path("/sys/module/apparmor/parameters/enabled")
+_APPARMOR_PROFILES_PATH = Path("/sys/kernel/security/apparmor/profiles")
+DOCKER_DEFAULT_PROFILE = "docker-default"
 
 # Host ports the control plane publishes on loopback (docs/13).
 _CONTROL_PORTS: tuple[tuple[int, str], ...] = (
@@ -576,6 +590,106 @@ def check_baker_liveness(*, repo_root: Path | None) -> CheckResult:
     )
 
 
+@dataclass(frozen=True)
+class ApparmorFacts:
+    """What this host says about the Dev-container profile. `loaded` is
+    None when the kernel's profile list is unreadable without root (stock
+    Ubuntu) — then the file under /etc/apparmor.d/ stands in for it."""
+    enabled: bool
+    loaded: bool | None
+    installed: bool
+    current: bool | None      # installed file == the checkout's; None when unknown
+    parser: bool              # apparmor_parser found
+
+    @property
+    def usable(self) -> bool:
+        """The name may be handed to Docker: loaded, or installed where the
+        loaded state cannot be read (the boot-time load picks it up)."""
+        return self.enabled and (self.loaded is True
+                                 or (self.loaded is None and self.installed))
+
+
+def _sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def apparmor_facts(
+    *,
+    repo_root: Path | None,
+    enabled_path: Path = _APPARMOR_ENABLED_PATH,
+    profiles_path: Path = _APPARMOR_PROFILES_PATH,
+    installed_path: Path = APPARMOR_INSTALLED_PATH,
+) -> ApparmorFacts:
+    try:
+        enabled = enabled_path.read_text().strip().upper().startswith("Y")
+    except OSError:
+        enabled = False
+    loaded: bool | None = None
+    try:
+        loaded = any(line.split(" ", 1)[0] == APPARMOR_PROFILE_NAME
+                     for line in profiles_path.read_text().splitlines())
+    except OSError:
+        loaded = None
+    installed = installed_path.is_file()
+    current: bool | None = None
+    if installed and repo_root is not None:
+        ours = _sha256(repo_root / APPARMOR_PROFILE_REL)
+        theirs = _sha256(installed_path)
+        if ours and theirs:
+            current = ours == theirs
+    parser = bool(shutil.which("apparmor_parser")
+                  or shutil.which("apparmor_parser", path="/usr/sbin:/sbin"))
+    return ApparmorFacts(enabled=enabled, loaded=loaded, installed=installed,
+                         current=current, parser=parser)
+
+
+def apparmor_install_commands(repo_root: Path | None) -> str:
+    src = ((repo_root / APPARMOR_PROFILE_REL) if repo_root is not None
+           else APPARMOR_PROFILE_REL)
+    return (f"sudo install -m 0644 {src} /etc/apparmor.d/ && "
+            f"sudo apparmor_parser -r {APPARMOR_INSTALLED_PATH}")
+
+
+def check_apparmor_profile(
+    *,
+    repo_root: Path | None,
+    facts: ApparmorFacts | None = None,
+) -> CheckResult:
+    """The Dev-container AppArmor profile on hosts that run AppArmor. Soft:
+    a run launches either way — without the profile the nested engine
+    inside Devs is unavailable and every receipt says so."""
+    f = facts if facts is not None else apparmor_facts(repo_root=repo_root)
+    if not f.enabled:
+        return CheckResult(
+            id="apparmor_profile", ok=True, hard=False,
+            detail="no AppArmor on this host — the nested engine in Dev "
+                   "containers relies on the seccomp profile alone")
+    cmds = apparmor_install_commands(repo_root)
+    if not f.usable:
+        need = ("" if f.parser else
+                "install the apparmor package (apparmor_parser) first, then ")
+        return CheckResult(
+            id="apparmor_profile", ok=False, hard=False,
+            detail=(f"AppArmor is active but the {APPARMOR_PROFILE_NAME} profile "
+                    "is not loaded — Dev containers run under docker-default and "
+                    "their nested engine is unavailable. One-time fix (printed "
+                    f"only; this CLI will not run it): {need}{cmds} — then devcake up"))
+    if f.current is False:
+        return CheckResult(
+            id="apparmor_profile", ok=False, hard=False,
+            detail=(f"{APPARMOR_PROFILE_NAME} is loaded but outdated — the "
+                    "installed file differs from this checkout's. Re-run "
+                    f"(printed only; this CLI will not run it): {cmds}"))
+    how = ("loaded" if f.loaded else
+           "installed under /etc/apparmor.d/ (loaded state unreadable without root)")
+    return CheckResult(
+        id="apparmor_profile", ok=True, hard=False,
+        detail=f"{APPARMOR_PROFILE_NAME} {how} — Dev containers get the nested engine")
+
+
 def run_checks(
     *,
     repo_root: Path | None = None,
@@ -596,6 +710,7 @@ def run_checks(
         check_user_session_linger(run=run),
         check_ports(probe=port_probe),
         check_baker_liveness(repo_root=root),
+        check_apparmor_profile(repo_root=root),
     ]
 
 

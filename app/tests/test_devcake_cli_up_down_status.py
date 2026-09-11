@@ -73,6 +73,7 @@ def test_up_dry_run_no_mutation(monkeypatch, tmp_path, capsys):
     assert payload["schema_version"] == 1
     assert payload["dry_run"] is True
     assert payload["docker_gid"] == "4242"
+    assert payload["devcake_apparmor_profile"] in ("docker-default", "devcake-nested")
     assert payload["bake"] is False
     # dry-run must not create .env
     assert not (tmp_path / ".env").exists()
@@ -357,3 +358,90 @@ def test_fetch_health_never_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(status_mod, "ADMIN_URL", f"http://127.0.0.1:{port}")
     body, why = status_mod._fetch_health(tmp_path, timeout=2)
     assert body == {"pmo_budget": 1} and why is None
+
+
+def test_up_derives_the_apparmor_profile_and_never_refuses(monkeypatch, tmp_path, capsys):
+    """docs/13: `devcake up` writes DEVCAKE_APPARMOR_PROFILE from what the
+    host says — devcake-nested when loaded, docker-default with the two
+    install commands printed (never run) when AppArmor is active without
+    it. A red host still brings the stack up."""
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+    from devcake_cli import doctor
+
+    sock = _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKER_SOCK", str(sock))
+    for name in ("_bake", "_compose_up", "_health_gate", "_hello_smoke", "_start_baker"):
+        monkeypatch.setattr(up_mod, name, lambda *a, **k: None)
+
+    def host(**kw):
+        base = dict(enabled=True, loaded=None, installed=False, current=None, parser=True)
+        base.update(kw)
+        monkeypatch.setattr(up_mod, "apparmor_facts",
+                            lambda **_: doctor.ApparmorFacts(**base))
+
+    host(enabled=False)
+    assert up_mod.run_up(up_mod.UpOptions(), repo=tmp_path) == 0
+    env = (tmp_path / ".env").read_text()
+    assert "DEVCAKE_APPARMOR_PROFILE=docker-default" in env
+    assert "WARNING" not in capsys.readouterr().out
+
+    host(enabled=True, installed=False)
+    assert up_mod.run_up(up_mod.UpOptions(), repo=tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "DEVCAKE_APPARMOR_PROFILE=docker-default" in (tmp_path / ".env").read_text()
+    assert "nested containers inside Dev containers are unavailable" in out
+    assert "printed only; this CLI will not run it" in out
+    assert "sudo apparmor_parser -r /etc/apparmor.d/devcake-nested" in out
+
+    host(enabled=True, loaded=True, installed=True, current=True)
+    assert up_mod.run_up(up_mod.UpOptions(), repo=tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "DEVCAKE_APPARMOR_PROFILE=devcake-nested" in (tmp_path / ".env").read_text()
+    assert "WARNING" not in out
+
+    host(enabled=True, loaded=True, installed=True, current=False)
+    assert up_mod.run_up(up_mod.UpOptions(), repo=tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "DEVCAKE_APPARMOR_PROFILE=devcake-nested" in (tmp_path / ".env").read_text()
+    assert "differs from" in out and "apparmor_parser -r" in out
+
+    # dry-run reports the derivation without writing
+    (tmp_path / ".env").unlink()
+    host(enabled=True, installed=False)
+    assert up_mod.run_up(up_mod.UpOptions(dry_run=True), repo=tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "would upsert DEVCAKE_APPARMOR_PROFILE=docker-default" in out
+    assert not (tmp_path / ".env").exists()
+
+
+def test_up_release_prints_the_dagu_backup_line_only_on_a_moved_pin():
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+    compose = "  dagu:\n    image: ghcr.io/dagucloud/dagu:2.16.3@sha256:abc\n"
+    assert up_mod.dagu_pin_moved(compose, "ghcr.io/dagucloud/dagu:2.13.0") == ("2.13.0", "2.16.3")
+    assert up_mod.dagu_pin_moved(compose, "ghcr.io/dagucloud/dagu:2.16.3") is None
+    assert up_mod.dagu_pin_moved(compose, "") is None
+    assert up_mod.dagu_pin_moved("", "ghcr.io/dagucloud/dagu:2.13.0") is None
+
+
+def test_status_says_whether_devs_can_run_containers():
+    """docs/11 `bake_status.nested`: the newest nested-engine receipt, one
+    line — green, or the first red step in plain words."""
+    _ensure_cli_importable()
+    from devcake_cli.status import harness_lines
+    health = {"harness_pins": {"templates": {}}, "bake_status": {
+        "state": "ready", "jobs": [], "baker_alive": True,
+        "nested": {"rig_ok": True, "measured_at": "20260910T235021Z",
+                   "first_red": ""}}}
+    lines = harness_lines(health)
+    assert "  nested engine: ok — Devs can run containers (measured 23:50 UTC)" in lines
+    health["bake_status"]["nested"] = {
+        "rig_ok": False, "measured_at": "20260910T220000Z",
+        "first_red": "the engine cannot create a user namespace (uid_map: EPERM)"}
+    lines = harness_lines(health)
+    assert ("  nested engine: unavailable — the engine cannot create a user "
+            "namespace (uid_map: EPERM) (measured 22:00 UTC)") in lines
+    del health["bake_status"]["nested"]
+    assert not any("nested engine" in line for line in harness_lines(health))

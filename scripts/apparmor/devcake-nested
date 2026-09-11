@@ -1,0 +1,68 @@
+# devcake-nested — AppArmor profile for DevCake Dev containers.
+# version: 2026-09-11
+#
+# Docker's default container profile with three additions, so the rootless
+# engine inside a Dev container can create user namespaces and mount inside
+# them:
+#   userns,                    create user namespaces without leaving this
+#                              profile (Ubuntu's restriction on unprivileged
+#                              user namespaces would otherwise confine the
+#                              process as `unprivileged_userns`)
+#   mount, umount, pivot_root  inside the container's own mount namespaces —
+#                              a uid-1000 process in the initial namespace
+#                              has no CAP_SYS_ADMIN, so these grant nothing
+#                              there; only a user namespace it creates can
+#                              mount, which is exactly what rootless podman
+#                              does
+# Everything Docker's default profile denies stays denied, and the paths
+# Docker normally masks or freezes are denied here as well. Never unconfined.
+# Install: sudo install -m 0644 scripts/apparmor/devcake-nested /etc/apparmor.d/ \
+#          && sudo apparmor_parser -r /etc/apparmor.d/devcake-nested
+#include <tunables/global>
+
+profile devcake-nested flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+  mount,
+  pivot_root,
+  userns,
+  # Host (privileged) processes may send signals to container processes.
+  signal (receive) peer=unconfined,
+  # runc / crun may send signals to container processes (docker stop).
+  signal (receive) peer=runc,
+  signal (receive) peer=crun,
+  # Container processes may send signals amongst themselves.
+  signal (send,receive) peer=devcake-nested,
+
+  deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
+  # deny write to files not in /proc/<number>/** or /proc/sys/**
+  deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
+  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+  # Docker's masked and read-only system paths, re-established here: the run
+  # contract launches Dev containers with those mounts removed (a nested
+  # engine cannot mount its own /proc under a kernel that requires the
+  # parent's /proc to be fully visible), so this profile denies what the
+  # masks used to hide and what the read-only binds used to freeze.
+  deny @{PROC}/{acpi,asound,interrupts,keys,latency_stats,timer_list,timer_stats,sched_debug} rwklx,
+  deny @{PROC}/{acpi,asound,scsi}/{,**} rwklx,
+  deny @{PROC}/{bus,fs,irq}/** wklx,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  # suppress ptrace denials when using 'docker ps' or using 'ps' inside a container
+  ptrace (trace,read,tracedby,readby) peer=devcake-nested,
+}

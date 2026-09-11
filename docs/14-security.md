@@ -349,15 +349,25 @@ Not claimed:
 
 - Multi-tenant isolation between hostile customers.
 - Egress allowlists (optional future ops hardening, §11).
-- Nested containers (rootless podman, ADR-0023 addendum 2026-08-13): Devs
-  run a container engine INSIDE their own container — no socket, no
-  privilege; the recorded cost is the dev-run seccomp profile widening
-  Docker's default by ONE 15-syscall allow rule (userns/mount set — inline
-  in the DAG, structurally pinned as never-unconfined) plus the /dev/fuse
-  and /dev/net/tun device nodes. Kernel attack surface grows by exactly
-  those syscalls + devices — for EVERY container the dev-run DAG launches,
-  hello included, engine user or not; accepted (single-operator, dedicated
-  host, Devs already non-sandbox §6).
+- Nested containers (rootless podman, ADR-0023 addendum): Devs run a
+  container engine INSIDE their own container — no socket, no privilege;
+  the recorded cost is the dev-run seccomp profile widening Docker's
+  default by ONE 16-syscall allow rule (userns/mount set + `mount_setattr`
+  — inline in the DAG, structurally pinned as never-unconfined) plus the
+  /dev/fuse and /dev/net/tun device nodes, plus, on AppArmor hosts, the
+  `devcake-nested` profile (Docker's default profile with `userns`,
+  `mount`, `umount`, `pivot_root` allowed — rules that grant nothing to a
+  capability-less process in the initial namespace and apply inside the
+  user namespaces the rootless engine creates; named on the Dev steps only,
+  pinned never-unconfined, compiled in CI), plus Docker's masked and
+  read-only system paths removed on both Dev steps (the profile re-denies
+  those paths on AppArmor hosts; on hosts without AppArmor — the WSL2 and
+  Docker Desktop development rigs — `/proc/kcore`, `/proc/sysrq-trigger`
+  and friends are guarded by DAC and the seccomp profile only). Kernel
+  attack surface grows by exactly those syscalls + devices + paths — for
+  EVERY container the dev-run DAG launches, hello included, engine user
+  or not; accepted (single-operator, dedicated host, Devs already
+  non-sandbox §6).
 - ~~Docker HostConfig CPU/memory/PID limits on the Dev container~~ —
   **DELIVERED 2026-08-13**: kernel cgroup limits ride every Dev container via
   `AppConfig.container_limits` → dev-run docker-executor `host:` (the old
@@ -473,6 +483,12 @@ dismiss.
     encrypted, never plaintext off the box, delete plaintext exports after
     use. Same handling for `gitea_data` backups (repo content + Gitea's
     credential DB).
+11. On an AppArmor host, `devcake doctor` shows **`apparmor_profile` ok**
+    (the `devcake-nested` profile loaded, current with the checkout) and
+    the newest nested-engine receipt is green (`devcake status`: `nested
+    engine: ok`). A red receipt is not a security finding — runs launch
+    without the engine and say so — but a profile loaded by hand from
+    anywhere other than this checkout's `scripts/apparmor/` is (`13` §0).
 
 Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 
@@ -507,6 +523,7 @@ occurrence.
 | Cross-Dev reachability on `devcake_runtime` | Concurrent Devs share one bridge with ICC on: Dev A can port-scan and connect to Dev B's in-container services — post-ADR-0023 that includes dev servers and a Chromium DevTools port (read B's page context, drive its browser) | Design (2026-08 evaluation) | Accepted — tracked debt (§11). ICC-off is NOT the fix: measured 2026-08-04, `enable_icc=false` blocks ALL container-to-container traffic on the bridge including Dev→Redis, severing the run bus. The real fix is per-run networks (docs/16 Candidates) |
 | Malicious `MAXLEN` on the shared ingress stream | Any Dev holds `+xadd`, and XADD accepts MAXLEN: a hostile Dev can trim OTHER runs' unconsumed entries (artifact loss for concurrent runs). The flood variant is bounded: `maxmemory 1gb + noeviction` errors the writer instead of OOMing redis, and the app XDELs after every handled batch | Design (ticket-writer trust zone) | Accepted — per-run ingress streams are the real fix (docs/16 Candidates) |
 | Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) | Accepted |
+| Dev-container AppArmor profile (`devcake-nested`) + unmasked system paths | Inside a Dev container: user namespaces + mounts inside them (the rootless engine's need), `/proc`/`/sys` paths Docker normally hides — bounded by the seccomp profile, DAC (uid 1000, no capabilities) and, on AppArmor hosts, the profile's own denials of exactly those paths | Design (ADR-0023 addendum) + operator (loads the shipped file; `doctor` flags an outdated or missing one) | Verify — `devcake doctor` `apparmor_profile` ok on AppArmor hosts (§9); Accepted on hosts without AppArmor (development rigs) |
 | `activity-*` repos: past transcripts greppable by every future Dev until Clear | Cross-mission exposure of anything choke-point redaction missed (§1, ADR-0014) | Design (single-operator) + operator (Clear cadence) | Accepted |
 
 ### Zone C — Supply chain

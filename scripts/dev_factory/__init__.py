@@ -39,7 +39,12 @@ from .core import (
     claim_inbox,
     drop_receipts_missing_images,
     pins_moved_with_tag,
+    carry_last,
     carry_last_prune,
+    nested_key,
+    nested_probe_due,
+    nested_projection,
+    newest_nested_receipt,
     prune_outcome,
     receipts_to_push,
     house_from_dockerfile,
@@ -58,6 +63,11 @@ from .core import (
 )
 
 __all__ = [
+    "carry_last",
+    "nested_key",
+    "nested_probe_due",
+    "nested_projection",
+    "newest_nested_receipt",
     "ARG_NAMES",
     "KNOWN_TEMPLATES",
     "LAUNCH_SUPPORTED",

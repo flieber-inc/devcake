@@ -40,6 +40,7 @@ _EXPECTED_CHECK_IDS = (
     "user_session_linger",
     "ports",
     "baker_liveness",
+    "apparmor_profile",
 )
 
 
@@ -145,3 +146,55 @@ def test_version_pin_check_reports_drift_between_checkout_and_stack(tmp_path, mo
     (tmp_path / ".env").write_text("DEVCAKE_TAG=abc1234\n")
     scratch = doctor.check_version_pin(repo_root=tmp_path)
     assert not scratch.ok and "override is set in this shell" in scratch.detail
+
+
+def test_apparmor_profile_check_reads_the_host_in_two_tiers(tmp_path, monkeypatch):
+    """docs/13: the Dev-container AppArmor profile is soft everywhere. No
+    AppArmor → ok. AppArmor active: loaded per the kernel's list → ok;
+    list unreadable (stock Ubuntu without root) → the file under
+    /etc/apparmor.d/ stands in; absent → the two install commands, printed
+    only; installed but not this checkout's bytes → outdated."""
+    from test_devcake_cli_setup import _ensure_cli_importable
+    _ensure_cli_importable()
+    from devcake_cli import doctor
+
+    ours = tmp_path / "scripts" / "apparmor"
+    ours.mkdir(parents=True)
+    (ours / "devcake-nested").write_text("profile devcake-nested {}\n")
+    enabled = tmp_path / "enabled"
+    profiles = tmp_path / "profiles"
+    installed = tmp_path / "etc-devcake-nested"
+
+    def facts():
+        return doctor.apparmor_facts(repo_root=tmp_path, enabled_path=enabled,
+                                     profiles_path=profiles, installed_path=installed)
+
+    off = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert off.ok and not off.hard and "no AppArmor on this host" in off.detail
+
+    enabled.write_text("Y\n")
+    missing = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not missing.ok and not missing.hard
+    assert "not loaded" in missing.detail and "printed only" in missing.detail
+    assert f"sudo install -m 0644 {ours / 'devcake-nested'} /etc/apparmor.d/" in missing.detail
+    assert "sudo apparmor_parser -r /etc/apparmor.d/devcake-nested" in missing.detail
+
+    # tier 2: the kernel list is unreadable; the installed file stands in
+    installed.write_text("profile devcake-nested {}\n")
+    tier2 = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert tier2.ok and "loaded state unreadable without root" in tier2.detail
+
+    installed.write_text("profile devcake-nested { # older }\n")
+    stale = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not stale.ok and "outdated" in stale.detail and "apparmor_parser -r" in stale.detail
+
+    # tier 1: the kernel list is readable and names the profile
+    profiles.write_text("docker-default (enforce)\ndevcake-nested (enforce)\n")
+    installed.write_text("profile devcake-nested {}\n")
+    loaded = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert loaded.ok and "devcake-nested loaded" in loaded.detail
+    assert facts().usable
+
+    profiles.write_text("docker-default (enforce)\n")
+    unloaded = doctor.check_apparmor_profile(repo_root=tmp_path, facts=facts())
+    assert not unloaded.ok and "not loaded" in unloaded.detail

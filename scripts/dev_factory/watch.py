@@ -27,7 +27,11 @@ from .core import (
     drop_receipts_missing_images,
     house_from_dockerfile,
     pins_moved_with_tag,
+    carry_last,
     carry_last_prune,
+    nested_probe_due,
+    nested_projection,
+    newest_nested_receipt,
     prune_outcome,
     receipts_to_push,
     image_ref,
@@ -516,6 +520,7 @@ def once(*, work: Path, tag: str, house: dict[str, str],
 
     keep_set = None
     trace_id, root_id = "", ""
+    baked_images: list[str] = []      # harness images baked green this tick
     t0 = time.time_ns()
     if claimed is None:
         # Hello is baked by every devcake up — not evidence of staffing
@@ -547,6 +552,8 @@ def once(*, work: Path, tag: str, house: dict[str, str],
                 run_bake(
                     job, tag=tag, house=house, receipts_dir=receipts,
                     digest=digest, repo=REPO, run=beating_run(work))
+                baked_images.append(
+                    image_ref(job.template, job.cli_version, tag=tag, house=house))
             finally:
                 local = receipt_path(receipts, job)
                 if local.is_file():
@@ -603,6 +610,9 @@ def once(*, work: Path, tag: str, house: dict[str, str],
         work=work, tag=tag, house=house, status=status, keep_set=keep_set,
         trace_id=trace_id, parent=root_id)
     status = carry_last_prune(previous, status)
+    status = publish_nested(
+        work=work, previous=previous, status=status, baked=baked_images,
+        local_images=listed, trace_id=trace_id, parent=root_id)
     write_status(work / STATUS, status)     # the local copy is what the
     #                                         heartbeat and the next tick read
     try:
@@ -611,6 +621,66 @@ def once(*, work: Path, tag: str, house: dict[str, str],
         status = {**status, "state": "error",
                   "detail": f"{status.get('detail', '')} ({exc})".strip()}
     return status
+
+
+def _dag_seccomp_sha256() -> str:
+    """The sha of the seccomp blob the DAG ships now — the probe records
+    the one it sent, so a DAG change makes the last verdict stale."""
+    import hashlib
+    try:
+        out = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "harness_probe" / "nested_seccomp.py"),
+             str(REPO / "dagu" / "dags" / "dev-run.yaml")],
+            capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if out.returncode != 0:
+        return ""
+    return hashlib.sha256((out.stdout.rstrip("\n") + "\n").encode()).hexdigest()
+
+
+def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
+                   local_images, trace_id: str = "", parent: str = "") -> dict:
+    """The nested-engine receipt in the bake status. After a green harness
+    bake — or when the newest receipt no longer describes the contract
+    the stack runs — the probe replays the dev-run contract against a
+    harness image; the newest receipt (hand-run ones included) is then
+    published as `nested`. Never fatal, never gating: a red rig degrades
+    Devs and says so on every surface, it does not unstaff them."""
+    factory = REPO / ".factory"
+    receipt = newest_nested_receipt(factory)
+    profile = os.environ.get("DEVCAKE_APPARMOR_PROFILE", "docker-default")
+    due = nested_probe_due(baked_now=bool(baked), receipt=receipt,
+                           apparmor_profile=profile,
+                           seccomp_sha256=_dag_seccomp_sha256())
+    image = baked[-1] if baked else next(
+        (str(ref) for ref in (local_images or [])
+         if str(ref).startswith("devcake/dev-")
+         and not str(ref).startswith("devcake/dev-hello")), "")
+    if due and image:
+        p0 = time.time_ns()
+        _, sid = new_ids()
+        print(f"dev_factory: nested-engine probe on {image} "
+              f"(apparmor={profile})", flush=True)
+        try:
+            result = beating_run(work)(
+                ["bash", str(REPO / "scripts" / "harness_probe" / "nested_probe.sh"), image],
+                cwd=str(REPO), env={**os.environ, "DEVCAKE_APPARMOR_PROFILE": profile})
+            rc = int(getattr(result, "returncode", 1))
+        except Exception as exc:  # noqa: BLE001 — the probe must never wedge the tick
+            print(f"dev_factory: nested-engine probe failed to run ({exc})", flush=True)
+            rc = 1
+        receipt = newest_nested_receipt(factory)
+        emit_event(work, span_record(
+            name="baker.nested_probe", trace_id=trace_id or new_ids()[0],
+            span_id=sid, parent=parent, start_ns=p0, end_ns=time.time_ns(),
+            status="ok" if rc == 0 else "error", image=image,
+            apparmor_profile=profile,
+            first_red=str((receipt or {}).get("first_red") or "")))
+    proj = nested_projection(receipt)
+    if proj is not None:
+        return {**status, "nested": proj}
+    return carry_last(previous, status, "nested")
 
 
 def _watch_log_path() -> Path:

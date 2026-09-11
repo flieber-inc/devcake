@@ -385,11 +385,95 @@ def carry_last_prune(previous, status: dict) -> dict:
     tick, so without this the outcome of a prune was visible for one tick
     (five seconds) and the panel, polling every ten, almost never saw it
     (2026-09 field report: "the button does not respond")."""
-    if isinstance(status.get("prune"), Mapping):
+    return carry_last(previous, status, "prune")
+
+
+# ── nested-engine receipt (scripts/harness_probe/nested_probe.sh) ───────────
+# The probe writes one receipt per run under .factory/nested_probe/. The
+# baker runs it after every harness bake and publishes the NEWEST receipt as
+# `nested` in the bake status — the one fact the panel, `devcake status`
+# and the Dev's prompt line all read (docs/11 `bake_status.nested`).
+
+NESTED_PROBE_DIR = "nested_probe"
+
+
+def newest_nested_receipt(factory_dir: Path | str) -> dict | None:
+    """The newest parseable receipt under <factory>/nested_probe/, or None."""
+    base = Path(factory_dir) / NESTED_PROBE_DIR
+    try:
+        paths = sorted(base.glob("receipt-*.json"), reverse=True)
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(rec, Mapping) and "rig_ok" in rec:
+            return dict(rec)
+    return None
+
+
+def nested_key(receipt: Mapping | None) -> tuple:
+    """What a receipt measured: a change in any of these makes the last
+    verdict stale (a re-pinned profile, a new engine or kernel, a re-baked
+    image, a new seccomp blob) — the same key `nested_probe_due` compares."""
+    if not isinstance(receipt, Mapping):
+        return ()
+    host = receipt.get("host") if isinstance(receipt.get("host"), Mapping) else {}
+    return (str(host.get("kernel") or ""), str(host.get("engine") or ""),
+            str(host.get("security_options") or ""),
+            str(receipt.get("seccomp_sha256") or ""),
+            str(receipt.get("apparmor_profile") or ""),
+            str(receipt.get("image_id") or ""))
+
+
+def nested_projection(receipt: Mapping | None) -> dict | None:
+    """The bake-status view of a receipt: the verdict, when and against
+    what it was measured, and the first red step in plain words."""
+    if not isinstance(receipt, Mapping):
+        return None
+    host = receipt.get("host") if isinstance(receipt.get("host"), Mapping) else {}
+    return {
+        "rig_ok": bool(receipt.get("rig_ok")),
+        "measured_at": str(receipt.get("measured_at") or ""),
+        "image": str(receipt.get("image") or ""),
+        "apparmor_profile": str(receipt.get("apparmor_profile") or ""),
+        "network": str(receipt.get("network") or ""),
+        "host": {"kernel": str(host.get("kernel") or ""),
+                 "engine": str(host.get("engine") or ""),
+                 "os": str(host.get("os") or ""),
+                 "security_options": str(host.get("security_options") or "")},
+        "first_red": str(receipt.get("first_red") or ""),
+        "receipt": f"{NESTED_PROBE_DIR}/receipt-{receipt.get('measured_at') or ''}.json",
+    }
+
+
+def nested_probe_due(*, baked_now: bool, receipt: Mapping | None,
+                     apparmor_profile: str, seccomp_sha256: str) -> bool:
+    """Run the probe after a green harness bake, and whenever the newest
+    receipt is red or measured a different contract (profile, seccomp) than
+    the stack now runs — never on an ordinary tick with a green, current
+    receipt (the inner alpine pull is egress the baker should not spend
+    every five seconds)."""
+    if baked_now:
+        return True
+    if receipt is None:
+        return False            # nothing to compare against; the bake triggers it
+    if not receipt.get("rig_ok"):
+        return False            # red stays red until a bake or a hand-run re-probes
+    return (str(receipt.get("apparmor_profile") or "") != apparmor_profile
+            or str(receipt.get("seccomp_sha256") or "") != seccomp_sha256)
+
+
+def carry_last(previous, status: dict, key: str) -> dict:
+    """Generalised `carry_last_prune`: a persistent fact under `key` rides
+    every status until a tick sets it anew."""
+    if isinstance(status.get(key), Mapping):
         return status
-    prev = previous.get("prune") if isinstance(previous, Mapping) else None
+    prev = previous.get(key) if isinstance(previous, Mapping) else None
     if isinstance(prev, Mapping) and prev:
-        return {**status, "prune": dict(prev)}
+        return {**status, key: dict(prev)}
     return status
 
 

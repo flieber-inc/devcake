@@ -191,6 +191,22 @@ check("discovery leads waiting with no drain run is a dismissable warning", () =
   assert.equal(deriveAlerts({}).find((a) => a.id === "discovery-drain"), undefined);
 });
 
+check("a red nested-engine receipt is a warning; green and absent are not", () => {
+  const red = deriveAlerts({
+    bake_status: { baker_alive: true, baker_detail: "", nested: { rig_ok: false,
+      first_red: "the engine cannot create a user namespace (uid_map: EPERM)" } },
+  });
+  const hit = red.find((a) => a.id === "nested-engine");
+  assert.ok(hit, "nested-engine alert missing");
+  assert.equal(hit.severity, "warning");
+  assert.match(hit.body, /user namespace/);
+  assert.match(hit.body, /devcake doctor/);
+  const green = deriveAlerts({ bake_status: { baker_alive: true, nested: { rig_ok: true } } });
+  assert.equal(green.some((a) => a.id === "nested-engine"), false);
+  const none = deriveAlerts({ bake_status: { baker_alive: true } });
+  assert.equal(none.some((a) => a.id === "nested-engine"), false);
+});
+
 if (failed) {
   console.error(`alerts.mjs: ${failed} check(s) failed`);
   process.exit(1);

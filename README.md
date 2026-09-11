@@ -37,7 +37,7 @@ credentials. Ask your agent to check the
 
 ```bash
 uv tool install .          # install the CLI from the version you will run
-devcake doctor --json      # inspect prerequisites and remedies
+devcake doctor --json      # inspect prerequisites and remedies (AppArmor hosts: run the two commands it prints)
 devcake up --bake          # prepare secrets, build, start, and smoke-test
 ```
 

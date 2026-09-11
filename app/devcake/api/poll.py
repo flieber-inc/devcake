@@ -118,6 +118,7 @@ class PollRuntime:
         # Host baker heartbeat (None = not observed yet). Transition spans
         # fire from this, not from /health — health only reads.
         self.baker_alive: bool | None = None
+        self.nested_ok: bool | None = None      # newest nested-engine receipt
 
     def note_skip(self, instance: str, reason: str,
                   retry_after: float | None = None) -> None:
@@ -443,6 +444,24 @@ class PollRuntime:
                 span.set_attribute(
                     "devcake.baker.state", status.get("state") or "")
         self.baker_alive = alive
+        # The nested-engine receipt (docs/11 `bake_status.nested`): a
+        # red↔green flip is audited once, beside the baker's own transitions
+        nested = status.get("nested") if isinstance(status.get("nested"), dict) else None
+        if nested is not None:
+            ok = bool(nested.get("rig_ok"))
+            if self.nested_ok is not None and ok != self.nested_ok:
+                with tracer.start_as_current_span("baker.nested_engine_changed") as span:
+                    if not ok:
+                        span.set_status(Status(StatusCode.ERROR))
+                    span.set_attribute("devcake.nested.rig_ok", ok)
+                    span.set_attribute("devcake.nested.first_red",
+                                       str(nested.get("first_red") or ""))
+                    span.set_attribute("devcake.nested.measured_at",
+                                       str(nested.get("measured_at") or ""))
+                log.warning("nested engine on this host is now %s%s",
+                            "available" if ok else "unavailable",
+                            "" if ok else f": {nested.get('first_red') or ''}")
+            self.nested_ok = ok
         recs = drain_baker_log()
         replay_baker_spans(recs, tracer)
         for rec in recs:

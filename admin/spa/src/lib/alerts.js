@@ -362,6 +362,23 @@ export default function deriveAlerts(health) {
       body: String(bake.detail),
     });
   }
+  // The newest nested-engine receipt (docs/11 `bake_status.nested`): red
+  // means Devs cannot run containers on this host — runs still launch and
+  // the Dev is told, so this is a warning, not a critical.
+  const nested = bake.nested;
+  if (nested && typeof nested === "object" && nested.rig_ok === false) {
+    alerts.push({
+      id: "nested-engine",
+      severity: "warning",
+      title: "Devs cannot run containers on this host",
+      body:
+        (nested.first_red ? `${String(nested.first_red)}. ` : "") +
+        "Runs still launch and each Dev is told the nested engine is " +
+        "unavailable. On an AppArmor host, load the devcake-nested profile " +
+        "(devcake doctor prints the two commands), then devcake up; the next " +
+        "bake re-measures (docs/13).",
+    });
+  }
 
   const breakers = Object.entries(health.circuit_breakers || {});
   if (breakers.length > 0) {

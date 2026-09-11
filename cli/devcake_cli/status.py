@@ -105,6 +105,16 @@ def harness_lines(health: dict | None) -> list[str]:
     if waiting and idle:
         out.append("    ! the baker is idle with no bake order in flight — save any "
                    "Dev Type in the admin UI (or restart the app) to reissue it")
+    nested = bake.get("nested")
+    if isinstance(nested, dict):
+        when = str(nested.get("measured_at") or "")
+        when = f"{when[9:11]}:{when[11:13]} UTC" if len(when) >= 13 else ""
+        tail = f" (measured {when})" if when else ""
+        if nested.get("rig_ok"):
+            out.append(f"  nested engine: ok — Devs can run containers{tail}")
+        else:
+            why = str(nested.get("first_red") or "see the probe receipt")
+            out.append(f"  nested engine: unavailable — {why}{tail}")
     prune = bake.get("prune")
     if isinstance(prune, dict):
         when = str(prune.get("at") or "")[11:16]

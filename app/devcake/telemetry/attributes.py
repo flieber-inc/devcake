@@ -79,6 +79,10 @@ ATTRIBUTES: frozenset[str] = frozenset({
     "devcake.baker.cause",
     "devcake.baker.detail",
     "devcake.baker.state",
+    # the newest nested-engine receipt (docs/11 bake_status.nested)
+    "devcake.nested.rig_ok",
+    "devcake.nested.first_red",
+    "devcake.nested.measured_at",
     "devcake.children",
 })
 

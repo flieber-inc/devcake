@@ -412,6 +412,34 @@ def _reference_repos_note(mgr, primary: str) -> str:
     return body
 
 
+def _nested_engine_note(mgr=None) -> str:
+    """One honest line for the Dev when the host's newest nested-engine
+    receipt is red (docs/11 `bake_status.nested`, ADR-0023 addendum): the
+    engine inside the container will not work here, so the Dev should not
+    spend turns on it or report it as a discovery. Empty when the receipt
+    is green or absent — the note is environment, not playbook content,
+    so it rides every stage prompt after the playbook, whatever template
+    the operator chose."""
+    from ...bake_status import read_bake_status
+    try:
+        nested = (read_bake_status() or {}).get("nested")
+    except Exception:  # noqa: BLE001 — a status hiccup never blocks a dispatch
+        return ""
+    if not isinstance(nested, dict) or nested.get("rig_ok"):
+        return ""
+    why = str(nested.get("first_red") or "the host's nested-engine probe is red")
+    return NESTED_ENGINE_UNAVAILABLE_NOTE.format(why=why)
+
+
+NESTED_ENGINE_UNAVAILABLE_NOTE = """
+### This host: nested containers are unavailable
+`docker` / `podman` inside this container will not work here — the host's
+nested-engine probe is red: {why}. Verify with local services and test
+doubles instead of `docker compose`; do not spend turns on the engine, and
+facts about this run's environment are not discoveries.
+"""
+
+
 def prompt_size_report(prompt: str, sections: dict[str, str]) -> str | None:
     """A one-line anatomy when the assembled prompt is past
     prompts.PROMPT_MAX_BYTES — the budgets above keep the app's own
@@ -648,6 +676,7 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         ref_note = _reference_repos_note(mgr, repo_name)
+        env_note = _nested_engine_note(mgr)
         ident = _identifying_prompt(mgr, dev_type)
         playbook = _pb(mtype.value)
         prompt = {
@@ -658,12 +687,14 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 blocker_repos=blocker_note,
                 decomposition_rule=decomposition_rule(mgr, live),
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
-                discoveries_cap=mgr.config.budgets.discoveries_per_run),
+                discoveries_cap=mgr.config.budgets.discoveries_per_run,
+                environment_note=env_note),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
-                plan_approval_rule=plan_approval_rule(mgr, mtype)),
+                plan_approval_rule=plan_approval_rule(mgr, mtype),
+                environment_note=env_note),
             MissionType.EXECUTE: lambda: execute_prompt(
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
@@ -672,17 +703,20 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
-                discoveries_cap=mgr.config.budgets.discoveries_per_run),
+                discoveries_cap=mgr.config.budgets.discoveries_per_run,
+                environment_note=env_note),
             MissionType.REVIEW: lambda: review_prompt(
                 ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
-                discoveries_cap=mgr.config.budgets.discoveries_per_run),
+                discoveries_cap=mgr.config.budgets.discoveries_per_run,
+                environment_note=env_note),
         }[mtype]()
         size_line = prompt_size_report(prompt, {
             "identity": ident, "playbook": playbook,
             "description": live.description or "",
-            "blocker note": blocker_note, "reference repos": ref_note})
+            "blocker note": blocker_note, "reference repos": ref_note,
+            "environment note": env_note})
         if size_line:
             log.warning("dispatch of %s %s: %s", mission.key, mtype.value,
                         size_line)

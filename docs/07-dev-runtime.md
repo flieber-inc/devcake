@@ -369,9 +369,18 @@ JOINED the floor 2026-08-13 (`adr/0023` addendum): **rootless podman**
 (`docker` = compat symlink) runs nested containers inside the Dev's own
 namespaces — no `docker.sock`, no privilege. The sandbox boundary is
 unchanged in KIND, at a stated cost: the dev-run DAG's custom seccomp
-profile (default + one 15-syscall allow rule, never unconfined) plus
-/dev/fuse + /dev/net/tun widen the kernel surface for EVERY container the
-DAG launches, hello included — the accepted-risk row lives in `14` §6.
+profile (default + one 16-syscall allow rule, never unconfined), on
+AppArmor hosts the `devcake-nested` profile (Docker's default plus the
+user-namespace and mount rules the engine needs — `13` §0 for the one
+root step that loads it), Docker's masked/read-only system paths removed
+on the Dev steps, plus /dev/fuse + /dev/net/tun widen the kernel surface
+for EVERY container the DAG launches, hello included — the accepted-risk
+row lives in `14` §6. Whether the engine actually works on THIS host is a
+measured fact, not a promise: the host baker replays the contract after
+every harness bake (`13` §0 rig receipt, `/health` `bake_status.nested`),
+and when it is red the Dev's prompt ends with one line saying containers
+are unavailable here — verify with local services, spend no turns on the
+engine, and do not report the environment as a discovery.
 Nested storage lives under $HOME → per-run ephemeral; nested writes onto
 the /workspace BIND persist past the run as foreign-uid files, so the DAG's
 exit handler re-chowns the workspace to uid 1000 at run end (success,

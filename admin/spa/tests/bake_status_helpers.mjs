@@ -1,7 +1,7 @@
 // Hermetic checks for the Dev Types panel's host-baker readouts: the last
 // prune's sentence (with its time) and the reason the baker cannot act.
 import assert from "node:assert/strict";
-import { bakerBlockedReason, describePrune } from "../src/lib/bakeStatus.js";
+import { bakerBlockedReason, describeNestedEngine, describePrune } from "../src/lib/bakeStatus.js";
 
 let failed = 0;
 const check = (name, fn) => {
@@ -40,6 +40,21 @@ check("blocked reasons", () => {
   assert.equal(bakerBlockedReason({ state: "error", detail: "the checkout has moved since the app was baked; run devcake up --bake" }),
     "The host baker is not acting (error): the checkout has moved since the app was baked; run devcake up --bake");
   assert.equal(bakerBlockedReason(null), "");
+});
+
+check("nested engine: no receipt → empty; green and red sentences", () => {
+  assert.equal(describeNestedEngine(null), "");
+  assert.equal(describeNestedEngine({ state: "ready" }), "");
+  assert.equal(
+    describeNestedEngine({ nested: { rig_ok: true, measured_at: "20260910T235021Z", first_red: "" } }),
+    "Nested engine: Devs can run containers on this host (measured 23:50 UTC).");
+  assert.equal(
+    describeNestedEngine({ nested: { rig_ok: false, measured_at: "20260910T220000Z",
+      first_red: "the engine cannot create a user namespace (uid_map: EPERM)" } }),
+    "Nested engine unavailable: the engine cannot create a user namespace (uid_map: EPERM) (measured 22:00 UTC). Devs are told so in their prompt; runs still launch.");
+  assert.equal(
+    describeNestedEngine({ nested: { rig_ok: false } }),
+    "Nested engine unavailable: see the probe receipt. Devs are told so in their prompt; runs still launch.");
 });
 
 if (failed) {

@@ -304,13 +304,17 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
                    blocker_repos: str = "",
                    decomposition_rule: str = "",
                    plan_approval_rule: str = "",
-                   discoveries_cap: int = 3) -> str:
+                   discoveries_cap: int = 3,
+                   environment_note: str = "") -> str:
     """repo_options: the multi-repo triage section (item 2 full scope) —
     dispatch builds it from the instance's repo set; empty for single-repo
     and zero-repo instances (renders to nothing, like project_note).
     blocker_repos: done blockers' RO work mounts (empty when none).
     decomposition_rule: the per-mission depth line (ADR-0012) — dispatch
-    computes it via _decomposition_rule; empty renders to nothing."""
+    computes it via _decomposition_rule; empty renders to nothing.
+    environment_note: a code-owned fact about THIS host (the nested engine
+    is unavailable) appended after the playbook, whatever template the
+    operator chose — never a placeholder an override could drop."""
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["ONBOARD"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -323,7 +327,7 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "blocker_repos": blocker_repos,
          "decomposition_rule": decomposition_rule,
          "plan_approval_rule": plan_approval_rule})
-    return (identifying_prompt + "\n" + text
+    return (identifying_prompt + "\n" + text + environment_note
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
@@ -360,7 +364,8 @@ def plan_prompt(identifying_prompt: str, mission: Mission,
                 playbook: str | None = None,
                 reference_repos: str = "",
                 blocker_repos: str = "",
-                plan_approval_rule: str = "") -> str:
+                plan_approval_rule: str = "",
+                environment_note: str = "") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["PLAN"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -369,8 +374,8 @@ def plan_prompt(identifying_prompt: str, mission: Mission,
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos,
          "plan_approval_rule": plan_approval_rule})
-    return (identifying_prompt + "\n" + text + HUMAN_COMMENTS_NOTE
-            + UPSTREAM_ACTIVITY_NOTE)
+    return (identifying_prompt + "\n" + text + environment_note
+            + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE)
 
 
 EXECUTE_PLAYBOOK = """
@@ -428,7 +433,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
                    reference_repos: str = "",
                    blocker_repos: str = "",
                    plan_approval_rule: str = "",
-                   discoveries_cap: int = 3) -> str:
+                   discoveries_cap: int = 3,
+                   environment_note: str = "") -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
     (docs/06) — placeholders: {key} {title} {default} {branch}. It is
     code-owned, so it keeps str.format; its rendered result becomes the
@@ -445,7 +451,7 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos,
          "plan_approval_rule": plan_approval_rule})
-    return (identifying_prompt + "\n" + text
+    return (identifying_prompt + "\n" + text + environment_note
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
@@ -508,7 +514,8 @@ def review_prompt(identifying_prompt: str, mission: Mission,
                   playbook: str | None = None,
                   reference_repos: str = "",
                   blocker_repos: str = "",
-                  discoveries_cap: int = 3) -> str:
+                  discoveries_cap: int = 3,
+                  environment_note: str = "") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["REVIEW"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -517,7 +524,7 @@ def review_prompt(identifying_prompt: str, mission: Mission,
          "description": mission.description or "(no description)",
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos})
-    return (identifying_prompt + "\n" + text
+    return (identifying_prompt + "\n" + text + environment_note
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 

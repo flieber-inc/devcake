@@ -2314,3 +2314,56 @@ def test_baker_host_import_closure_is_stdlib_only():
         capture_output=True, text=True, env=env, timeout=60)
     assert proc.returncode == 0, f"baker host closure broke:\n{proc.stderr}"
     assert "HOST-CLOSURE-OK" in proc.stdout
+
+
+def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
+    """The nested-engine probe runs after every harness bake and whenever
+    the newest receipt no longer describes the contract the stack runs
+    (profile, seccomp); a green current receipt is never re-measured on an
+    ordinary tick, a red one waits for the next bake or a hand-run. The
+    newest receipt is projected into the bake status with its first red
+    step in plain words."""
+    factory = _load_factory()
+    d = tmp_path / "nested_probe"
+    d.mkdir()
+    assert factory.newest_nested_receipt(tmp_path) is None
+    old = {"measured_at": "20260901T000000Z", "rig_ok": False,
+           "apparmor_profile": "docker-default", "seccomp_sha256": "aaa",
+           "image": "devcake/dev-x:v1", "image_id": "sha256:1",
+           "first_red": "the engine cannot create a user namespace (uid_map: ...)",
+           "host": {"kernel": "7.0", "engine": "29.7", "os": "Ubuntu",
+                    "security_options": "name=apparmor,name=seccomp"}}
+    new = {**old, "measured_at": "20260910T235021Z", "rig_ok": True,
+           "apparmor_profile": "devcake-nested", "first_red": ""}
+    (d / "receipt-20260901T000000Z.json").write_text(json.dumps(old))
+    (d / "receipt-20260910T235021Z.json").write_text(json.dumps(new))
+    (d / "receipt-20260911T000000Z.json").write_text("{not json")
+    got = factory.newest_nested_receipt(tmp_path)
+    assert got["measured_at"] == "20260910T235021Z"          # newest parseable wins
+
+    proj = factory.nested_projection(got)
+    assert proj["rig_ok"] is True and proj["apparmor_profile"] == "devcake-nested"
+    assert proj["host"]["kernel"] == "7.0" and proj["first_red"] == ""
+    assert proj["receipt"] == "nested_probe/receipt-20260910T235021Z.json"
+    red = factory.nested_projection(old)
+    assert red["rig_ok"] is False and "user namespace" in red["first_red"]
+    assert factory.nested_projection(None) is None
+
+    assert factory.nested_key(old) != factory.nested_key(new)   # profile differs
+    assert factory.nested_key(new) == factory.nested_key(dict(new, first_red="x"))
+
+    due = lambda **kw: factory.nested_probe_due(**{  # noqa: E731
+        "baked_now": False, "receipt": new, "apparmor_profile": "devcake-nested",
+        "seccomp_sha256": "aaa", **kw})
+    assert due(baked_now=True)                          # every green bake
+    assert not due()                                    # green + current → skip
+    assert due(apparmor_profile="docker-default")       # the stack moved
+    assert due(seccomp_sha256="bbb")
+    assert not due(receipt=old)                         # red waits for a bake
+    assert not due(receipt=None)
+
+    # the fact rides every status until a tick sets it anew
+    previous = {"state": "ready", "nested": proj}
+    assert factory.carry_last(previous, {"state": "ready"}, "nested")["nested"] == proj
+    assert factory.carry_last(previous, {"state": "ready", "nested": red}, "nested")["nested"] == red
+    assert "nested" not in factory.carry_last(None, {"state": "ready"}, "nested")

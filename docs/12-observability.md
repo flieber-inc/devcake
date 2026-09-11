@@ -43,7 +43,8 @@ observability gap.
 | `run.finalize` | `dev.run` (via the run's traceparent) | app | `devcake.run.id`, `devcake.outcome` (mission vocabulary), `devcake.tokens.*`, `devcake.cost.usd` / `usd_estimated` / `rate_card`, `devcake.verdict`, `devcake.continuations` (+ ERROR status on rejections) |
 | `watchdog.kill` | `dev.run` (via the run's traceparent) | app | ERROR status, kill reason, resulting state |
 | `baker.dead` / `baker.alive` | root (poll.cycle sibling) | app | Transition only. The host baker heartbeats on `/data`; the **poll cycle** observes it (same chokepoint as `run_failures`). `baker.dead` is ERROR — restart with `devcake up`. Quiet ticks are span-free. |
-| `baker.reconcile` | root | app (replay) | One claimed keep-set order. Children: `baker.compile`, `baker.probe.<row>` (`devcake.baker.cause` = aim/stub/dialect/auth), `baker.prune`. Host baker writes span records to the outbox; poll replays them. Quiet ticks emit nothing. |
+| `baker.reconcile` | root | app (replay) | One claimed keep-set order. Children: `baker.compile`, `baker.probe.<row>` (`devcake.baker.cause` = aim/stub/dialect/auth), `baker.prune`, `baker.nested_probe` (the nested-engine receipt after a harness bake — `image`, `apparmor_profile`, `first_red`). Host baker writes span records to the outbox; poll replays them. Quiet ticks emit nothing. |
+| `baker.nested_engine_changed` | root | app (poll) | The newest nested-engine receipt flipped red↔green (`devcake.nested.rig_ok`, `devcake.nested.first_red`, `devcake.nested.measured_at`); error status on the red flip. Once per flip, beside the baker liveness transitions. |
 | `ingress.forged_drop` | root | app | security event: a message that failed envelope auth was dropped (ERROR) |
 | `ingress.poison` | root | app | reliability event: a message group dead-lettered after 5 deliveries, or after three hours of transient finalize failures (ERROR; `devcake.poison.reason`) |
 | `audit.event` | current span (or root) | app | mirrors every audit-log write: `devcake.audit.action` (e.g. `devcake_needs_human`), `devcake.pmo.id` — the needs-human alert queries this (`15-errors-and-retries.md` §6) |
@@ -102,6 +103,9 @@ devcake.mission.type
 devcake.missions.candidates
 devcake.missions.dispatched
 devcake.missions.seen
+devcake.nested.first_red
+devcake.nested.measured_at
+devcake.nested.rig_ok
 devcake.outcome
 devcake.pmo.budget_refused
 devcake.pmo.call_class

@@ -81,6 +81,9 @@ SETUP_ENV_VARS: list[tuple[str, bool]] = [
     # ADR-0025: host-absolute workspace base — devcake up re-derives it on the
     # target host, so an exported value is verification-only like DOCKER_GID
     ("DEVCAKE_WS_HOST", True),
+    # the Dev-container AppArmor profile name — a snapshot devcake up takes
+    # from the target host (devcake-nested when loaded, else docker-default)
+    ("DEVCAKE_APPARMOR_PROFILE", True),
 ]
 _SETUP_ENV_NAMES = {name for name, _ in SETUP_ENV_VARS}
 
@@ -587,6 +590,7 @@ def generate_env_file(setup_env: dict) -> str:
         "DOCKER_GID": "# HOST-SPECIFIC — verify: stat -c %g /var/run/docker.sock",
         "DEVCAKE_TAG": "# HOST-SPECIFIC — must match your docker buildx bake tag",
         "DEVCAKE_WS_HOST": "# HOST-SPECIFIC — absolute path; devcake up re-derives it",
+        "DEVCAKE_APPARMOR_PROFILE": "# HOST-SPECIFIC — devcake up re-derives it (devcake-nested when loaded)",
     }
     for name, host in SETUP_ENV_VARS:
         if host:

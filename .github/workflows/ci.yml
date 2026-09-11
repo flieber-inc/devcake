@@ -40,6 +40,13 @@ jobs:
       - name: Assert the release pin matches the changelog
         run: python3 scripts/check_version_pin.py
 
+      - name: Compile the Dev-container AppArmor profile (never loaded here)
+        run: |
+          set -euo pipefail
+          command -v apparmor_parser >/dev/null \
+            || sudo apt-get install -y --no-install-recommends apparmor
+          apparmor_parser --skip-kernel-load --skip-cache scripts/apparmor/devcake-nested
+
       - name: Test hermetic admin helpers
         run: npm run test:helpers --prefix admin/spa
 

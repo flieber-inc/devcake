@@ -145,14 +145,15 @@ def check_compose(path: Path, offenders: list[str]) -> None:
 
 # --- Dagu pin ↔ dev-run.yaml decode coupling (audit 2026-08-13) -------------
 
-# dev-run.yaml's nested `host: {resources: {…}}` block is correct ONLY while
-# the pinned Dagu lacks the mapstructure Squash fix (dagucloud/dagu#2557, our
-# upstream PR): 2.13.0 silently DROPS the embedded HostConfig.Resources
-# fields in the flat form, and post-fix the nested form dies while flattened
-# fields start working. A bump past the fix would silently zero
-# Memory/NanoCPUs/PidsLimit AND drop the /dev/fuse + /dev/net/tun devices —
-# and nothing else in CI would go red. This tripwire does.
-DAGU_COUPLED_TAG = "2.13.0"
+# dev-run.yaml's `host:` block is a Docker HostConfig decoded by Dagu, and
+# the shape that lands (flat `Memory:`/`Devices:` under `host:` since
+# 2.14.0, dagucloud/dagu#2557 — our upstream PR) has changed across Dagu
+# versions before: at 2.13.0 only a nested `resources:` key decoded. A bump
+# that silently zeroed Memory/NanoCPUs/PidsLimit or dropped the /dev/fuse +
+# /dev/net/tun devices would leave nothing else in CI red. This tripwire
+# does: the tag names the Dagu the current DAG shape was live-drilled
+# against (`docker inspect` of a real run container, docs/13 §4).
+DAGU_COUPLED_TAG = "2.16.3"
 
 
 def check_dagu_coupling(path: Path, offenders: list[str]) -> None:
@@ -162,12 +163,12 @@ def check_dagu_coupling(path: Path, offenders: list[str]) -> None:
         if m and m.group(1) != DAGU_COUPLED_TAG:
             offenders.append(
                 f"{rel}:{lineno}: Dagu bumped {DAGU_COUPLED_TAG} → "
-                f"{m.group(1)}, but dev-run.yaml's nested host.resources "
-                f"block (Memory/NanoCPUs/PidsLimit/Devices) is decode-coupled "
-                f"to {DAGU_COUPLED_TAG} (dagucloud/dagu#2557): if the Squash "
-                f"fix landed, FLATTEN those fields into direct host: keys, "
-                f"re-verify live per docs/13 §4, then update "
-                f"DAGU_COUPLED_TAG in this gate")
+                f"{m.group(1)}, but dev-run.yaml's host: block "
+                f"(Memory/NanoCPUs/PidsLimit/Devices) was last live-drilled "
+                f"on {DAGU_COUPLED_TAG}: re-verify per docs/13 §4 (docker "
+                f"inspect of a real run container shows the limits and both "
+                f"devices), record it, then update DAGU_COUPLED_TAG in this "
+                f"gate")
 
 
 def _service_block_has(lines: list[str], image_idx: int, indent: int,

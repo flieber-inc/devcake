@@ -13,6 +13,14 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Changed — Dagu 2.13.0 → 2.16.3.** The release that carries our
+  upstream fix for container limits: the run DAG now writes them in
+  Docker's own flat form instead of the nested workaround the old decoder
+  needed. Also in the range: a step's containers are stopped on timeout,
+  the docker group is created by the stock entrypoint, and the Dagu state
+  layout was refactored — back up the Dagu volume before re-pinning a
+  host.
+
 ## v0.6.4 (2026-09-10)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.8.

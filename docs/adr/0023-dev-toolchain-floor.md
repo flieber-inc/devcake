@@ -183,7 +183,12 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    `userns`, `mount`, `umount` and `pivot_root` allowed, which grant nothing
    to a uid-1000 process in the initial namespace (no capabilities there)
    and apply only inside a user namespace it creates, exactly the rootless
-   engine's case. Hosts without AppArmor ignore the name (Docker drops it),
+   engine's case. The profile's write denial under `/proc/sys` leaves
+   `/proc/sys/net/*` to the kernel's own per-namespace ownership check:
+   the engine's network helper writes a bridge sysctl in every network
+   namespace it creates (a user-defined network or a compose project with
+   published ports fails without it — measured), while the container's own
+   network sysctls stay refused to the uid-1000 Dev (measured). Hosts without AppArmor ignore the name (Docker drops it),
    and a host that has not loaded the profile runs under `docker-default`
    with the engine unavailable — never a refusal to launch. Both Dev steps
    also launch with Docker's masked and read-only system paths removed

@@ -117,6 +117,19 @@ printf '%s\n' "$out" | sed 's/^/NP_NESTED_OUT: /'
 out="$(podman run --rm --user 4321 -v /workspace:/w "$NP_TEST_IMAGE" sh -c 'echo x > /w/np_write_subuid' 2>&1)"; rc=$?
 echo "NP_SUBUID_RC=$rc"
 [ "$rc" -eq 0 ] || printf '%s\n' "$out" | sed 's/^/NP_SUBUID_ERR: /'
+# A user-defined network with a published port: netavark writes a bridge
+# sysctl for it, which the default network never needs (the AppArmor rule
+# that broke this was measured only through this path). Part of the rig
+# verdict: `docker network create` is table stakes.
+podman network rm -f np_net >/dev/null 2>&1
+out="$(podman network create np_net 2>&1 && podman run --rm --network np_net -p 18080:80 "$NP_TEST_IMAGE" sh -c 'echo network-ok' 2>&1)"; rc=$?
+podman network rm -f np_net >/dev/null 2>&1
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q "network-ok"; then
+  echo "NP_NETWORK_RC=0"
+else
+  echo "NP_NETWORK_RC=${rc:-1}"
+  printf '%s\n' "$out" | tail -3 | sed 's/^/NP_NETWORK_ERR: /'
+fi
 # Compose through the docker symlink (podman's compose subcommand → the
 # image's pinned provider): a compose-created network exercises netavark,
 # which a bare `podman run` never does. Recorded, not part of rig_ok.
@@ -197,6 +210,7 @@ GRAPH="$(val NP_GRAPH)"
 NESTED_RC="$(val NP_NESTED_RC)"
 SUBUID_RC="$(val NP_SUBUID_RC)"
 COMPOSE_RC="$(val NP_COMPOSE_RC)"
+NETWORK_RC="$(val NP_NETWORK_RC)"
 INNER_KERNEL="$(val NP_UNAME)"
 INNER_UID="$(val NP_UID)"
 
@@ -210,7 +224,7 @@ fi
 # anything else means WorkspaceStore leaks trees on this rig.
 RIG_OK=false
 if [[ "$NESTED_OK" = true && "${SUBUID_RC:-1}" = "0" \
-      && "$RECLAIM_SUBUID_UID" = "1000" ]]; then
+      && "${NETWORK_RC:-1}" = "0" && "$RECLAIM_SUBUID_UID" = "1000" ]]; then
   RIG_OK=true
 fi
 
@@ -237,6 +251,9 @@ if [[ "$RIG_OK" != true ]]; then
     FIRST_RED_DETAIL="$(grep -m1 '^NP_NESTED_OUT: ' "$LOG" | cut -d' ' -f2- | cut -c1-300 || true)"
   elif [[ "${SUBUID_RC:-1}" != "0" ]]; then
     FIRST_RED="a nested non-root user could not write the workspace bind"
+  elif [[ "${NETWORK_RC:-1}" != "0" ]]; then
+    FIRST_RED="a user-defined network could not be created or used"
+    FIRST_RED_DETAIL="$(grep -m1 '^NP_NETWORK_ERR: ' "$LOG" | cut -d' ' -f2- | cut -c1-300 || true)"
   elif [[ "$RECLAIM_SUBUID_UID" != "1000" ]]; then
     FIRST_RED="the workspace reclaim left a nested write at uid ${RECLAIM_SUBUID_UID}"
   else
@@ -254,7 +271,8 @@ NP_INNER_KERNEL="${INNER_KERNEL:-}" NP_UIDMAP_RC="${UIDMAP_RC:-}" \
 NP_UIDMAP="${UIDMAP:-}" NP_GRAPH_RC="${GRAPH_RC:-}" NP_GRAPH="${GRAPH:-}" \
 NP_NESTED_RC="${NESTED_RC:-}" NP_NESTED_OK="$NESTED_OK" \
 NP_SUBUID_RC="${SUBUID_RC:-}" NP_SUBUID_WRITE_UID="$SUBUID_WRITE_UID" \
-NP_COMPOSE_RC="${COMPOSE_RC:-}" \
+NP_COMPOSE_RC="${COMPOSE_RC:-}" NP_NETWORK_RC="${NETWORK_RC:-}" \
+NP_PROFILE_SHA="$( [[ -f /etc/apparmor.d/devcake-nested ]] && sha256sum /etc/apparmor.d/devcake-nested | cut -d' ' -f1 || echo '')" \
 NP_RECLAIM_SUBUID_UID="$RECLAIM_SUBUID_UID" NP_RIG_OK="$RIG_OK" \
 NP_WRITE_UID="$WRITE_UID" NP_RECLAIM_UID="$RECLAIM_UID" \
 NP_RECLAIM_RC="$RECLAIM_RC" \
@@ -283,6 +301,9 @@ receipt = {
     "nested_run": {"rc": e["NP_NESTED_RC"], "ok": e["NP_NESTED_OK"] == "true"},
     # `docker compose up` through the symlink — recorded, not part of rig_ok
     "compose": {"rc": e["NP_COMPOSE_RC"], "ok": e["NP_COMPOSE_RC"] == "0"},
+    "network": {"rc": e["NP_NETWORK_RC"], "ok": e["NP_NETWORK_RC"] == "0"},
+    # the installed profile's bytes: a re-installed profile is a new contract
+    "apparmor_profile_sha256": e["NP_PROFILE_SHA"],
     "workspace_bind": {
         # nested ROOT maps back to the dev uid; the subuid row is the
         # foreign-uid case the B1 reclaim handler exists for
@@ -306,7 +327,7 @@ if [[ "$RIG_OK" = true ]]; then
 else
   echo "── nested_probe: FAIL — first red NP_ step above; log: $LOG" >&2
 fi
-echo "matrix row: $STAMP | ${HOST_OS} kernel=${KERNEL} engine=${ENGINE} ${ARCH} apparmor=${APPARMOR_PROFILE} | graph=${GRAPH:-?} | uid_map_rc=${UIDMAP_RC:-?} nested_ok=${NESTED_OK} compose_rc=${COMPOSE_RC:-?} | ws uid root ${WRITE_UID}→${RECLAIM_UID} subuid ${SUBUID_WRITE_UID}→${RECLAIM_SUBUID_UID}"
+echo "matrix row: $STAMP | ${HOST_OS} kernel=${KERNEL} engine=${ENGINE} ${ARCH} apparmor=${APPARMOR_PROFILE} | graph=${GRAPH:-?} | uid_map_rc=${UIDMAP_RC:-?} nested_ok=${NESTED_OK} network_rc=${NETWORK_RC:-?} compose_rc=${COMPOSE_RC:-?} | ws uid root ${WRITE_UID}→${RECLAIM_UID} subuid ${SUBUID_WRITE_UID}→${RECLAIM_SUBUID_UID}"
 rm -rf "$WS" 2>/dev/null \
   || echo "nested_probe: scratch left behind (foreign uids — reclaim red?): $WS" >&2
 # Keep the newest five receipts (with their logs and sent profiles); the

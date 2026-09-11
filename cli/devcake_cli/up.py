@@ -172,16 +172,16 @@ def derive_apparmor_profile(repo: Path) -> tuple[str, str, str]:
     if not f.enabled:
         return (DOCKER_DEFAULT_PROFILE,
                 f"── DEVCAKE_APPARMOR_PROFILE={DOCKER_DEFAULT_PROFILE}  "
-                "(no AppArmor on this host)", "")
+                "(no AppArmor on the Docker host)", "")
     cmds = apparmor_install_commands(repo)
     if not f.usable:
         need = ("" if f.parser else
                 "install the apparmor package (apparmor_parser) first, then ")
-        why = ("the daemon cannot apply it — installed but not loaded; an older "
-               "apparmor_parser rejects the profile (4.0 or newer is needed)"
-               if f.applies is False else
-               "this host's apparmor_parser rejects the profile (4.0 or newer is needed)"
-               if f.compiles is False else "not loaded")
+        why = ("rejected by this host's apparmor_parser (4.0 or newer is needed)"
+               if f.compiles is False else
+               "installed but not loaded by the kernel"
+               if f.applies is False and f.installed else
+               "not loaded")
         return (DOCKER_DEFAULT_PROFILE,
                 f"── DEVCAKE_APPARMOR_PROFILE={DOCKER_DEFAULT_PROFILE}  "
                 f"(AppArmor active, {APPARMOR_PROFILE_NAME} {why})",
@@ -192,7 +192,9 @@ def derive_apparmor_profile(repo: Path) -> tuple[str, str, str]:
                 "   then run devcake up again.")
     how = ("the daemon applies it" if f.applies else
            "loaded" if f.loaded else
-           "installed and compiled by this host's parser; loaded state unreadable without root")
+           "installed and compiled by this host's parser; loaded state unreadable without root"
+           if f.compiles else
+           "installed; loaded state unreadable without root and no parser verdict")
     warn = ""
     if f.current is False:
         warn = (f"── WARNING: the loaded {APPARMOR_PROFILE_NAME} profile differs from\n"
@@ -623,13 +625,17 @@ def _hello_smoke(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
             "   cannot complete a Dev container run. Check:\n"
             "     docker compose logs --tail=50 dagu\n"
             "   Look for the preceding 'hello run_id=…' line for the run id.\n"
-            "   Known cause: Docker-socket permissions (Docker Desktop hosts especially).",
+            "   Known causes: Docker-socket permissions (Docker Desktop hosts especially);\n"
+            "   on an AppArmor host, .env naming a profile the kernel does not have\n"
+            "   (devcake doctor → apparmor_profile).",
             as_json=as_json,
         )
         raise SystemExit(4)
 
 
 _DAGU_PIN = re.compile(r"ghcr\.io/dagucloud/dagu:([0-9][A-Za-z0-9._-]*)")
+_DAGU_PIN_DIGEST = re.compile(
+    r"(ghcr\.io/dagucloud/dagu):[0-9][A-Za-z0-9._-]*@(sha256:[0-9a-f]{64})")
 
 
 def dagu_pin_moved(compose_text: str, running_image: str) -> tuple[str, str] | None:
@@ -643,25 +649,47 @@ def dagu_pin_moved(compose_text: str, running_image: str) -> tuple[str, str] | N
 
 
 # The helper image the shipped backup scripts use (GNU tar; digest-pinned,
-# same as scripts/backup_data.sh).
-_BACKUP_IMAGE = ("debian:bookworm-slim@sha256:"
-                 "88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171")
+# same default and the same DEVCAKE_BACKUP_IMAGE override as scripts/backup_data.sh).
+_BACKUP_IMAGE_DEFAULT = ("debian:bookworm-slim@sha256:"
+                         "88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171")
+
+
+def _backup_image() -> str:
+    return (os.environ.get("DEVCAKE_BACKUP_IMAGE")
+            or os.environ.get("DEVCAKE_ALPINE_IMAGE") or _BACKUP_IMAGE_DEFAULT)
+
+
+def _compose_project(repo: Path) -> str:
+    """The compose project name — COMPOSE_PROJECT_NAME, else the file's
+    `name:`, else the checkout's directory name (compose's own rule)."""
+    override = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
+    if override:
+        return override
+    try:
+        m = re.search(r"^name:\s*([A-Za-z0-9_.-]+)\s*$",
+                      (repo / "docker-compose.yml").read_text(), re.M)
+    except OSError:
+        m = None
+    return m.group(1) if m else repo.name.lower()
 
 
 def _dagu_volume(repo: Path) -> str | None:
+    """`<project>_dagu_data` when that volume exists, else None."""
+    name = f"{_compose_project(repo)}_dagu_data"
     try:
         proc = subprocess.run(["docker", "volume", "ls", "--format", "{{.Name}}"],
                               cwd=str(repo), text=True, capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    names = [n.strip() for n in (proc.stdout or "").splitlines()
-             if n.strip().endswith("_dagu_data")]
-    return names[0] if len(names) == 1 else None
+    return name if name in [n.strip() for n in (proc.stdout or "").splitlines()] else None
 
 
 def _running_dagu_image(repo: Path) -> str:
+    """The image the dagu service last ran — stopped containers included
+    (`ps -a`). Empty when compose knows no dagu container at all (after
+    `devcake down`, or a virgin host)."""
     ps = subprocess.run(
-        ["docker", "compose", "ps", "--format", "json", "dagu"],
+        ["docker", "compose", "ps", "-a", "--format", "json", "dagu"],
         cwd=str(repo), text=True, capture_output=True, timeout=60)
     rows: list = []
     text = (ps.stdout or "").strip()
@@ -675,37 +703,108 @@ def _running_dagu_image(repo: Path) -> str:
     return str(rows[0].get("Image") or "") if rows else ""
 
 
-def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
-    """Archive the Dagu state volume under .factory/backups/ BEFORE the
-    re-pinned Dagu starts and migrates it (docs/13 §4): the archive is the
-    rollback path — an older Dagu cannot read a migrated store. This is a
-    backup, not a migration; Dagu does its own on first start. A failed
-    archive warns and the bring-up continues (an offline host must still
-    upgrade); the printed command archives by hand."""
+def _dagu_pin_seen_locally(repo: Path, compose_text: str) -> bool:
+    """Whether the pinned Dagu image was ever pulled here — compose pulls it
+    the first time a release names it, so a present image means the
+    volume has already run under this pin (the stopped-stack
+    discriminator). The pin is `tag@digest`, and Docker stores no tag for
+    such a pull — only the digest — so the digest is what is asked for.
+    An operator who pre-pulled the pin by hand loses one archive
+    (documented)."""
+    m = _DAGU_PIN_DIGEST.search(compose_text)
+    if not m:
+        return False
     try:
-        moved = dagu_pin_moved((repo / "docker-compose.yml").read_text(),
-                               _running_dagu_image(repo))
+        proc = subprocess.run(["docker", "image", "inspect", f"{m.group(1)}@{m.group(2)}",
+                               "--format", "{{.Id}}"],
+                              cwd=str(repo), text=True, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0 and bool((proc.stdout or "").strip())
+
+
+def _rotate_archives(dest_dir: Path, keep: int = 3) -> None:
+    """Keep the newest `keep` archives by age, and always the newest one
+    that carries a real version (never let `from-unknown` copies evict the
+    pre-migration archive the rollback needs)."""
+    archives = sorted(dest_dir.glob("dagu_data-*.tgz"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    keepers = set(archives[:keep])
+    versioned = [p for p in archives if not p.name.startswith("dagu_data-from-unknown-")]
+    if versioned:
+        keepers.add(versioned[0])
+    for old in archives:
+        if old not in keepers:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+
+def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
+    """Archive the Dagu state volume under .factory/backups/ BEFORE a
+    re-pinned Dagu starts and migrates it (docs/13 §4): the archive is the
+    rollback path — an older Dagu cannot read a migrated store. A backup,
+    not a migration: Dagu does its own on first start; nothing here reads
+    the archive back. Taken when the checkout pins a Dagu the volume was
+    not last used with: the last container's image when compose knows one
+    (stopped included), else — after `devcake down` — whether the pinned
+    tag has ever been pulled here. The archive holds run params and step
+    output in clear (docs/14 §9): 0600, owned by the operator, in a 0700
+    directory, named with the version it was taken from; the newest three
+    kept. dagu is stopped for the copy and started again right after, so
+    a bring-up that fails later never leaves it down. A failed archive
+    warns and the bring-up continues; the printed command archives by
+    hand."""
+    try:
+        running = _running_dagu_image(repo)
+        compose_text = (repo / "docker-compose.yml").read_text()
+        pinned = _DAGU_PIN.search(compose_text)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return
-    if not moved:
+    if not pinned:
         return
     volume = _dagu_volume(repo)
+    if not volume:
+        return
+    if running:
+        moved = dagu_pin_moved(compose_text, running)
+        if not moved:
+            return
+        from_tag = moved[0]
+        head = (f"── this release re-pins Dagu {moved[0]} → {moved[1]}; its state "
+                "store is migrated on first start.")
+    else:
+        if _dagu_pin_seen_locally(repo, compose_text):
+            return                      # this pin has run here before
+        from_tag = "unknown"
+        head = (f"── no dagu container is known and Dagu {pinned.group(1)} has never "
+                "run here; the store's previous version is unknown, so it is "
+                "archived first.")
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     dest_dir = repo / ".factory" / "backups"
-    archive = dest_dir / f"dagu_data-{stamp}.tgz"
-    cmd = ["docker", "run", "--rm", "-v", f"{volume or '<project>_dagu_data'}:/from:ro",
-           "-v", f"{dest_dir}:/to", _BACKUP_IMAGE,
-           "tar", "czf", f"/to/{archive.name}", "-C", "/from", "."]
-    head = (f"── this release re-pins Dagu {moved[0]} → {moved[1]}; its state store "
-            "is migrated on first start.")
-    if dry_run or volume is None:
-        why = ("" if volume else
-               " (the Dagu volume could not be identified — archive by hand)")
-        _log(f"{head} {'Would archive' if dry_run else 'Archive'} it first{why}:\n   "
-             + " ".join(cmd), as_json=as_json)
+    archive = dest_dir / f"dagu_data-from-{from_tag}-{stamp}.tgz"
+    uid, gid = os.getuid(), os.getgid()
+    inner = (f"umask 077 && tar czf /to/{archive.name} -C /from . "
+             f"&& (chown {uid}:{gid} /to/{archive.name} || true)")
+    cmd = ["docker", "run", "--rm", "--network", "none",
+           "-v", f"{volume}:/from:ro", "-v", f"{dest_dir}:/to",
+           _backup_image(), "sh", "-c", inner]
+    shown = " ".join(cmd[:-1]) + " " + repr(inner)
+    if dry_run:
+        _log(f"{head} Would archive it:\n   {shown}", as_json=as_json)
         return
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    _log(f"{head} Archiving it first → {archive}", as_json=as_json)
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(dest_dir, 0o700)
+    except OSError as exc:
+        _log(f"── WARNING: cannot prepare {dest_dir} ({exc}) — continuing without a "
+             f"Dagu archive; take one by hand now if the run history matters:\n   {shown}",
+             as_json=as_json)
+        return
+    _log(f"{head} Stopping dagu for a quiet copy → {archive}", as_json=as_json)
+    subprocess.run(["docker", "compose", "stop", "dagu"], cwd=str(repo),
+                   capture_output=True, timeout=120)
     err = ""
     try:
         proc = subprocess.run(cmd, cwd=str(repo), text=True, capture_output=True,
@@ -714,14 +813,23 @@ def _dagu_backup(repo: Path, *, as_json: bool, dry_run: bool = False) -> None:
         ok = proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired) as exc:
         ok, err = False, str(exc)
+    finally:
+        # never leave the stack half-down: the bring-up recreates dagu later
+        subprocess.run(["docker", "compose", "start", "dagu"], cwd=str(repo),
+                       capture_output=True, timeout=120)
     if not ok or not archive.is_file():
         _log("── WARNING: the Dagu archive failed"
              + (f" ({err[:200]})" if err else "")
              + " — continuing; rolling Dagu back needs an archive, so take one "
-             "by hand now if the run history matters:\n   " + " ".join(cmd),
+             "by hand now if the run history matters:\n   " + shown,
              as_json=as_json)
         return
-    _log(f"── Dagu state archived ({archive.stat().st_size // 1024} KiB); "
+    try:
+        os.chmod(archive, 0o600)
+    except OSError:
+        pass
+    _rotate_archives(dest_dir)
+    _log(f"── Dagu state archived ({archive.stat().st_size // 1024} KiB, 0600); "
          "rollback: docs/13 §8", as_json=as_json)
 
 
@@ -877,7 +985,10 @@ def run_up(opts: UpOptions, *, repo: Path | None = None) -> int:
         if not opts.bake:
             opts.bake = True          # the control plane; never a Dev image
             opts.bake_targets = []
-        _dagu_backup(root, as_json=opts.as_json, dry_run=opts.dry_run)
+
+    # a re-pinned Dagu (a release, or a plain pull) migrates its store on
+    # first start: archive it first, whatever brought the new pin here
+    _dagu_backup(root, as_json=opts.as_json, dry_run=opts.dry_run)
 
     try:
         plan, _ = prepare_env(root, opts, mutate=not opts.dry_run)

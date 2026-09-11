@@ -406,8 +406,8 @@ def newest_nested_receipt(factory_dir: Path | str) -> dict | None:
         return None
     for path in paths:
         try:
-            rec = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):       # unreadable, not JSON, not UTF-8
             continue
         if isinstance(rec, Mapping) and "rig_ok" in rec:
             return dict(rec)
@@ -415,30 +415,14 @@ def newest_nested_receipt(factory_dir: Path | str) -> dict | None:
 
 
 def env_file_value(path: Path | str, key: str) -> str | None:
-    """One value from a dotenv-style file (last assignment wins; quotes,
-    `export `, comments and CR stripped). None when absent or unreadable.
-    Stdlib-only: this runs on the operator host beside the baker."""
-    try:
-        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return None
-    value: str | None = None
-    for raw in lines:
-        line = raw.strip().rstrip("\r")
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        if k.strip() != key:
-            continue
-        v = v.strip()
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
-            v = v[1:-1]
-        value = v
-    return value
+    """scripts/harness_probe/env_value.py — the one dotenv reader every
+    host-side consumer shares (the probe runs the same file as a script)."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "harness_probe" / "env_value.py"
+    spec = importlib.util.spec_from_file_location("devcake_env_value", src)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.env_file_value(path, key)
 
 
 def resolve_apparmor_profile(repo: Path | str, environ: Mapping[str, str]) -> str:
@@ -469,33 +453,60 @@ def nested_projection(receipt: Mapping | None) -> dict | None:
                  "os": str(host.get("os") or ""),
                  "security_options": str(host.get("security_options") or "")},
         "first_red": str(receipt.get("first_red") or ""),
+        # False only when the daemon refuses the profile .env names: then
+        # no Dev container starts at all (see attach_newest_nested)
+        "runs_launch": True,
+        # `docker compose up` through the symlink — its own verdict, not
+        # part of rig_ok (None when the receipt predates the compose step)
+        "compose_ok": (bool(receipt["compose"].get("ok"))
+                       if isinstance(receipt.get("compose"), Mapping) else None),
         "receipt": f"{NESTED_PROBE_DIR}/receipt-{receipt.get('measured_at') or ''}.json",
     }
 
 
 def nested_probe_due(*, baked_now: bool, receipt: Mapping | None,
-                     apparmor_profile: str, seccomp_sha256: str) -> bool:
+                     apparmor_profile: str, seccomp_sha256: str,
+                     kernel: str = "", engine: str = "") -> bool:
     """Run the probe after a green harness bake, and whenever the newest
-    receipt measured a different contract (profile, seccomp blob) than the
-    stack now runs — red or green, so loading the profile and running
-    devcake up re-measures on the next tick. A receipt that matches the
-    contract is left alone whatever its colour: a red one waits for a bake
-    or a hand-run (the inner image pull is egress the baker should not
-    spend every tick), a green one is the answer."""
+    receipt measured a different contract than the stack now runs — the
+    profile name, the seccomp blob, the host kernel or the engine version
+    (an unattended kernel or Docker upgrade changes what the same contract
+    does) — red or green, so loading the profile and running devcake up
+    re-measures on the next tick. A receipt that matches the contract is
+    left alone whatever its colour: a red one waits for a bake or a
+    hand-run (the inner image pull is egress the baker should not spend
+    every tick), a green one is the answer. A fact the baker could not
+    read this tick (empty) never counts as drift."""
     if baked_now:
         return True
     if receipt is None:
         return False            # nothing to compare against; the bake triggers it
-    return (str(receipt.get("apparmor_profile") or "") != apparmor_profile
-            or str(receipt.get("seccomp_sha256") or "") != seccomp_sha256)
+    host = receipt.get("host") if isinstance(receipt.get("host"), Mapping) else {}
+    pairs = ((str(receipt.get("apparmor_profile") or ""), apparmor_profile),
+             (str(receipt.get("seccomp_sha256") or ""), seccomp_sha256),
+             (str(host.get("kernel") or ""), kernel),
+             (str(host.get("engine") or ""), engine))
+    return any(now and was != now for was, now in pairs)
 
 
-def attach_newest_nested(status: dict, factory_dir: Path | str, previous=None) -> dict:
+def attach_newest_nested(status: dict, factory_dir: Path | str, previous=None,
+                         *, profile_applies: bool | None = None) -> dict:
     """The newest receipt's projection under `nested` — read on EVERY
     publication, including the idle tick that skips reconcile, so a
-    hand-run probe is visible within a tick."""
-    proj = nested_projection(newest_nested_receipt(factory_dir))
+    hand-run probe is visible within a tick. `profile_applies=False` (the
+    daemon refused the profile the stack names — removed by hand, lost at
+    boot) overrides a green receipt: the receipt measured a host that no
+    longer exists."""
+    try:
+        proj = nested_projection(newest_nested_receipt(factory_dir))
+    except Exception:  # noqa: BLE001 — a stray file must never kill the loop
+        proj = None
     if proj is not None:
+        if profile_applies is False:
+            proj = {**proj, "rig_ok": False, "runs_launch": False,
+                    "first_red": "the Docker host no longer applies the AppArmor "
+                                 "profile the stack names, so no Dev container "
+                                 "can start until it is loaded again"}
         return {**status, "nested": proj}
     return carry_last(previous, status, "nested")
 

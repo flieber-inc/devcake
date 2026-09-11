@@ -13,6 +13,15 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Added — compose inside Dev containers.** The harness images ship a
+  pinned podman-compose as the nested engine's compose provider, reached
+  through `docker compose` and a `docker-compose` symlink alike, with the
+  iptables binary netavark needs for compose-created networks and the
+  provider banner silenced; the nested-engine probe records a compose step
+  in its receipt, shown on the Dev Types panel, `devcake status`, an
+  Overview warning and the Dev's prompt when it is red. The Dev's prompt
+  section names the compose gaps (health-check waits, daemon socket, host
+  name). Before this the images carried no compose at all.
 - **Fixed — the nested engine inside Dev containers works on hosts that
   run AppArmor** (ADR-0023 addendum). Under Docker's default profile the
   rootless engine could not mount, and Ubuntu confined it further the
@@ -22,7 +31,8 @@ See the living log and open candidates in
   compiled in CI) that the operator loads once (`devcake doctor` prints
   the two commands, never runs them); `devcake up` derives the profile
   name into `.env` — asking the daemon first, so a profile the host cannot
-  apply is never named — the run DAG names it on both Dev steps, allows
+  apply is never named (a virgin host with no image yet falls back to the
+  installed file compiled by the host's own parser) — the run DAG names it on both Dev steps, allows
   the one extra syscall the runtime needs, and launches with Docker's
   masked system paths removed. **Security posture, stated plainly:** on
   Ubuntu hosts the profile lifts the default restriction on unprivileged
@@ -35,9 +45,22 @@ See the living log and open candidates in
   publishes the newest receipt: the Overview warns, the Dev Types panel
   and `devcake status` name the first red step, and a Dev on a red host
   is told in its prompt that containers are unavailable — runs still
-  launch. `devcake up --release` archives the Dagu state volume
-  under `.factory/backups/` before a re-pinned Dagu first starts (a backup
-  for rollback, not a migration), and prints the command when it cannot.
+  launch. `devcake up` archives the Dagu state volume under
+  `.factory/backups/` (0600, named with the version it came from, newest
+  three kept, the newest versioned one never evicted) when the checkout pins a Dagu the volume was not last used
+  with — the last container's image decides, or after `devcake down`
+  whether the pinned image was ever pulled here; dagu is stopped for the
+  copy and started again at once — a backup for rollback, not a migration; the
+  command is printed when it cannot be taken. The baker re-measures the
+  nested-engine receipt after a kernel or engine upgrade and asks the
+  daemon every minute whether it still applies the named profile; when it
+  no longer does, every surface says that no Dev container can start until
+  the profile is loaded again or `devcake up` is run.
+- **Changed — `devcake-cli` 0.1.9.** The host CLI carries the AppArmor
+  derivation, the doctor check and the Dagu archive; a release checkout
+  refuses `devcake up --release` under an older installed CLI, so upgrade
+  the CLI first (`uv tool install --reinstall '.[mcp]'` from the checkout,
+  or the PyPI release of the same version).
   Every Dev prompt now carries a short section saying what `docker` is
   inside the container.
 - **Changed — Dagu 2.13.0 → 2.16.3.** The release that carries our
@@ -45,8 +68,8 @@ See the living log and open candidates in
   Docker's own flat form instead of the nested workaround the old decoder
   needed. Also in the range: a step's containers are stopped on timeout,
   the docker group is created by the stock entrypoint, and the Dagu state
-  layout was refactored — back up the Dagu volume before re-pinning a
-  host.
+  layout was refactored — `devcake up` archives the Dagu volume before the
+  re-pinned Dagu first starts (the "Fixed" bullet above).
 
 ## v0.6.4 (2026-09-10)
 

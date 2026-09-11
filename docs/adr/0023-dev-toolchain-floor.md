@@ -152,7 +152,14 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    Provenance, recorded: the bundle is `mgoltzsche/podman-static` — an
    UNOFFICIAL upstream, accepted because the artifacts are sha256-pinned
    per arch and no distro ships a rootless-in-container-capable 5.x;
-   revisit when one does.
+   revisit when one does. Compose: `podman-compose` from PyPI, version
+   pinned in the Dockerfile (`podman compose` delegates to it; `docker
+   compose` and a `docker-compose` symlink reach the same provider; the
+   provider banner is silenced in the dev user's containers.conf), plus
+   the `iptables` package netavark needs for compose-created networks
+   (measured: without it every compose service fails to start). The
+   nested probe records a `compose` step in its receipt, separate from
+   the rig verdict.
 2. **Helpers:** Debian's SETUID `newuidmap`/`newgidmap` EPERM on the
    uid_map write inside a container on the measured host while the
    Fedora-style FILE-CAPS flavor works — the base re-packages them with
@@ -180,7 +187,7 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    and a host that has not loaded the profile runs under `docker-default`
    with the engine unavailable — never a refusal to launch. Both Dev steps
    also launch with Docker's masked and read-only system paths removed
-   (`MaskedPaths: []`, `ReadonlyPaths: []`). Measured: on a cloud Ubuntu
+   (`MaskedPaths: []`, `ReadonlyPaths: []`). Measured 2026-09-10: on a cloud Ubuntu
    24.04 host (kernel 7.0, engine 29.7) with the profile loaded and the
    16-syscall rule in place, the nested container's own `mount proc`
    returns EPERM while Docker's default masks are present and succeeds

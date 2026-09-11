@@ -35,6 +35,12 @@ def test_note_describes_the_engine_and_stays_green_without_a_red_receipt(tmp_pat
     assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
     _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": ""})
     assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
+    assert "podman-compose" in dispatch.ENVIRONMENT_NOTE
+    _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": "", "compose_ok": True})
+    assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
+    _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": "", "compose_ok": False})
+    note = dispatch._environment_note()
+    assert note.startswith(dispatch.ENVIRONMENT_NOTE) and "compose` is not working" in note
 
 
 def test_note_names_the_first_red_step_in_plain_words(tmp_path, monkeypatch):

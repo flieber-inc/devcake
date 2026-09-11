@@ -366,7 +366,29 @@ export default function deriveAlerts(health) {
   // means Devs cannot run containers on this host — runs still launch and
   // the Dev is told, so this is a warning, not a critical.
   const nested = bake.nested;
-  if (nested && typeof nested === "object" && nested.rig_ok === false) {
+  if (nested && typeof nested === "object" && nested.rig_ok === true && nested.compose_ok === false) {
+    alerts.push({
+      id: "nested-compose",
+      severity: "warning",
+      title: "docker compose does not work inside Dev containers",
+      body:
+        "Containers run, but the compose step of the nested-engine probe failed — " +
+        "see the newest probe log under .factory/nested_probe/ on the host. Each " +
+        "Dev's prompt says compose is not working here; runs still launch.",
+    });
+  }
+  if (nested && typeof nested === "object" && nested.rig_ok === false && nested.runs_launch === false) {
+    alerts.push({
+      id: "nested-engine",
+      severity: "critical",
+      title: "No Dev container can start on this host",
+      body:
+        (nested.first_red ? `${String(nested.first_red)}. ` : "") +
+        "Every run fails at container create until the profile is loaded " +
+        "again (devcake doctor prints the two commands) or devcake up is run " +
+        "so runs fall back to docker-default without the nested engine.",
+    });
+  } else if (nested && typeof nested === "object" && nested.rig_ok === false) {
     alerts.push({
       id: "nested-engine",
       severity: "warning",
@@ -375,8 +397,10 @@ export default function deriveAlerts(health) {
         (nested.first_red ? `${String(nested.first_red)}. ` : "") +
         "Runs still launch and each Dev is told the nested engine is " +
         "unavailable. On an AppArmor host, load the devcake-nested profile " +
-        "(devcake doctor prints the two commands), then devcake up; the next " +
-        "bake re-measures (docs/13).",
+        "(devcake doctor prints the two commands), then devcake up — the " +
+        "receipt is re-measured on the next tick once a harness image is " +
+        "baked. On other hosts, run scripts/harness_probe/nested_probe.sh " +
+        "by hand and read its log (docs/13).",
     });
   }
 

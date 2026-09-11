@@ -606,6 +606,7 @@ class ApparmorFacts:
     parser: bool                  # apparmor_parser found
     compiles: bool | None         # host parser compiles the checkout's file; None = no parser
     applies: bool | None          # docker run --security-opt apparmor=<name> succeeded; None = not tried
+    applies_error: str = ""       # the daemon's first error line when it refused
 
     @property
     def usable(self) -> bool:
@@ -642,15 +643,18 @@ def _daemon_has_apparmor(runner, docker: str | None) -> bool | None:
     if proc.returncode != 0:
         return None
     try:
-        opts = json.loads((proc.stdout or "").strip() or "[]")
+        opts = json.loads((proc.stdout or "").strip() or "null")
     except json.JSONDecodeError:
         return None
-    return any(str(o).startswith("name=apparmor") for o in (opts or []))
+    if not isinstance(opts, list):
+        return None                      # a daemon that answers null: unknown
+    return any(str(o).startswith("name=apparmor") for o in opts)
 
 
 def _probe_image(runner, docker: str) -> str | None:
     """A local image to start a throwaway container from — hello (this
-    stack's own), else the pinned redis, else any tagged image."""
+    stack's own) or the pinned redis; never an arbitrary local image (its
+    /bin/true is its own code)."""
     try:
         proc = runner([docker, "images", "--format", "{{.Repository}}:{{.Tag}}"],
                       capture_output=True, text=True, timeout=30)
@@ -664,24 +668,27 @@ def _probe_image(runner, docker: str) -> str | None:
         for r in refs:
             if r.startswith(pref):
                 return r
-    return refs[0] if refs else None
+    return None
 
 
-def _profile_applies(runner, docker: str, image: str) -> bool | None:
+def _profile_applies(runner, docker: str, image: str) -> tuple[bool | None, str]:
     """Ask the daemon: a container that names the profile either starts
-    (True) or fails to apply it (False). Anything else: unknown."""
+    (True) or does not (False, with the daemon's first error line — any
+    failure counts, since the file tier must never be trusted after the
+    daemon was asked). None only when the daemon could not be asked."""
     try:
         proc = runner([docker, "run", "--rm", "--network", "none",
+                       "--user", "65534:65534", "--cap-drop", "ALL",
+                       "--security-opt", "no-new-privileges", "--read-only",
                        "--security-opt", f"apparmor={APPARMOR_PROFILE_NAME}",
                        "--entrypoint", "/bin/true", image],
                       capture_output=True, text=True, timeout=90)
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, ""
     if proc.returncode == 0:
-        return True
-    if "apparmor" in (proc.stderr or "").lower():
-        return False
-    return None
+        return True, ""
+    first = next((ln.strip() for ln in (proc.stderr or "").splitlines() if ln.strip()), "")
+    return False, first[:200]
 
 
 def apparmor_facts(
@@ -726,13 +733,15 @@ def apparmor_facts(
         except (OSError, subprocess.TimeoutExpired):
             compiles = None
     applies: bool | None = None
+    applies_error = ""
     if enabled and docker_bin and (installed or loaded):
         image = _probe_image(runner, docker_bin)
         if image:
-            applies = _profile_applies(runner, docker_bin, image)
+            applies, applies_error = _profile_applies(runner, docker_bin, image)
     return ApparmorFacts(enabled=enabled, loaded=loaded, installed=installed,
                          current=current, parser=bool(parser_bin),
-                         compiles=compiles, applies=applies)
+                         compiles=compiles, applies=applies,
+                         applies_error=applies_error)
 
 
 def apparmor_install_commands(repo_root: Path | None) -> str:
@@ -742,16 +751,25 @@ def apparmor_install_commands(repo_root: Path | None) -> str:
             f"sudo apparmor_parser -r {APPARMOR_INSTALLED_PATH}")
 
 
-def _env_apparmor_value(repo_root: Path | None) -> str:
+def _env_apparmor_value(repo_root: Path | None) -> str | None:
+    """The value as compose reads it, through the checkout's one dotenv
+    reader (scripts/harness_probe/env_value.py — the baker and the probe
+    use the same file). None when there is no .env at all (no stack has
+    been brought up yet); empty when the key is absent or blank."""
     if repo_root is None:
-        return ""
+        return None
+    src = repo_root / "scripts" / "harness_probe" / "env_value.py"
     env_path = repo_root / ".env"
-    if not env_path.is_file():
-        return ""
+    if not src.is_file() or not env_path.is_file():
+        return None
+    import importlib.util
     try:
-        return (envfile.parse_env_file(env_path).get("DEVCAKE_APPARMOR_PROFILE") or "").strip()
-    except OSError:
-        return ""
+        spec = importlib.util.spec_from_file_location("devcake_env_value", src)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return (mod.env_file_value(env_path, "DEVCAKE_APPARMOR_PROFILE") or "").strip()
+    except Exception:  # noqa: BLE001 — a broken reader never breaks the doctor
+        return None
 
 
 def check_apparmor_profile(
@@ -773,14 +791,21 @@ def check_apparmor_profile(
                    "containers relies on the seccomp profile alone")
     cmds = apparmor_install_commands(repo_root)
     if not f.usable:
-        if f.applies is False:
-            why = ("the daemon cannot apply it (installed under /etc/apparmor.d/ "
-                   "but not loaded by the kernel — an older apparmor_parser "
-                   "rejects the profile's userns rule; check `apparmor_parser "
-                   "--version`, 4.0 or newer is needed)")
-        elif f.compiles is False:
+        if f.compiles is False:
             why = ("this host's apparmor_parser rejects the profile (4.0 or newer "
-                   "is needed for the userns rule)")
+                   "is needed for the userns rule; check `apparmor_parser --version`)")
+        elif f.applies is False and "apparmor" not in f.applies_error.lower():
+            why = ("a throwaway container naming it failed for a reason the daemon "
+                   "did not attribute to AppArmor, so the name is not trusted"
+                   + (f" [daemon: {f.applies_error}]" if f.applies_error else ""))
+        elif f.applies is False and f.installed:
+            why = ("the daemon cannot apply it — the file is installed but the "
+                   "kernel has no such profile (unloaded, or never loaded); the "
+                   "second command below loads it"
+                   + (f" [daemon: {f.applies_error}]" if f.applies_error else ""))
+        elif f.applies is False:
+            why = ("the daemon cannot apply it — the kernel has no such profile"
+                   + (f" [daemon: {f.applies_error}]" if f.applies_error else ""))
         else:
             why = "it is not loaded"
         need = ("" if f.parser else
@@ -802,16 +827,19 @@ def check_apparmor_profile(
                     "differs from this checkout's (outdated, or loaded from "
                     "elsewhere). Re-run (printed only; this CLI will not run it): "
                     f"{cmds}"))
-    if env_value and env_value != APPARMOR_PROFILE_NAME:
+    if env_value is not None and env_value != APPARMOR_PROFILE_NAME:
+        names = f"still names {env_value}" if env_value else "does not name it yet"
         return CheckResult(
             id="apparmor_profile", ok=False, hard=False,
-            detail=(f"{APPARMOR_PROFILE_NAME} is usable but .env still names "
-                    f"{env_value} — run devcake up to switch the Dev containers "
-                    "to it"))
+            detail=(f"{APPARMOR_PROFILE_NAME} is usable but .env {names} — Dev "
+                    "containers run under docker-default (no nested engine) "
+                    "until devcake up writes it"))
     how = ("the daemon applies it" if f.applies else
            "loaded" if f.loaded else
            "installed under /etc/apparmor.d/ and compiled by this host's parser "
-           "(loaded state unreadable without root)")
+           "(loaded state unreadable without root)" if f.compiles else
+           "installed under /etc/apparmor.d/ (loaded state unreadable without "
+           "root, no parser verdict)")
     return CheckResult(
         id="apparmor_profile", ok=True, hard=False,
         detail=f"{APPARMOR_PROFILE_NAME}: {how} — Dev containers get the nested engine")

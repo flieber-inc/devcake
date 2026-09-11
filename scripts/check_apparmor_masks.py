@@ -6,7 +6,7 @@ Docker has extended its lists before; this check asks the local daemon
 what it masks TODAY and fails when the profile lacks a deny for any of it.
 
 Runs where Docker is available (CI, an operator host); stdlib-only.
-Usage: check_apparmor_masks.py [profile-path] [image]
+Usage: check_apparmor_masks.py [profile-path]
 """
 from __future__ import annotations
 
@@ -17,11 +17,15 @@ import sys
 from pathlib import Path
 
 PROFILE = Path(__file__).resolve().parents[1] / "scripts" / "apparmor" / "devcake-nested"
-IMAGE = "alpine:3.20"
+# digest-pinned like every other image reference in ops scripts (audit A14)
+IMAGE = "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 
 
-def docker_lists(image: str) -> tuple[list[str], list[str]]:
-    cid = subprocess.run(["docker", "create", image, "true"], check=True,
+def docker_lists() -> tuple[list[str], list[str], set[str]]:
+    """Docker's masked and read-only lists for a default container, and
+    which of those paths are directories (a read-only DIRECTORY needs the
+    whole tree denied; a file needs only itself)."""
+    cid = subprocess.run(["docker", "create", IMAGE, "true"], check=True,
                          capture_output=True, text=True).stdout.strip()
     try:
         out = subprocess.run(
@@ -30,12 +34,25 @@ def docker_lists(image: str) -> tuple[list[str], list[str]]:
             check=True, capture_output=True, text=True).stdout.strip().splitlines()
     finally:
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
-    return json.loads(out[0]) or [], json.loads(out[1]) or []
+    masked, readonly = json.loads(out[0]) or [], json.loads(out[1]) or []
+    probe = " ".join(f'[ -d "{p}" ] && echo "{p}";' for p in readonly) + " true"
+    run = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--security-opt", "systempaths=unconfined",
+         IMAGE, "sh", "-c", probe], check=False, capture_output=True, text=True)
+    dirs = set(run.stdout.split())
+    # a probe that could not run must not degrade the check to file-only:
+    # Docker's read-only list always holds /proc/sys, a directory
+    if run.returncode != 0 or (readonly and not dirs):
+        raise SystemExit("check_apparmor_masks: the directory probe did not run "
+                         f"(rc {run.returncode}): {(run.stderr or '').strip()[:200]}")
+    return masked, readonly, dirs
 
 
 def _expand(pattern: str) -> list[str]:
-    """Expand one level of `{a,b}` alternation in an AppArmor path."""
-    m = re.search(r"\{([^{}]*)\}", pattern)
+    """Expand `{a,b}` alternations in an AppArmor path. Groups with an empty
+    alternative (`{,**}`, `{,/**}`) are the tree-with-base idiom and stay
+    literal for `_tree_base`."""
+    m = re.search(r"\{([^{},]+(?:,[^{},]+)+)\}", pattern)
     if not m:
         return [pattern]
     out = []
@@ -58,39 +75,96 @@ def deny_rules(profile_text: str) -> list[tuple[str, str]]:
     return rules
 
 
+# Read-only trees Docker freezes that the profile denies only partly, on
+# purpose (inherited from Docker's own profile): each entry names why.
+PARTIAL_READONLY = {
+    "/proc/sys": "Docker's own profile leaves /proc/sys/kernel/shm* writable "
+                 "(POSIX shared memory sizing); everything else under /proc/sys "
+                 "is denied by the class rules",
+}
+
+
+def _tree_base(rule_path: str) -> str | None:
+    """The literal base of a rule that covers a whole tree INCLUDING the base
+    itself (`X/{,**}` or `X{,/**}`); None for other shapes. `X/**` alone
+    does not match X, so it is not a tree-with-base rule."""
+    for suffix in ("/{,**}", "{,/**}"):
+        if rule_path.endswith(suffix):
+            base = rule_path[: -len(suffix)]
+            return None if any(c in base for c in "*[?") else base
+    return None
+
+
+def _subtree_base(rule_path: str) -> str | None:
+    """The literal base of a rule covering everything BELOW it (`X/**`)."""
+    if rule_path.endswith("/**"):
+        base = rule_path[:-3]
+        return None if any(c in base for c in "*[?") else base
+    return None
+
+
 def _covered(path: str, rules: list[tuple[str, str]], need: str) -> bool:
-    """A deny rule covers `path` when its pattern is the path itself, the
-    path plus a trailing tree glob, or the path's parent tree, with every
-    permission in `need`."""
+    """A masked path (a file or a directory Docker hides): the profile must
+    deny the path ITSELF — a literal rule, a `X/{,**}` tree rule at or above
+    it, or a `X/**` subtree rule strictly above it. A single-level `/*` rule
+    covers only its direct children."""
     for rule_path, perms in rules:
         if not set(need) <= set(perms):
             continue
-        base = rule_path
-        for suffix in ("/**", "/{,**}", "{,/**}", "/*"):
-            if base.endswith(suffix):
-                base = base[: -len(suffix)]
-                break
-        if rule_path == path or base == path:
+        if rule_path == path:
             return True
-        # a parent-tree rule such as /sys/[^f]*/** does not cover /sys/firmware;
-        # only literal parents count
-        if "*" not in base and "[" not in base and path.startswith(base + "/"):
+        base = _tree_base(rule_path)
+        if base is not None and (base == path or path.startswith(base + "/")):
             return True
+        base = _subtree_base(rule_path)
+        if base is not None and path.startswith(base + "/"):
+            return True
+        if rule_path.endswith("/*"):
+            base = rule_path[:-2]
+            if not any(c in base for c in "*[?") and path.rsplit("/", 1)[0] == base \
+                    and path != base:
+                return True
     return False
+
+
+def _tree_covered(path: str, rules: list[tuple[str, str]], need: str,
+                  is_dir: bool = True) -> bool:
+    """A read-only entry: a FILE needs a rule for itself; a DIRECTORY needs
+    the path itself AND everything below it write-denied — a `X/{,**}`
+    rule at or above, or a `X/**` rule at or above plus a rule for the
+    path itself."""
+    if not is_dir:
+        return _covered(path, rules, need)
+    below = False
+    for rule_path, perms in rules:
+        if not set(need) <= set(perms):
+            continue
+        base = _tree_base(rule_path)
+        if base is not None and (base == path or path.startswith(base + "/")):
+            return True
+        base = _subtree_base(rule_path)
+        if base is not None and (base == path or path.startswith(base + "/")):
+            below = True
+    return below and _covered(path, rules, need)
 
 
 def main(argv: list[str]) -> int:
     profile = Path(argv[1]) if len(argv) > 1 else PROFILE
-    image = argv[2] if len(argv) > 2 else IMAGE
-    masked, readonly = docker_lists(image)
+    masked, readonly, dirs = docker_lists()
     rules = deny_rules(profile.read_text())
     problems = []
     for p in masked:
         if not _covered(p, rules, "r"):
             problems.append(f"masked by Docker but readable under the profile: {p}")
     for p in readonly:
-        if not _covered(p, rules, "w"):
-            problems.append(f"read-only under Docker but writable under the profile: {p}")
+        if _tree_covered(p, rules, "w", is_dir=p in dirs):
+            continue
+        if p in PARTIAL_READONLY and _covered(p, rules, "w"):
+            print(f"check_apparmor_masks: {p} is denied partly, on purpose — "
+                  f"{PARTIAL_READONLY[p]}")
+            continue
+        problems.append(f"read-only tree under Docker but not fully write-denied "
+                        f"under the profile: {p}")
     if problems:
         print("check_apparmor_masks: the profile no longer covers Docker's default masks:",
               file=sys.stderr)

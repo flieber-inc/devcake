@@ -13,6 +13,11 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+## v0.6.6 (2026-09-11)
+
+Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.9. Re-run the two Dev-container profile commands after upgrading (the profile changed; the doctor reports the old copy as outdated).
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.6).
+
 - **Fixed — user-defined networks inside the Dev's engine work on AppArmor
   hosts.** The Dev-container profile denied every write under `/proc/sys`,
   which broke `docker network create` and any compose project with

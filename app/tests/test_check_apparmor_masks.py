@@ -60,6 +60,29 @@ def test_coverage_logic_is_not_fooled_by_single_level_or_class_rules():
     assert m._tree_covered("/proc/sysrq-trigger", dir_only, "w", is_dir=False)
 
 
+def test_a_failed_directory_probe_is_loud_not_a_weaker_check(monkeypatch):
+    """The read-only tree rule depends on knowing which entries are
+    directories; a probe container that did not run must abort, never
+    silently fall back to the file-only check."""
+    import subprocess
+    m = _mod()
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "create"]:
+            return subprocess.CompletedProcess(cmd, 0, "cid\n", "")
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 0, '["/proc/kcore"]\n["/proc/sys"]\n', "")
+        if cmd[:2] == ["docker", "run"]:
+            return subprocess.CompletedProcess(cmd, 125, "", "unknown option systempaths")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    with pytest.raises(SystemExit) as exc:
+        m.docker_lists()
+    assert "directory probe did not run" in str(exc.value)
+
+
 def test_a_profile_missing_a_deny_fails_the_check(monkeypatch, tmp_path):
     """The checker exists for the day Docker extends its lists: a profile
     lacking one deny must fail, not pass."""

@@ -35,11 +35,17 @@ def docker_lists() -> tuple[list[str], list[str], set[str]]:
     finally:
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
     masked, readonly = json.loads(out[0]) or [], json.loads(out[1]) or []
-    probe = " ".join(f'[ -d "{p}" ] && echo "{p}";' for p in readonly)
-    dirs = subprocess.run(
+    probe = " ".join(f'[ -d "{p}" ] && echo "{p}";' for p in readonly) + " true"
+    run = subprocess.run(
         ["docker", "run", "--rm", "--network", "none", "--security-opt", "systempaths=unconfined",
-         IMAGE, "sh", "-c", probe], check=False, capture_output=True, text=True).stdout.split()
-    return masked, readonly, set(dirs)
+         IMAGE, "sh", "-c", probe], check=False, capture_output=True, text=True)
+    dirs = set(run.stdout.split())
+    # a probe that could not run must not degrade the check to file-only:
+    # Docker's read-only list always holds /proc/sys, a directory
+    if run.returncode != 0 or (readonly and not dirs):
+        raise SystemExit("check_apparmor_masks: the directory probe did not run "
+                         f"(rc {run.returncode}): {(run.stderr or '').strip()[:200]}")
+    return masked, readonly, dirs
 
 
 def _expand(pattern: str) -> list[str]:

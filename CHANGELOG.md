@@ -47,7 +47,7 @@ See the living log and open candidates in
   is told in its prompt that containers are unavailable — runs still
   launch. `devcake up` archives the Dagu state volume under
   `.factory/backups/` (0600, named with the version it came from, newest
-  three kept) when the checkout pins a Dagu the volume was not last used
+  three kept, the newest versioned one never evicted) when the checkout pins a Dagu the volume was not last used
   with — the last container's image decides, or after `devcake down`
   whether the pinned image was ever pulled here; dagu is stopped for the
   copy and started again at once — a backup for rollback, not a migration; the

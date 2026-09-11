@@ -2370,6 +2370,9 @@ def test_nested_receipt_projection_and_when_the_probe_is_due(tmp_path):
     assert due(engine="30.0")
     assert not due(kernel="7.0", engine="29.7")
     assert not due(kernel="", engine="")
+    # a re-installed profile (same name, new bytes) re-measures too
+    assert due(receipt={**new, "apparmor_profile_sha256": "old"}, profile_sha256="new")
+    assert not due(receipt={**new, "apparmor_profile_sha256": "same"}, profile_sha256="same")
 
     # the fact rides every status until a tick sets it anew
     previous = {"state": "ready", "nested": proj}

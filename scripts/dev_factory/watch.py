@@ -669,6 +669,15 @@ def profile_still_applies(now: float | None = None) -> bool | None:
     return value
 
 
+def _installed_profile_sha256() -> str:
+    """sha256 of /etc/apparmor.d/devcake-nested, empty when absent."""
+    import hashlib
+    try:
+        return hashlib.sha256(Path("/etc/apparmor.d/devcake-nested").read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def _host_facts() -> tuple[str, str]:
     """(kernel, engine) as the probe records them; empty when unreadable."""
     out = []
@@ -704,7 +713,8 @@ def nested_drift_pending(now: float | None = None) -> bool:
         value = nested_probe_due(
             baked_now=False, receipt=receipt,
             apparmor_profile=resolve_apparmor_profile(REPO, os.environ),
-            seccomp_sha256=_dag_seccomp_sha256(), kernel=kernel, engine=engine)
+            seccomp_sha256=_dag_seccomp_sha256(), kernel=kernel, engine=engine,
+            profile_sha256=_installed_profile_sha256())
         if value and t < _PROBE_BACKOFF["until"]:
             value = False
     except Exception:  # noqa: BLE001 — a drift check must never kill the loop
@@ -748,7 +758,8 @@ def publish_nested(*, work: Path, previous, status: dict, baked: list[str],
     due = nested_probe_due(baked_now=bool(baked), receipt=receipt,
                            apparmor_profile=profile,
                            seccomp_sha256=_dag_seccomp_sha256(),
-                           kernel=kernel, engine=engine)
+                           kernel=kernel, engine=engine,
+                           profile_sha256=_installed_profile_sha256())
     candidates = probe_image_candidates(local_images, tag=tag)
     image = baked[-1] if baked else (candidates[0] if candidates else "")
     # a probe that produced no receipt (script error, timeout) must not

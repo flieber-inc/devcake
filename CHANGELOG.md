@@ -13,6 +13,18 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Fixed — user-defined networks inside the Dev's engine work on AppArmor
+  hosts.** The Dev-container profile denied every write under `/proc/sys`,
+  which broke `docker network create` and any compose project with
+  published ports: the engine's network helper writes a bridge sysctl in
+  the network namespace it owns. The profile now leaves `/proc/sys/net/*`
+  to the kernel's own per-namespace ownership check (the container's own
+  network sysctls stay refused, measured), the nested-engine probe
+  exercises a user-defined network with a published port as part of its
+  verdict, and the baker re-measures when the installed profile's bytes
+  change. Re-run the two profile commands after upgrading; the doctor
+  reports the old copy as outdated.
+
 ## v0.6.5 (2026-09-11)
 
 Patch release in the v0.6 "Kentucky Butter" line. Ships with `devcake-cli` 0.1.9 — upgrade the CLI before `devcake up --release`.

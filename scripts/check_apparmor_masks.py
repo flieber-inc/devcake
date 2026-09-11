@@ -79,8 +79,10 @@ def deny_rules(profile_text: str) -> list[tuple[str, str]]:
 # purpose (inherited from Docker's own profile): each entry names why.
 PARTIAL_READONLY = {
     "/proc/sys": "Docker's own profile leaves /proc/sys/kernel/shm* writable "
-                 "(POSIX shared memory sizing); everything else under /proc/sys "
-                 "is denied by the class rules",
+                 "(POSIX shared memory sizing) and this one leaves /proc/sys/net/* "
+                 "to the kernel's per-namespace ownership check (the rootless "
+                 "engine's bridges need it; the container's own stay root-only); "
+                 "everything else under /proc/sys is denied by the class rules",
 }
 
 

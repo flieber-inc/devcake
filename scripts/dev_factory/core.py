@@ -466,10 +466,12 @@ def nested_projection(receipt: Mapping | None) -> dict | None:
 
 def nested_probe_due(*, baked_now: bool, receipt: Mapping | None,
                      apparmor_profile: str, seccomp_sha256: str,
-                     kernel: str = "", engine: str = "") -> bool:
+                     kernel: str = "", engine: str = "",
+                     profile_sha256: str = "") -> bool:
     """Run the probe after a green harness bake, and whenever the newest
     receipt measured a different contract than the stack now runs — the
-    profile name, the seccomp blob, the host kernel or the engine version
+    profile name, the installed profile's bytes, the seccomp blob, the host
+    kernel or the engine version
     (an unattended kernel or Docker upgrade changes what the same contract
     does) — red or green, so loading the profile and running devcake up
     re-measures on the next tick. A receipt that matches the contract is
@@ -485,7 +487,10 @@ def nested_probe_due(*, baked_now: bool, receipt: Mapping | None,
     pairs = ((str(receipt.get("apparmor_profile") or ""), apparmor_profile),
              (str(receipt.get("seccomp_sha256") or ""), seccomp_sha256),
              (str(host.get("kernel") or ""), kernel),
-             (str(host.get("engine") or ""), engine))
+             (str(host.get("engine") or ""), engine),
+             # the installed profile's bytes (a re-installed profile is a
+             # new contract with the same name)
+             (str(receipt.get("apparmor_profile_sha256") or ""), profile_sha256))
     return any(now and was != now for was, now in pairs)
 
 

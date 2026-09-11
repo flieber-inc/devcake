@@ -12,7 +12,7 @@ import DevTypeEditor from "./DevTypeEditor.jsx";
 import NewDevTypeDialog from "./NewDevTypeDialog.jsx";
 import FirstSetupDialog from "./FirstSetupDialog.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
-import { bakerBlockedReason, describePrune } from "../lib/bakeStatus.js";
+import { bakerBlockedReason, describeNestedEngine, describePrune } from "../lib/bakeStatus.js";
 
 // ── OAuth wizard (docs/16 M6): device-code flow driven from the UI ──────────
 // Immediate by nature: the credential is stored server-side the moment the
@@ -220,6 +220,13 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
             ]} />
           </>
         }>
+        {describeNestedEngine(healthInfo?.bake_status) && (
+          <p className={"mb-4 text-sm " + (healthInfo?.bake_status?.nested?.rig_ok
+            ? "text-neutral-600 dark:text-neutral-300"
+            : "text-amber-700 dark:text-amber-400")}>
+            {describeNestedEngine(healthInfo?.bake_status)}
+          </p>
+        )}
         {rosterEmpty && (
           <div className="mb-4 rounded-card border border-accent-200 bg-accent-50/60 p-4 dark:border-accent-900 dark:bg-accent-950/30">
             <p className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">

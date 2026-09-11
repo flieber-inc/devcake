@@ -149,29 +149,43 @@ def test_both_steps_carry_the_nested_engine_knobs():
     (Docker's HostConfig shape, decoded since dagucloud/dagu#2557) as the
     fuse-overlayfs fallback for kernels <5.13."""
     import json
-    steps = _steps()
+    doc = _dag()
+    steps = {s["id"]: s for s in doc["steps"]}
+    # the profile name rides a DAG-level env entry: the daemon's process env
+    # is not expanded inside `host:` values, a DAG env entry is (measured)
+    assert {"DEVCAKE_APPARMOR_PROFILE": "${DEVCAKE_APPARMOR_PROFILE}"} in doc["env"]
     blobs = set()
     for sid in ("provision", "run_dev"):
         host = steps[sid]["with"]["host"]
         so = host["SecurityOpt"]
-        assert len(so) == 1 and so[0].startswith("seccomp={"), \
+        assert len(so) == 2 and so[0].startswith("seccomp={"), \
             "nested-engine seccomp must be an inline profile, never unconfined"
+        assert so[1] == "apparmor=${DEVCAKE_APPARMOR_PROFILE}", \
+            "the AppArmor profile is named from the env, never hard-coded"
+        assert not any(item.endswith("=unconfined") for item in so), \
+            "no security option may be unconfined"
+        # Docker's masked/read-only system paths are removed on both Dev
+        # steps (the nested engine's own /proc mount needs it); the AppArmor
+        # profile denies those paths in their place — pinned EMPTY, never
+        # absent, so a YAML reshape cannot silently restore or widen them
+        assert host["MaskedPaths"] == [] and host["ReadonlyPaths"] == []
         blobs.add(so[0])
         prof = json.loads(so[0][len("seccomp="):])
         assert prof["defaultAction"] != "SCMP_ACT_ALLOW"
-        # the FULL measured 15-name rule, as one unconditional entry — set
+        # the FULL measured 16-name rule, as one unconditional entry — set
         # EQUALITY (audit: a >= subset check would tolerate a rule that
         # silently grew, and Docker's own CAP_SYS_ADMIN rule nearly
         # satisfies a subset)
         engine_rule = {
             "clone", "clone3", "unshare", "setns", "mount", "umount2",
             "pivot_root", "keyctl", "move_mount", "open_tree", "fsopen",
-            "fsconfig", "fsmount", "sethostname", "setdomainname"}
+            "fsconfig", "fsmount", "mount_setattr", "sethostname",
+            "setdomainname"}
         assert any(set(r.get("names", [])) == engine_rule
                    and r.get("action") == "SCMP_ACT_ALLOW"
                    and not r.get("includes") and not r.get("excludes")
                    for r in prof["syscalls"]), \
-            "the exact 15-syscall nested-engine allow rule is gone"
+            "the exact 16-syscall nested-engine allow rule is gone"
         devs = host["Devices"]
         assert {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse",
                 "CgroupPermissions": "rwm"} in devs
@@ -179,6 +193,38 @@ def test_both_steps_carry_the_nested_engine_knobs():
                 "PathInContainer": "/dev/net/tun",
                 "CgroupPermissions": "rwm"} in devs   # pasta tap networking
     assert len(blobs) == 1               # anchor+alias: ONE profile, two steps
+    # the exit handler runs as root with no engine — no Dev-step knobs there
+    exit_host = doc["handler_on"]["exit"]["with"]["host"]
+    assert "SecurityOpt" not in exit_host and "MaskedPaths" not in exit_host
+
+
+def test_apparmor_profile_ships_and_compose_defaults_its_name():
+    """The Dev-container AppArmor profile (ADR-0023 addendum) is a tracked
+    file the operator loads; compose defaults the name so an older .env
+    still composes (under docker-default the nested engine is unavailable
+    on AppArmor hosts, and every receipt says so). The profile keeps
+    Docker's default denials, adds the userns/mount set, and re-denies the
+    paths the DAG no longer masks — none of that may quietly erode."""
+    src = Path("/srv/repo-scripts/apparmor/devcake-nested")
+    assert src.exists(), MOUNT_HINT.format(src="scripts → /srv/repo-scripts")
+    prof = src.read_text()
+    assert "profile devcake-nested flags=(attach_disconnected,mediate_deleted)" in prof
+    for rule in ("userns,", "mount,", "umount,", "pivot_root,",
+                 "deny @{PROC}/sysrq-trigger rwklx,", "deny @{PROC}/kcore rwklx,",
+                 "deny /sys/kernel/security/** rwklx,",
+                 "deny @{PROC}/{acpi,asound,interrupts,keys,latency_stats,"
+                 "timer_list,timer_stats,sched_debug} rwklx,",
+                 "deny @{PROC}/{bus,fs,irq}/** wklx,"):
+        assert rule in prof, rule
+    rules = "\n".join(line for line in prof.splitlines()
+                      if not line.lstrip().startswith("#"))
+    assert "unconfined" not in rules.replace("peer=unconfined", ""), \
+        "the profile must never carry an unconfined flag or transition"
+    compose = Path("/srv/docker-compose.yml")
+    assert compose.exists(), MOUNT_HINT.format(src="docker-compose.yml → /srv/docker-compose.yml")
+    dagu_env = yaml.safe_load(compose.read_text())["services"]["dagu"]["environment"]
+    assert ("DEVCAKE_APPARMOR_PROFILE=${DEVCAKE_APPARMOR_PROFILE:-docker-default}"
+            in dagu_env)
 
 
 def test_exit_handler_reclaims_workspace_ownership():
@@ -253,5 +299,5 @@ def test_nested_probe_extracts_the_exact_dag_seccomp_profile():
 
     steps = _steps()
     for sid in ("provision", "run_dev"):
-        assert steps[sid]["with"]["host"]["SecurityOpt"] == [f"seccomp={blob}"], \
-            f"{sid} SecurityOpt must equal the probe's extracted profile"
+        assert steps[sid]["with"]["host"]["SecurityOpt"][0] == f"seccomp={blob}", \
+            f"{sid} SecurityOpt must lead with the probe's extracted profile"

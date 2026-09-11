@@ -6,6 +6,7 @@ fails (steady-state would not work). Soft / platform-skip checks stay ok.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -28,10 +29,23 @@ CHECK_IDS: tuple[str, ...] = (
     "buildx",
     "checkout_layout",
     "digest_lockstep",
+    "version_pin",
     "user_session_linger",
     "ports",
     "baker_liveness",
+    "apparmor_profile",
 )
+
+# The AppArmor profile dev-run.yaml names on both Dev steps (ADR-0023
+# addendum): the checkout ships it, the operator loads it, `devcake up`
+# writes the resulting name into .env. One detection helper serves both
+# the doctor's check and up's derivation — never derived twice.
+APPARMOR_PROFILE_NAME = "devcake-nested"
+APPARMOR_PROFILE_REL = Path("scripts") / "apparmor" / APPARMOR_PROFILE_NAME
+APPARMOR_INSTALLED_PATH = Path("/etc/apparmor.d") / APPARMOR_PROFILE_NAME
+_APPARMOR_ENABLED_PATH = Path("/sys/module/apparmor/parameters/enabled")
+_APPARMOR_PROFILES_PATH = Path("/sys/kernel/security/apparmor/profiles")
+DOCKER_DEFAULT_PROFILE = "docker-default"
 
 # Host ports the control plane publishes on loopback (docs/13).
 _CONTROL_PORTS: tuple[tuple[int, str], ...] = (
@@ -576,6 +590,233 @@ def check_baker_liveness(*, repo_root: Path | None) -> CheckResult:
     )
 
 
+@dataclass(frozen=True)
+class ApparmorFacts:
+    """What this host says about the Dev-container profile. Evidence in
+    order of authority: `applies` (the daemon accepted the name on a
+    throwaway container — definitive), `loaded` (the kernel's profile list;
+    None when unreadable without root, the stock-Ubuntu case), then the file
+    under /etc/apparmor.d/ plus whether the host's own parser compiles the
+    checkout's copy (an older parser rejects the `userns` rule: the install
+    succeeds, the load fails)."""
+    enabled: bool                 # the DAEMON runs with AppArmor (docker info)
+    loaded: bool | None
+    installed: bool
+    current: bool | None          # installed file == the checkout's; None when unknown
+    parser: bool                  # apparmor_parser found
+    compiles: bool | None         # host parser compiles the checkout's file; None = no parser
+    applies: bool | None          # docker run --security-opt apparmor=<name> succeeded; None = not tried
+
+    @property
+    def usable(self) -> bool:
+        """The name may be handed to Docker."""
+        if not self.enabled:
+            return False
+        if self.applies is not None:
+            return self.applies
+        if self.loaded is True:
+            return True
+        if self.loaded is None and self.installed:
+            return self.compiles is not False
+        return False
+
+
+def _sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _daemon_has_apparmor(runner, docker: str | None) -> bool | None:
+    """From `docker info` — the daemon's host is what matters (Docker
+    Desktop's VM and remote contexts differ from the CLI's host). None when
+    the daemon cannot be asked."""
+    if not docker:
+        return None
+    try:
+        proc = runner([docker, "info", "--format", "{{json .SecurityOptions}}"],
+                      capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        opts = json.loads((proc.stdout or "").strip() or "[]")
+    except json.JSONDecodeError:
+        return None
+    return any(str(o).startswith("name=apparmor") for o in (opts or []))
+
+
+def _probe_image(runner, docker: str) -> str | None:
+    """A local image to start a throwaway container from — hello (this
+    stack's own), else the pinned redis, else any tagged image."""
+    try:
+        proc = runner([docker, "images", "--format", "{{.Repository}}:{{.Tag}}"],
+                      capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    refs = [r.strip() for r in (proc.stdout or "").splitlines()
+            if r.strip() and not r.endswith(":<none>")]
+    for pref in ("devcake/dev-hello:", "redis:"):
+        for r in refs:
+            if r.startswith(pref):
+                return r
+    return refs[0] if refs else None
+
+
+def _profile_applies(runner, docker: str, image: str) -> bool | None:
+    """Ask the daemon: a container that names the profile either starts
+    (True) or fails to apply it (False). Anything else: unknown."""
+    try:
+        proc = runner([docker, "run", "--rm", "--network", "none",
+                       "--security-opt", f"apparmor={APPARMOR_PROFILE_NAME}",
+                       "--entrypoint", "/bin/true", image],
+                      capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode == 0:
+        return True
+    if "apparmor" in (proc.stderr or "").lower():
+        return False
+    return None
+
+
+def apparmor_facts(
+    *,
+    repo_root: Path | None,
+    run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    enabled_path: Path = _APPARMOR_ENABLED_PATH,
+    profiles_path: Path = _APPARMOR_PROFILES_PATH,
+    installed_path: Path = APPARMOR_INSTALLED_PATH,
+    docker: str | None = None,
+    parser: str | None = None,
+) -> ApparmorFacts:
+    runner = run or subprocess.run
+    docker_bin = docker or shutil.which("docker")
+    enabled = _daemon_has_apparmor(runner, docker_bin)
+    if enabled is None:                      # daemon unreachable: the CLI host's kernel
+        try:
+            enabled = enabled_path.read_text().strip().upper().startswith("Y")
+        except OSError:
+            enabled = False
+    loaded: bool | None = None
+    try:
+        loaded = any(line.split(" ", 1)[0] == APPARMOR_PROFILE_NAME
+                     for line in profiles_path.read_text().splitlines())
+    except OSError:
+        loaded = None
+    installed = installed_path.is_file()
+    ours = (repo_root / APPARMOR_PROFILE_REL) if repo_root is not None else None
+    current: bool | None = None
+    if installed and ours is not None:
+        a, b = _sha256(ours), _sha256(installed_path)
+        if a and b:
+            current = a == b
+    parser_bin = (parser or shutil.which("apparmor_parser")
+                  or shutil.which("apparmor_parser", path="/usr/sbin:/sbin"))
+    compiles: bool | None = None
+    if parser_bin and ours is not None and ours.is_file() and enabled:
+        try:
+            proc = runner([parser_bin, "--skip-kernel-load", "--skip-cache", str(ours)],
+                          capture_output=True, text=True, timeout=60)
+            compiles = proc.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            compiles = None
+    applies: bool | None = None
+    if enabled and docker_bin and (installed or loaded):
+        image = _probe_image(runner, docker_bin)
+        if image:
+            applies = _profile_applies(runner, docker_bin, image)
+    return ApparmorFacts(enabled=enabled, loaded=loaded, installed=installed,
+                         current=current, parser=bool(parser_bin),
+                         compiles=compiles, applies=applies)
+
+
+def apparmor_install_commands(repo_root: Path | None) -> str:
+    src = ((repo_root / APPARMOR_PROFILE_REL) if repo_root is not None
+           else APPARMOR_PROFILE_REL)
+    return (f"sudo install -m 0644 {src} /etc/apparmor.d/ && "
+            f"sudo apparmor_parser -r {APPARMOR_INSTALLED_PATH}")
+
+
+def _env_apparmor_value(repo_root: Path | None) -> str:
+    if repo_root is None:
+        return ""
+    env_path = repo_root / ".env"
+    if not env_path.is_file():
+        return ""
+    try:
+        return (envfile.parse_env_file(env_path).get("DEVCAKE_APPARMOR_PROFILE") or "").strip()
+    except OSError:
+        return ""
+
+
+def check_apparmor_profile(
+    *,
+    repo_root: Path | None,
+    facts: ApparmorFacts | None = None,
+    run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> CheckResult:
+    """The Dev-container AppArmor profile on hosts whose daemon runs
+    AppArmor, and whether `.env` names what the host can actually apply.
+    Soft: a run launches either way — without the profile the nested engine
+    inside Devs is unavailable and every receipt says so."""
+    f = facts if facts is not None else apparmor_facts(repo_root=repo_root, run=run)
+    env_value = _env_apparmor_value(repo_root)
+    if not f.enabled:
+        return CheckResult(
+            id="apparmor_profile", ok=True, hard=False,
+            detail="no AppArmor on the Docker host — the nested engine in Dev "
+                   "containers relies on the seccomp profile alone")
+    cmds = apparmor_install_commands(repo_root)
+    if not f.usable:
+        if f.applies is False:
+            why = ("the daemon cannot apply it (installed under /etc/apparmor.d/ "
+                   "but not loaded by the kernel — an older apparmor_parser "
+                   "rejects the profile's userns rule; check `apparmor_parser "
+                   "--version`, 4.0 or newer is needed)")
+        elif f.compiles is False:
+            why = ("this host's apparmor_parser rejects the profile (4.0 or newer "
+                   "is needed for the userns rule)")
+        else:
+            why = "it is not loaded"
+        need = ("" if f.parser else
+                "install the apparmor package (apparmor_parser) first, then ")
+        stale = (" .env still names it — run devcake up so runs fall back to "
+                 "docker-default instead of failing at container create."
+                 if env_value == APPARMOR_PROFILE_NAME else "")
+        return CheckResult(
+            id="apparmor_profile", ok=False, hard=False,
+            detail=(f"AppArmor is active but the {APPARMOR_PROFILE_NAME} profile "
+                    f"is unusable: {why}. Dev containers run under docker-default "
+                    "and their nested engine is unavailable. One-time fix (printed "
+                    f"only; this CLI will not run it): {need}{cmds} — then devcake up."
+                    f"{stale}"))
+    if f.current is False:
+        return CheckResult(
+            id="apparmor_profile", ok=False, hard=False,
+            detail=(f"{APPARMOR_PROFILE_NAME} is usable but the installed file "
+                    "differs from this checkout's (outdated, or loaded from "
+                    "elsewhere). Re-run (printed only; this CLI will not run it): "
+                    f"{cmds}"))
+    if env_value and env_value != APPARMOR_PROFILE_NAME:
+        return CheckResult(
+            id="apparmor_profile", ok=False, hard=False,
+            detail=(f"{APPARMOR_PROFILE_NAME} is usable but .env still names "
+                    f"{env_value} — run devcake up to switch the Dev containers "
+                    "to it"))
+    how = ("the daemon applies it" if f.applies else
+           "loaded" if f.loaded else
+           "installed under /etc/apparmor.d/ and compiled by this host's parser "
+           "(loaded state unreadable without root)")
+    return CheckResult(
+        id="apparmor_profile", ok=True, hard=False,
+        detail=f"{APPARMOR_PROFILE_NAME}: {how} — Dev containers get the nested engine")
+
+
 def run_checks(
     *,
     repo_root: Path | None = None,
@@ -596,6 +837,7 @@ def run_checks(
         check_user_session_linger(run=run),
         check_ports(probe=port_probe),
         check_baker_liveness(repo_root=root),
+        check_apparmor_profile(repo_root=root, run=run),
     ]
 
 

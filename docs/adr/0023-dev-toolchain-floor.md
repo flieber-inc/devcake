@@ -159,15 +159,45 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    `cap_setuid/cap_setgid=ep`, setuid dropped (mechanism unexplained,
    behavior pinned by the live nested-run probe).
 3. **Runtime knobs (dev-run DAG `host:` block):** a CUSTOM seccomp profile
-   — Docker's default plus ONE 15-syscall allow rule (userns/mount set +
+   — Docker's default plus ONE 16-syscall allow rule (userns/mount set +
+   `mount_setattr`, which crun uses for the nested `/sys`, +
    sethostname/setdomainname) — inline in the DAG (the Docker API takes
    profile content; only the docker CLI reads files), **never unconfined**
    (structural test enforces); `/dev/fuse` (fuse-overlayfs fallback for
    kernels <5.13; ≥5.13 uses native rootless overlay) and `/dev/net/tun`
-   (pasta tap) via the nested Resources block.
-4. **Costs, recorded:** the seccomp delta (15 syscalls over default) plus
-   /dev/fuse + /dev/net/tun, applied to EVERY container the dev-run DAG
-   launches, hello included (docs/14 §6); nested images live under the
+   (pasta tap) flat under `host:`. **On hosts that run AppArmor** the
+   seccomp profile is not enough: Docker's `docker-default` profile denies
+   `mount` outright, and Ubuntu's restriction on unprivileged user
+   namespaces moves any process that creates one into a confining
+   profile. So both Dev steps name an AppArmor profile
+   (`apparmor=${DEVCAKE_APPARMOR_PROFILE}`, the value derived by
+   `devcake up` into `.env`): `devcake-nested`, shipped as
+   `scripts/apparmor/devcake-nested` — Docker's default profile with
+   `userns`, `mount`, `umount` and `pivot_root` allowed, which grant nothing
+   to a uid-1000 process in the initial namespace (no capabilities there)
+   and apply only inside a user namespace it creates, exactly the rootless
+   engine's case. Hosts without AppArmor ignore the name (Docker drops it),
+   and a host that has not loaded the profile runs under `docker-default`
+   with the engine unavailable — never a refusal to launch. Both Dev steps
+   also launch with Docker's masked and read-only system paths removed
+   (`MaskedPaths: []`, `ReadonlyPaths: []`). Measured: on a cloud Ubuntu
+   24.04 host (kernel 7.0, engine 29.7) with the profile loaded and the
+   16-syscall rule in place, the nested container's own `mount proc`
+   returns EPERM while Docker's default masks are present and succeeds
+   with them removed; on the WSL2 6.6 rig the nested mount succeeds either
+   way (and a fresh `proc` mounted inside a user namespace shows the
+   masked entries regardless, so on such kernels the masks never guarded
+   a seccomp-widened Dev). The profile denies those paths in their place
+   as path-based hygiene; the unmasking's real exposure is listed in
+   `14` §6 item 2 and is the accepted cost of one static DAG. CI
+   compiles the profile (`apparmor_parser`, never loaded there) so a typo
+   cannot reach a host.
+4. **Costs, recorded:** the seccomp delta (16 syscalls over default) and
+   the AppArmor profile's `userns`/mount rules — together, a Dev may hold
+   full capabilities inside namespaces it creates, the exposure Ubuntu's
+   unprivileged-userns restriction exists to close (docs/14 §6 item 1) —
+   plus /dev/fuse + /dev/net/tun, applied to EVERY container the dev-run
+   DAG launches, hello included (docs/14 §6); nested images live under the
    harness $HOME → per-run ephemeral (re-pulled each run — egress, no
    cross-run contamination) — with ONE exception: nested writes onto the
    /workspace BIND outlive the run as foreign-uid files, which is why the
@@ -176,11 +206,21 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    Dev-container cgroup limits bound the nested engine too (pids budget
    must accommodate it).
 5. **Host prerequisites** (docs/13): unprivileged user namespaces enabled;
-   kernel ≥5.13 recommended (native rootless overlay).
+   kernel ≥5.13 recommended (native rootless overlay); on AppArmor hosts
+   the `devcake-nested` profile loaded (the one root step, printed by
+   `devcake doctor`). **Receipt, not promise:** the host baker replays
+   this contract with `scripts/harness_probe/nested_probe.sh` after every
+   harness bake and publishes the newest receipt as `bake_status.nested`;
+   red never unstaffs a Dev Type — the panel, `devcake status` and one
+   line in every dispatched prompt say the engine is unavailable and why,
+   so a Dev does not spend turns on it or report it as a discovery.
 
 ## Related
 
-- Implement: `images/Dockerfile` (base + every harness stage in the `images` bake group).
+- Implement: `images/Dockerfile` (base + every harness stage in the `images` bake group);
+  `scripts/apparmor/devcake-nested` (the profile); `dagu/dags/dev-run.yaml`
+  (the runtime knobs); `cli/devcake_cli/doctor.py` + `up.py` (profile
+  detection and the `.env` value); `scripts/dev_factory` (the receipt).
 - Evidence: the base-stage smoke RUN; CI "Bake Dev harnesses"; the
   nested-matrix probes (addendum above); `test_repo_structural.py`
   nested-engine pins.

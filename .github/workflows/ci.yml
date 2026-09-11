@@ -40,6 +40,16 @@ jobs:
       - name: Assert the release pin matches the changelog
         run: python3 scripts/check_version_pin.py
 
+      - name: Compile the Dev-container AppArmor profile (never loaded here)
+        run: |
+          set -euo pipefail
+          command -v apparmor_parser >/dev/null \
+            || sudo apt-get install -y --no-install-recommends apparmor
+          apparmor_parser --skip-kernel-load --skip-cache scripts/apparmor/devcake-nested
+          # the run DAG removes Docker's default masks; the profile must deny
+          # what this daemon masks today (Docker has extended the list before)
+          python3 scripts/check_apparmor_masks.py
+
       - name: Test hermetic admin helpers
         run: npm run test:helpers --prefix admin/spa
 

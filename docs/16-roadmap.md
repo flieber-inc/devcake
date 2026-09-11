@@ -1478,6 +1478,13 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
   **conftest.py / event-loop test hygiene** (module-import loop ownership) ·
   **`${VAR:-default}`-guarded volume name in dev-run.yaml** (AUD-020 —
   verify Dagu expansion support first; see the #87 lesson).
+- **Real Docker inside Dev containers (Sysbox or equivalent)** — the
+  nested engine is rootless podman with a `docker` compatibility symlink
+  and podman-compose; the gap that would justify a system-container
+  runtime (dockerd in the Dev, compose v2 verbatim) is gated on a measured
+  matrix on the cloud host type the fleet actually runs, with the same
+  receipt discipline as the current probe. Alongside: bump the pinned
+  podman-static bundle when a release moves the rootless floor.
 - **Local-backend operator recipe** — distill the field-exercised Qwen/vLLM +
   Grok Build pairing (`08` §8, Field evidence above) into a reproducible
   operator page: secret env, base URL, model string, known footguns. An

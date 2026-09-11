@@ -412,6 +412,41 @@ def _reference_repos_note(mgr, primary: str) -> str:
     return body
 
 
+def _environment_note() -> str:
+    """One code-owned section about THIS host's container engine, on every
+    stage prompt after the playbook (docs/07 §7a): what `docker` is inside
+    the container, and — when the host's newest nested-engine receipt is
+    red (docs/11 `bake_status.nested`, ADR-0023 addendum) — that it will
+    not work here, so the Dev verifies otherwise, spends no turns on it,
+    and does not report the environment as a discovery. Appended as a
+    kwarg, never a template placeholder an operator override could drop."""
+    from ...bake_status import read_bake_status
+    try:
+        nested = (read_bake_status() or {}).get("nested")
+    except Exception:  # noqa: BLE001 — a status hiccup never blocks a dispatch
+        nested = None
+    if not isinstance(nested, dict) or nested.get("rig_ok"):
+        return ENVIRONMENT_NOTE
+    why = str(nested.get("first_red") or "the host's nested-engine probe is red")
+    return ENVIRONMENT_NOTE + NESTED_ENGINE_UNAVAILABLE_NOTE.format(why=why)
+
+
+ENVIRONMENT_NOTE = """
+### This host's container engine
+`docker` here is a rootless engine (podman) inside your own container: no
+daemon socket (tools that need `DOCKER_HOST` or `/var/run/docker.sock` will
+not find one), images are pulled per run and count against registry
+pull limits, and the host is reachable as `host.containers.internal`.
+"""
+
+NESTED_ENGINE_UNAVAILABLE_NOTE = """**Nested containers are unavailable on this host** — the host's
+nested-engine probe is red: {why}. `docker` / `podman` will not work here.
+Verify with local services and test doubles instead of `docker compose`;
+do not spend turns on the engine, and facts about this run's environment
+are not discoveries.
+"""
+
+
 def prompt_size_report(prompt: str, sections: dict[str, str]) -> str | None:
     """A one-line anatomy when the assembled prompt is past
     prompts.PROMPT_MAX_BYTES — the budgets above keep the app's own
@@ -648,6 +683,7 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         ref_note = _reference_repos_note(mgr, repo_name)
+        env_note = _environment_note()
         ident = _identifying_prompt(mgr, dev_type)
         playbook = _pb(mtype.value)
         prompt = {
@@ -658,12 +694,14 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 blocker_repos=blocker_note,
                 decomposition_rule=decomposition_rule(mgr, live),
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
-                discoveries_cap=mgr.config.budgets.discoveries_per_run),
+                discoveries_cap=mgr.config.budgets.discoveries_per_run,
+                environment_note=env_note),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
-                plan_approval_rule=plan_approval_rule(mgr, mtype)),
+                plan_approval_rule=plan_approval_rule(mgr, mtype),
+                environment_note=env_note),
             MissionType.EXECUTE: lambda: execute_prompt(
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
@@ -672,17 +710,20 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
-                discoveries_cap=mgr.config.budgets.discoveries_per_run),
+                discoveries_cap=mgr.config.budgets.discoveries_per_run,
+                environment_note=env_note),
             MissionType.REVIEW: lambda: review_prompt(
                 ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
-                discoveries_cap=mgr.config.budgets.discoveries_per_run),
+                discoveries_cap=mgr.config.budgets.discoveries_per_run,
+                environment_note=env_note),
         }[mtype]()
         size_line = prompt_size_report(prompt, {
             "identity": ident, "playbook": playbook,
             "description": live.description or "",
-            "blocker note": blocker_note, "reference repos": ref_note})
+            "blocker note": blocker_note, "reference repos": ref_note,
+            "environment note": env_note})
         if size_line:
             log.warning("dispatch of %s %s: %s", mission.key, mtype.value,
                         size_line)

@@ -35,3 +35,19 @@ export function bakerBlockedReason(bake) {
   }
   return "";
 }
+
+/** Whether Devs can run containers on this host, from the newest
+ *  nested-engine receipt the baker published (docs/11 `bake_status.nested`):
+ *  "" when no receipt exists yet, one sentence otherwise. */
+export function describeNestedEngine(bake) {
+  const n = bake && bake.nested;
+  if (!n || typeof n !== "object") return "";
+  const raw = String(n.measured_at || "");
+  const when = raw.length >= 13
+    ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)} ${raw.slice(9, 11)}:${raw.slice(11, 13)} UTC`
+    : "";
+  const tail = when ? ` (measured ${when})` : "";
+  if (n.rig_ok) return `Nested engine: Devs can run containers on this host${tail}.`;
+  const why = n.first_red ? String(n.first_red) : "see the probe receipt";
+  return `Nested engine unavailable: ${why}${tail}. Devs are told so in their prompt; runs still launch.`;
+}

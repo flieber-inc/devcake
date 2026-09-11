@@ -94,6 +94,12 @@ services:
       # must be host-absolute (devcake up derives it; `:?` fails loud, because an
       # EMPTY expansion would silently bind-mount junk at the host root)
       - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run devcake up — it derives the workspace base}
+      # ADR-0023 addendum: the AppArmor profile dev-run.yaml names on both Dev
+      # steps. devcake up derives it into .env (devcake-nested when the host
+      # loaded scripts/apparmor/devcake-nested, else docker-default); the
+      # default here keeps an older .env composing — Docker's own profile,
+      # under which the nested engine stays unavailable on AppArmor hosts.
+      - DEVCAKE_APPARMOR_PROFILE=${DEVCAKE_APPARMOR_PROFILE:-docker-default}
       # 2.13 compat (measured at the 2026-08-13 drill): the 2.12 wiki/
       # documents store defaults to <dags_dir>/wiki and crash-loops the
       # server against our deliberately-RO dags bind (docs/14 §5 — trusted

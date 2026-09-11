@@ -13,6 +13,33 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Fixed — the nested engine inside Dev containers works on hosts that
+  run AppArmor** (ADR-0023 addendum). Under Docker's default profile the
+  rootless engine could not mount, and Ubuntu confined it further the
+  moment it created a user namespace; nested `docker`/`podman` had never
+  worked on such hosts, only on the rigs without AppArmor. The checkout
+  now ships a Dev-container profile (`scripts/apparmor/devcake-nested`,
+  compiled in CI) that the operator loads once (`devcake doctor` prints
+  the two commands, never runs them); `devcake up` derives the profile
+  name into `.env` — asking the daemon first, so a profile the host cannot
+  apply is never named — the run DAG names it on both Dev steps, allows
+  the one extra syscall the runtime needs, and launches with Docker's
+  masked system paths removed. **Security posture, stated plainly:** on
+  Ubuntu hosts the profile lifts the default restriction on unprivileged
+  user namespaces for Dev containers (a Dev may hold capabilities inside
+  namespaces it creates, which the rootless engine needs), and on every
+  host a Dev can now read a few host-information files Docker normally
+  masks; the profile re-denies them on AppArmor hosts, elsewhere they stay
+  readable. docs/14 §6 has the full list. The host baker
+  now runs the nested-engine probe after every harness bake and
+  publishes the newest receipt: the Overview warns, the Dev Types panel
+  and `devcake status` name the first red step, and a Dev on a red host
+  is told in its prompt that containers are unavailable — runs still
+  launch. `devcake up --release` archives the Dagu state volume
+  under `.factory/backups/` before a re-pinned Dagu first starts (a backup
+  for rollback, not a migration), and prints the command when it cannot.
+  Every Dev prompt now carries a short section saying what `docker` is
+  inside the container.
 - **Changed — Dagu 2.13.0 → 2.16.3.** The release that carries our
   upstream fix for container limits: the run DAG now writes them in
   Docker's own flat form instead of the nested workaround the old decoder

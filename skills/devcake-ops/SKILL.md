@@ -98,6 +98,11 @@ install (`devcake-cli`) must match the chosen release instead. Doctor names
 failed checks and remedies; it never performs sudo/usermod/linger changes.
 Inspect warnings in context: occupied ports may be this stack or another
 process, and missing supervision may need attention on a headless host.
+On a host that runs AppArmor (stock Ubuntu), the `apparmor_profile` check
+prints two `sudo` commands that load the Dev-container profile from this
+checkout — show them to the operator and wait; the agent never runs sudo.
+Without that step the stack still comes up, but Devs cannot run containers
+and every surface says so (`devcake status`: `nested engine`).
 
 For an authorized bring-up:
 

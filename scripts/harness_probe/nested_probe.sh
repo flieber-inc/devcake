@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
 # Nested-engine rig receipt: replay the dev-run DAG's exact runtime contract
 # for rootless podman inside a Dev container — the inline seccomp profile
-# (extracted live from dagu/dags/dev-run.yaml, never a copy), /dev/fuse +
-# /dev/net/tun, the image's own dev user, the per-run /workspace bind, and
-# the B1 reclaim chown — against a locally baked harness image.
+# (extracted live from dagu/dags/dev-run.yaml, never a copy), the AppArmor
+# profile name the stack runs under (DEVCAKE_APPARMOR_PROFILE from .env, as
+# devcake up wrote it), Docker's masked/read-only system paths removed
+# (systempaths=unconfined, the DAG's empty MaskedPaths/ReadonlyPaths), the
+# run network, /dev/fuse + /dev/net/tun, the image's own dev user, the
+# per-run /workspace bind, and the B1 reclaim chown — against a locally
+# baked harness image. The host baker runs it after every harness bake and
+# publishes the newest receipt as `nested` in the bake status (docs/11).
 #
 # One green run turns "matrix measured 2026-08-13, WSL2 kernel 6.6" (the one
 # rig in images/Dockerfile) into a receipt for THIS rig; a red run names the
 # first failing step instead of a shrug:
 #   uid_map red   → the file-caps newuidmap fix does not transfer here
 #   graph red     → storage driver setup (overlay-on-overlay / fuse fallback)
-#   nested red    → full path (seccomp, AppArmor on Ubuntu hosts, network)
+#   nested red    → full path (seccomp, the AppArmor profile, network)
 #   ws uids       → bind ownership semantics (VirtioFS on macOS) + reclaim
 #
 # Usage: nested_probe.sh [image]   (default devcake/dev-claude-code:$DEVCAKE_TAG)
 #   NESTED_TEST_IMAGE overrides the inner image (default docker.io/library/
 #   alpine — the nested pull needs egress from inside the Dev container).
-# Receipt: .factory/nested_probe/receipt-<utc>.json (log + sent profile beside it).
+#   NESTED_PROBE_TIMEOUT caps the outer run in seconds (default 300).
+#   DEVCAKE_APPARMOR_PROFILE overrides the .env value (default docker-default).
+# Receipt: .factory/nested_probe/receipt-<utc>.json (log + sent profile beside
+# it); the newest five receipts are kept.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -37,6 +45,41 @@ fi
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "nested_probe: ${IMAGE} is not local — bake it first (devcake images are never pulled)" >&2
   exit 2
+fi
+
+# The profile name the real runs use: devcake up derives it into .env and
+# compose hands it to the DAG — the receipt must replay THAT value, so a
+# process-env override is honored only when set on purpose.
+# .env first (the value compose handed the DAG), then the process env,
+# then Docker's default — the same order the baker resolves it in.
+ENV_PROFILE=""
+if [[ -f .env ]]; then
+  ENV_PROFILE="$(python3 - <<'PYENV'
+import re, sys
+val = ""
+for raw in open(".env", encoding="utf-8", errors="replace"):
+    line = raw.strip().rstrip("\r")
+    if not line or line.startswith("#"):
+        continue
+    if line.startswith("export "):
+        line = line[7:].lstrip()
+    m = re.match(r"DEVCAKE_APPARMOR_PROFILE\s*=\s*(.*)$", line)
+    if m:
+        v = m.group(1).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        val = v
+sys.stdout.write(val)
+PYENV
+)"
+fi
+APPARMOR_PROFILE="${ENV_PROFILE:-${DEVCAKE_APPARMOR_PROFILE:-docker-default}}"
+PROBE_TIMEOUT="${NESTED_PROBE_TIMEOUT:-300}"
+# The DAG launches Dev containers on the run network; when the stack is
+# up the receipt replays that too, otherwise Docker's default bridge.
+RUN_NETWORK=""
+if docker network inspect devcake_runtime >/dev/null 2>&1; then
+  RUN_NETWORK="devcake_runtime"
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -96,10 +139,21 @@ chmod 644 "$WS/np_inner.sh"
 
 # Mirror run_dev: image's own user + entrypoint overridden only so the full
 # harness bootstrap (redis, runspec) is not required for an engine probe.
-echo "── nested_probe: $IMAGE on ${HOST_OS} kernel ${KERNEL} (engine ${ENGINE}, ${ARCH})"
+echo "── nested_probe: $IMAGE on ${HOST_OS} kernel ${KERNEL} (engine ${ENGINE}, ${ARCH}) apparmor=${APPARMOR_PROFILE} network=${RUN_NETWORK:-bridge}"
+NET_ARGS=()
+if [[ -n "$RUN_NETWORK" ]]; then NET_ARGS=(--network "$RUN_NETWORK"); fi
+# Portable cap (no GNU timeout on stock macOS): a named container and a
+# background watchdog that force-removes it — the daemon kills the whole
+# process tree, so a wedged inner pull cannot outlive the probe.
+NP_NAME="np-$STAMP"
+( sleep "$PROBE_TIMEOUT"; docker rm -f "$NP_NAME" >/dev/null 2>&1 ) &
+WATCHDOG=$!
 set +e
-docker run --rm \
+docker run --rm --name "$NP_NAME" \
   --security-opt seccomp="$(pwd)/$SECCOMP" \
+  --security-opt apparmor="$APPARMOR_PROFILE" \
+  --security-opt systempaths=unconfined \
+  ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
   --device /dev/fuse --device /dev/net/tun \
   -e NP_TEST_IMAGE="$NESTED_TEST_IMAGE" \
   -v "$WSABS:/workspace" \
@@ -107,6 +161,12 @@ docker run --rm \
   "$IMAGE" /workspace/np_inner.sh > "$LOG" 2>&1
 DOCKER_RC=$?
 set -e
+if kill -0 "$WATCHDOG" 2>/dev/null; then
+  kill "$WATCHDOG" 2>/dev/null; wait "$WATCHDOG" 2>/dev/null || true
+else
+  echo "NP_TIMEOUT=1 (outer run exceeded ${PROBE_TIMEOUT}s)" >> "$LOG"
+fi
+docker rm -f "$NP_NAME" >/dev/null 2>&1 || true
 sed 's/^/   /' "$LOG"
 
 np_uid() {
@@ -151,9 +211,34 @@ if [[ "$NESTED_OK" = true && "${SUBUID_RC:-1}" = "0" \
   RIG_OK=true
 fi
 
+# The first red step, named for the receipt (and for the surfaces that
+# read it — the panel, `devcake status`, the Dev's prompt line).
+FIRST_RED=""
+if [[ "$RIG_OK" != true ]]; then
+  if grep -q "^NP_TIMEOUT=1" "$LOG"; then
+    FIRST_RED="the probe container did not finish within ${PROBE_TIMEOUT}s"
+  elif [[ "$DOCKER_RC" -ne 0 && -z "${INNER_UID:-}" ]]; then
+    FIRST_RED="the Dev container could not start ($(grep -m1 -i 'error' "$LOG" | cut -c1-200 || true))"
+  elif [[ "${UIDMAP_RC:-1}" != "0" ]]; then
+    FIRST_RED="the engine cannot create a user namespace (uid_map: $(grep -m1 '^NP_UIDMAP_ERR: ' "$LOG" | cut -d' ' -f2- | cut -c1-200 || true))"
+  elif [[ "${GRAPH_RC:-1}" != "0" ]]; then
+    FIRST_RED="nested storage setup failed ($(val NP_GRAPH | cut -c1-200))"
+  elif [[ "${NESTED_RC:-1}" != "0" ]]; then
+    FIRST_RED="a nested container run failed ($(grep -m1 '^NP_NESTED_OUT: ' "$LOG" | cut -d' ' -f2- | cut -c1-200 || true))"
+  elif [[ "${SUBUID_RC:-1}" != "0" ]]; then
+    FIRST_RED="a nested non-root user could not write the workspace bind"
+  elif [[ "$RECLAIM_SUBUID_UID" != "1000" ]]; then
+    FIRST_RED="the workspace reclaim left a nested write at uid ${RECLAIM_SUBUID_UID}"
+  else
+    FIRST_RED="see the probe log"
+  fi
+fi
+
 NP_RECEIPT="$RECEIPT" NP_IMAGE="$IMAGE" NP_TEST_IMG="$NESTED_TEST_IMAGE" \
 NP_STAMP="$STAMP" NP_ENGINE="$ENGINE" NP_KERNEL="$KERNEL" NP_HOST_OS="$HOST_OS" \
 NP_ARCH="$ARCH" NP_SECOPTS="$SECOPTS" NP_SECCOMP_SHA="$SECCOMP_SHA" \
+NP_APPARMOR="$APPARMOR_PROFILE" NP_NETWORK="${RUN_NETWORK:-bridge}" \
+NP_FIRST_RED="$FIRST_RED" NP_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo unknown)" \
 NP_DOCKER_RC="$DOCKER_RC" NP_INNER_UID="${INNER_UID:-}" \
 NP_INNER_KERNEL="${INNER_KERNEL:-}" NP_UIDMAP_RC="${UIDMAP_RC:-}" \
 NP_UIDMAP="${UIDMAP:-}" NP_GRAPH_RC="${GRAPH_RC:-}" NP_GRAPH="${GRAPH:-}" \
@@ -175,6 +260,10 @@ receipt = {
              "os": e["NP_HOST_OS"], "arch": e["NP_ARCH"],
              "security_options": e["NP_SECOPTS"]},
     "seccomp_sha256": e["NP_SECCOMP_SHA"],
+    "apparmor_profile": e["NP_APPARMOR"],
+    "network": e["NP_NETWORK"],
+    "image_id": e["NP_IMAGE_ID"],
+    "first_red": e["NP_FIRST_RED"],
     "container": {"uid": e["NP_INNER_UID"], "kernel": e["NP_INNER_KERNEL"]},
     "docker_run_rc": int(e["NP_DOCKER_RC"]),
     "uid_map": {"rc": e["NP_UIDMAP_RC"], "first_row": e["NP_UIDMAP"]},
@@ -203,7 +292,14 @@ if [[ "$RIG_OK" = true ]]; then
 else
   echo "── nested_probe: FAIL — first red NP_ step above; log: $LOG" >&2
 fi
-echo "matrix row: $STAMP | ${HOST_OS} kernel=${KERNEL} engine=${ENGINE} ${ARCH} | graph=${GRAPH:-?} | uid_map_rc=${UIDMAP_RC:-?} nested_ok=${NESTED_OK} | ws uid root ${WRITE_UID}→${RECLAIM_UID} subuid ${SUBUID_WRITE_UID}→${RECLAIM_SUBUID_UID}"
+echo "matrix row: $STAMP | ${HOST_OS} kernel=${KERNEL} engine=${ENGINE} ${ARCH} apparmor=${APPARMOR_PROFILE} | graph=${GRAPH:-?} | uid_map_rc=${UIDMAP_RC:-?} nested_ok=${NESTED_OK} | ws uid root ${WRITE_UID}→${RECLAIM_UID} subuid ${SUBUID_WRITE_UID}→${RECLAIM_SUBUID_UID}"
 rm -rf "$WS" 2>/dev/null \
   || echo "nested_probe: scratch left behind (foreign uids — reclaim red?): $WS" >&2
+# Keep the newest five receipts (with their logs and sent profiles); the
+# baker runs this after every bake, so the directory would otherwise grow
+# forever.
+ls -1t "$OUTDIR"/receipt-*.json 2>/dev/null | tail -n +6 | while read -r old; do
+  stamp="${old##*/receipt-}"; stamp="${stamp%.json}"
+  rm -f "$old" "$OUTDIR/container-$stamp.log" "$OUTDIR/seccomp-$stamp.json"
+done
 [[ "$RIG_OK" = true ]]

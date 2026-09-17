@@ -79,7 +79,7 @@ Corollaries, each load-bearing:
 
 | Singular process | Was | Becomes |
 | --- | --- | --- |
-| Mission completion on merge | 4 sites (review.py `_done`/`_done_merged`, sweeps merged branch, deferred-retry tail) | `orchestrator/completion.complete_merged` — one `_CAUSES` table owns copy/labels/audit per cause |
+| Mission completion on merge | 4 sites (review.py `_done`/`_done_merged`, sweeps merged branch, deferred-retry tail) | `orchestrator/completion.complete_mission` (né `complete_merged`; the ticket-delivery causes joined the table — ADR-0017 addendum) — one `_CAUSES` table owns copy/labels/audit per cause |
 | AUD-010 conflict trust + routing | 2 copies + cross-module `_` reach-in | `completion.trusted_conflict` / `route_conflict_to_execute`; import-identity ratchet |
 | Checkpoint step keys | ~40 literals; 2 hand-copied side registries (`_SWAP_MARKER_STAGE`, `_PAST_GATE_STEPS`) | `orchestrator/steps.py` registry; side tables become derived views; AST guard on `_checkpoint`/`finalized_steps.append` |
 | Description appends (handoff note, lineage note, delivery destination) | 2 hand-rolled `try/append/except/audit` blocks with their own redact→defang→cap copies; a third tenant arriving | `feed.append_note` (best-effort + audit) with `feed.marked_note` (redact → defang → cap) for model text; AST guard bans `append_description` calls outside `feed.py` |

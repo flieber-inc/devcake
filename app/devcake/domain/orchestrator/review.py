@@ -8,9 +8,9 @@ from ...security import redact
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import run_branch
-from . import completion, dispatch, feed, steps
+from . import completion, deliver, dispatch, feed, steps
 from .freshness import review_freshness_gate
-from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
+from .markers import (DELIVERY_TICKET, HANDOFF_APPEND_MAX, HANDOFF_MARKER,
                       MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
                       MERGE_SETTLE_MARKER)
 
@@ -98,6 +98,39 @@ async def _append_handoff(mgr, run: Run, result: dict) -> None:
     await mgr._checkpoint(run, steps.REVIEW_HANDOFF, _note)
 
 
+async def _deliver_to_ticket(mgr, run: Run, pr, forge) -> None:
+    """REVIEW approve in ticket mode (docs/03 §4): deliver → Done → close."""
+    pmo_id = run.mission_pmo_id
+
+    async def _deliver():
+        await deliver.deliver_change_set(
+            mgr, repo_ref=run.repo_ref, mission_key=run.mission_key,
+            pmo_id=pmo_id, pmo_kind=run.pmo_kind, pr=pr, ref=run_branch(run))
+    await mgr._checkpoint(run, steps.REVIEW_TICKET_DELIVERY, _deliver)
+    await completion.complete_mission(
+        mgr, completion.CompletionCause.REVIEW_DELIVERED_TO_TICKET,
+        ref=MissionRef(pmo_id, "issue"), mission_key=run.mission_key,
+        pr=pr, pr_url=pr.url, run=run)
+
+    async def _close():
+        try:
+            await forge.close_pr(pr.number)
+            mgr._audit(pmo_id, "pr_closed_unmerged", pr.url)
+        except Exception as e:  # noqa: BLE001 — best-effort AFTER Done: the mission is complete; a person is told the PR is still open
+            mgr._audit(pmo_id, "pr_close_failed", str(e)[:200])
+            await mgr._feed(
+                pmo_id, run.pmo_kind,
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"The files are on this ticket and the mission is done, "
+                    f"but the pull request {pr.url} could not be closed — "
+                    f"close it yourself, and do not merge it.",
+                    f"⚠️ Pull request {pr.url} is still open after ticket "
+                    f"delivery — close it without merging.",
+                    todo="Close the pull request without merging."))
+    await mgr._checkpoint(run, steps.REVIEW_PR_CLOSED, _close)
+
+
 async def finalize_review(mgr, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
     verdict = result.get("verdict")
@@ -137,14 +170,28 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
         # the APPROVE, not of the merge mechanics
         await _append_handoff(mgr, run, result)
         formal = False
+        ticket = run.delivery_to == DELIVERY_TICKET
         if pr:
             async def _pr_comment():
                 await forge.post_pr_comment(
                     pr.number,
                     "## DevCake REVIEW: APPROVED-BY-DEVCAKE ✅\n\n"
-                    + report + footer)
+                    + report + ("" if ticket else footer))
             await mgr._checkpoint(run, steps.REVIEW_PR_COMMENT, _pr_comment)
 
+        if pr and ticket:
+            # ADR-0017 addendum — the ticket is this pull request's end: files
+            # to the ticket FIRST (the deliverable; a failure raises and the
+            # close retries on redelivery), then Done through the one
+            # completion chokepoint, then the pull request closed unmerged
+            # (best-effort AFTER Done: a person is told if it stays open).
+            # No formal forge approval and no footer: nothing here should
+            # invite a merge. The merge sweep never sees this mission — the
+            # REVIEW label comes off with Done and no MERGE label is added.
+            await _deliver_to_ticket(mgr, run, pr, forge)
+            return
+
+        if pr:
             async def _formal():
                 try:
                     return await forge.approve(pr.number)
@@ -220,8 +267,8 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     # steps.REVIEW_MERGE no-ops; steps.REVIEW_DONE retries) or, past
                     # the stalled-finalize deadline, the next REVIEW cycle's
                     # re-probe of an already-merged PR.
-                    await completion.complete_merged(
-                        mgr, completion.MergedCause.REVIEW_AUTO_MERGE,
+                    await completion.complete_mission(
+                        mgr, completion.CompletionCause.REVIEW_AUTO_MERGE,
                         ref=MissionRef(pmo_id, "issue"),
                         mission_key=run.mission_key,
                         pr=pr, pr_url=pr_url, run=run)
@@ -247,8 +294,8 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                         if steps.REVIEW_MERGE not in run.finalized_steps:
                             run.finalized_steps.append(steps.REVIEW_MERGE)
                             mgr.runs.store.save(run)
-                        await completion.complete_merged(
-                            mgr, completion.MergedCause.REVIEW_AUTO_MERGE,
+                        await completion.complete_mission(
+                            mgr, completion.CompletionCause.REVIEW_AUTO_MERGE,
                             ref=MissionRef(pmo_id, "issue"),
                             mission_key=run.mission_key,
                             pr=pr, pr_url=pr_url, run=run)

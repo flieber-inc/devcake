@@ -169,7 +169,7 @@ Protection with the full required shape is therefore the real containment for
 zone C. Required status checks alone do **not** refuse a patient Dev self-merge
 after green CI — that needs required reviews plus a distinct reviewer identity
 (repo-card reviewer token). Until that setup lands, playbook hard rules are the
-operative belt. When protection is missing, the honest surface is `/health`
+operative belt. Ticket delivery (ADR-0017 addendum) never bypasses REVIEW and changes nothing in this zone: the change set still rides a pull request the Dev's token can open, `LEGAL_OUTCOMES` is unchanged, the app closes the pull request after Done so a delivered change set is not merged by accident — but a person can reopen and merge it, and nothing detects that afterwards; REVIEW's deliverable-files-only rule and the plan gate bound it. When protection is missing, the honest surface is `/health`
 `forge_protection` → the Overview **critical** (dismissable) alert — DevCake
 still only **warns**; it does not refuse dispatch (`13` §8a, `§8`). The health
 probe reports whether the default branch is protected (`BranchProtection.protected`);

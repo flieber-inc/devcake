@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import zipfile
 
 from ...ports.forge import PRFile, run_branch
+from ...security import redact
 from ..run import utcnow
 from . import feed, steps
 from .feed import SECTION_DELIVERABLE, FoldSection
@@ -225,3 +227,121 @@ async def _build_zip(forge, files: list[PRFile], ref: str,
                              "size cap):\n" + "\n".join(over_cap) + "\n")
             z.writestr("MANIFEST.txt", manifest)
     return buf.getvalue(), failed_fetch + over_cap
+
+
+# ── ticket delivery (ADR-0017 addendum) ──────────────────────────────────────
+# The change set's destination is the TICKET: the pull request's changed
+# files are attached to the ticket BEFORE any Done, then the pull request is
+# closed unmerged. This is the post-merge archive re-timed and re-scoped —
+# the same forge reads, the same zip fallback — with one difference in
+# posture: here the files ARE the deliverable, so a failure raises (the
+# caller's checkpoint retries on redelivery) instead of degrading.
+
+TICKET_MAX_FILES = 10
+# attachment names the record already owns: the step transcripts, the review
+# reports, the plans, the discovery records, the folder's own indexes, the
+# externalized comments and every archive (the folder extracts zips)
+_RESERVED_NAME_RE = re.compile(
+    r"^(\d+_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md|\d+_REVIEW_REPORT\.md|"
+    r"PLAN_\d+\.md|DISCOVERY_\d+\.md|ACTIVITY\.md|MISSION\.md|"
+    r"comment-\d{8}T\d{6}\.md)$|\.zip$", re.IGNORECASE)
+
+
+def ticket_attachment_names(paths: list[str], mission_key: str) -> dict[str, str]:
+    """repo path → attachment filename: the basename, prefixed with the
+    mission key when it would collide with another delivered file or with a
+    name the record already owns (so a delivered `2_EXECUTE.md` can never
+    pose as a step transcript in a card or the folder)."""
+    names: dict[str, str] = {}
+    taken: set[str] = set()
+    for path in paths:
+        base = path.rsplit("/", 1)[-1] or path
+        name = base
+        if _RESERVED_NAME_RE.search(name) or name in taken:
+            name = f"{mission_key}-{base}"
+        n = 2
+        while name in taken:
+            name = f"{mission_key}-{n}-{base}"
+            n += 1
+        taken.add(name)
+        names[path] = name
+    return names
+
+
+def _redacted_bytes(content: bytes) -> bytes:
+    """Text files pass through security.redact like every other model-
+    adjacent artifact DevCake posts; bytes that are not UTF-8 text (an
+    image, a binary) ship as they are — a text redactor must never mangle
+    them."""
+    try:
+        return redact(content.decode("utf-8")).encode("utf-8")
+    except UnicodeDecodeError:
+        return content
+
+
+async def deliver_change_set(mgr, *, repo_ref: str, mission_key: str,
+                             pmo_id: str, pmo_kind: str, pr, ref: str) -> list[str]:
+    """Attach the pull request's changed files to the ticket (docs/03 §4):
+    each file as its own attachment when the set is small and every file
+    fits the PMO cap; otherwise the archive with its MANIFEST, exactly as
+    the post-merge path builds it. `ref` is the mission branch (nobody
+    pushes after REVIEW closes — INV-6). Posts the `Deliverable` record as
+    its own ℹ️ notice (the completion notice does not exist yet: delivery
+    precedes Done by doctrine). Returns the attachment names. RAISES on any
+    failure — the files are the deliverable, so the close must not proceed
+    without them; the caller's checkpoint retries on redelivery."""
+    forge = mgr.forges.get(repo_ref)
+    if forge is None:
+        raise RuntimeError(
+            f"repository '{repo_ref}' is not configured — the pull request's "
+            f"files cannot be read")
+    listing = await forge.pr_files(pr.number)
+    files = [f for f in listing.files if f.status != "removed"]
+    if not files:
+        raise RuntimeError("the pull request changes no files — nothing to "
+                           "deliver to the ticket")
+    cap = mgr._attachment_cap()
+    names = ticket_attachment_names([f.path for f in files], mission_key)
+    if len(files) <= TICKET_MAX_FILES and not listing.truncated:
+        contents = [(f.path, _redacted_bytes(await forge.file_content(f.path, ref)))
+                    for f in files]
+        if all(len(c) + _SAFETY <= cap for _, c in contents):
+            lines = []
+            for path, content in contents:
+                url = await mgr.pmo.upload_attachment(pmo_id, names[path], content)
+                lines.append(f"- `{path}` → [{names[path]}]({url})")
+            note = (f"{DELIVERABLE_TOKEN}\n"
+                    f"📎 Delivered to this ticket — {len(files)} file(s) from the "
+                    f"pull request {pr.url}, attached here:\n" + "\n".join(lines)
+                    + "\nThe pull request is closed without merging; no "
+                      "repository changed.")
+            await _post_note(
+                mgr, pmo_id, pmo_kind, note, anchor=None, lead=feed.INFO,
+                what=f"{len(files)} file(s) from the pull request are attached "
+                     f"to this ticket — the deliverable, ahead of Done.")
+            log.info("delivered %s to the ticket: %d file(s)", mission_key,
+                     len(files))
+            return [names[f.path] for f in files]
+    # many, large or truncated: the archive with its honest MANIFEST
+    zip_bytes, omitted = await _build_zip(
+        forge, files, ref, cap, truncated=bool(listing.truncated), pr_url=pr.url)
+    name = f"{mission_key}-deliverable.zip"
+    url = await mgr.pmo.upload_attachment(pmo_id, name, zip_bytes)
+    note = (f"{DELIVERABLE_TOKEN}\n"
+            f"📎 Delivered to this ticket — {len(files) - len(omitted)} file(s) "
+            f"from the pull request {pr.url} in [{name}]({url}), attached here. "
+            f"The pull request is closed without merging; no repository changed.")
+    if listing.truncated:
+        note += (f" The forge truncated the changed-file list ({len(files)} "
+                 f"path(s) returned; additional paths unknown) — the complete "
+                 f"change set is in the pull request {pr.url}.")
+    elif omitted:
+        note += (f" {len(omitted)} file(s) omitted (too large, or a fetch "
+                 f"error — see MANIFEST.txt in the archive); the full change "
+                 f"set is in the pull request {pr.url}.")
+    await _post_note(
+        mgr, pmo_id, pmo_kind, note, anchor=None, lead=feed.INFO,
+        what=f"The pull request's files are attached to this ticket as {name} "
+             f"— the deliverable, ahead of Done.")
+    log.info("delivered %s to the ticket as %s", mission_key, name)
+    return [name]

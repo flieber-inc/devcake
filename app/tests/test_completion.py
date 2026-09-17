@@ -29,14 +29,25 @@ def _review_run():
 
 
 CASES = [
-    (completion.MergedCause.REVIEW_AUTO_MERGE, "DEVCAKE-REVIEW",
+    (completion.CompletionCause.REVIEW_AUTO_MERGE, "DEVCAKE-REVIEW",
      "✅ REVIEW approved; PR merged (https://forge/pr/8). Mission done.",
      False),
-    (completion.MergedCause.SWEEP_EXTERNAL_MERGE, "DEVCAKE-MERGE",
+    (completion.CompletionCause.SWEEP_EXTERNAL_MERGE, "DEVCAKE-MERGE",
      "✅ PR https://forge/pr/8 merged — mission done (merge sweep).",
      False),
-    (completion.MergedCause.DEFERRED_RETRY_MERGE, "DEVCAKE-MERGE",
+    (completion.CompletionCause.DEFERRED_RETRY_MERGE, "DEVCAKE-MERGE",
      "✅ Merged after deferred retry (https://forge/pr/8). Mission done.",
+     True),
+    # ADR-0017 addendum — ticket delivery: Done never claims a merge
+    (completion.CompletionCause.REVIEW_DELIVERED_TO_TICKET, "DEVCAKE-REVIEW",
+     "✅ REVIEW approved; the pull request's files are attached to this ticket "
+     "and the pull request https://forge/pr/8 was closed without merging — no "
+     "repository changed. Mission done.",
+     False),
+    (completion.CompletionCause.SWEEP_DELIVERED_TO_TICKET, "DEVCAKE-MERGE",
+     "✅ Delivered to this ticket on your instruction; the pull request "
+     "https://forge/pr/8 was closed without merging — no repository changed. "
+     "Mission done.",
      True),
 ]
 
@@ -63,11 +74,12 @@ def test_cause_table_labels_copy_and_disclosure(tmp_path, monkeypatch,
     monkeypatch.setattr(mgr, "deliver_internal_zip", fake_zip)
     monkeypatch.setattr(mgr, "deliver_internal_zip_for_mission", fake_zip)
 
-    run = _review_run() if cause is completion.MergedCause.REVIEW_AUTO_MERGE \
-        else None
+    run = _review_run() if cause in (
+        completion.CompletionCause.REVIEW_AUTO_MERGE,
+        completion.CompletionCause.REVIEW_DELIVERED_TO_TICKET) else None
     if run:
         store.save(run)
-    run_coro(completion.complete_merged(
+    run_coro(completion.complete_mission(
         mgr, cause, ref=MissionRef("p1", "issue"), mission_key="T-1",
         pr=pr, pr_url="https://forge/pr/8",
         run=run, mission=None if run else m))
@@ -80,10 +92,14 @@ def test_cause_table_labels_copy_and_disclosure(tmp_path, monkeypatch,
     assert body.endswith(f"\n\n{COMMENT_SENTINEL}")
     assert assert_notice(body, feed.INFO, record_has=[copy]) == copy
     assert "https://forge/pr/8" in body.split("\n", 1)[0]
-    # the notice's (entry id, body) reaches the deliverable step, so the
-    # zip note can be appended to its fold (ADR-0042 §6)
-    [(_args, kw)] = zipped
-    assert kw["anchor"] == ("c1", body[:-len(f"\n\n{COMMENT_SENTINEL}")])
+    if cause in (completion.CompletionCause.REVIEW_DELIVERED_TO_TICKET,
+                 completion.CompletionCause.SWEEP_DELIVERED_TO_TICKET):
+        assert zipped == []          # the files landed BEFORE Done; no archive
+    else:
+        # the notice's (entry id, body) reaches the deliverable step, so the
+        # zip note can be appended to its fold (ADR-0042 §6)
+        [(_args, kw)] = zipped
+        assert kw["anchor"] == ("c1", body[:-len(f"\n\n{COMMENT_SENTINEL}")])
     assert disclosed == (["p1"] if discloses else [])
     if run:
         assert "review:done" in run.finalized_steps
@@ -102,8 +118,8 @@ def test_run_path_redelivery_skips_core_but_retries_zip(tmp_path, monkeypatch):
     run = _review_run()
     store.save(run)
     for _ in range(2):   # redelivery after a crash between core and ack
-        run_coro(completion.complete_merged(
-            mgr, completion.MergedCause.REVIEW_AUTO_MERGE,
+        run_coro(completion.complete_mission(
+            mgr, completion.CompletionCause.REVIEW_AUTO_MERGE,
             ref=MissionRef("p1", "issue"), mission_key="T-1",
             pr=pr, pr_url="https://forge/pr/8", run=run))
     assert len(fake.comments) == 1, "checkpointed core must not re-post"
@@ -121,8 +137,8 @@ def test_zip_failure_never_undoes_done(tmp_path, monkeypatch):
         raise RuntimeError("attachment upload 500")
 
     monkeypatch.setattr(mgr, "deliver_internal_zip_for_mission", boom_zip)
-    run_coro(completion.complete_merged(
-        mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+    run_coro(completion.complete_mission(
+        mgr, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
         ref=MissionRef("p1", "issue"), mission_key="T-1",
         pr=SimpleNamespace(url="https://forge/pr/8"),
         pr_url="https://forge/pr/8", mission=m))
@@ -131,8 +147,8 @@ def test_zip_failure_never_undoes_done(tmp_path, monkeypatch):
 
 def test_requires_run_or_mission():
     with pytest.raises(AssertionError):
-        run_coro(completion.complete_merged(
-            None, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+        run_coro(completion.complete_mission(
+            None, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
             ref=MissionRef("p1", "issue"), mission_key="T-1",
             pr=None, pr_url="u"))
 
@@ -198,16 +214,16 @@ def test_sweep_status_failure_leaves_merge_label_so_retry_works(tmp_path):
     pr = PullRequest(number=8, url="https://forge/pr/8",
                      state="closed", merged=True)
     with pytest.raises(RuntimeError, match="PMO 502"):
-        run_coro(completion.complete_merged(
-            mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+        run_coro(completion.complete_mission(
+            mgr, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
             ref=MissionRef("p1", "issue"), mission_key="T-1",
             pr=pr, pr_url="https://forge/pr/8", mission=m))
     assert "DEVCAKE-MERGE" in m.labels
     assert m.status != "done"
     assert fake.comments == []
 
-    run_coro(completion.complete_merged(
-        mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+    run_coro(completion.complete_mission(
+        mgr, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
         ref=MissionRef("p1", "issue"), mission_key="T-1",
         pr=pr, pr_url="https://forge/pr/8", mission=m))
     assert m.status == "done"
@@ -222,8 +238,8 @@ def test_status_lands_even_if_label_swap_fails(tmp_path):
     fake = _BoomSwapPMO(m)
     mgr = _sweep_mgr(tmp_path, pmo=fake, forge=FakeForge())
     with pytest.raises(RuntimeError, match="PMO 502 mid-swap"):
-        run_coro(completion.complete_merged(
-            mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+        run_coro(completion.complete_mission(
+            mgr, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
             ref=MissionRef("p1", "issue"), mission_key="T-1",
             pr=SimpleNamespace(url="https://forge/pr/8"),
             pr_url="https://forge/pr/8", mission=m))
@@ -357,7 +373,8 @@ def test_completion_doctrine_lives_only_in_completion_py():
         src = p.read_text()
         for needle in ("mergeable_tristate", "Mission done.",
                        "merge_sweep_done", "review_approve_merged",
-                       "merge_retry_succeeded"):
+                       "merge_retry_succeeded", "review_approve_delivered",
+                       "merge_sweep_delivered"):
             if needle in src:
                 offenders.append(f"{p.name}: {needle}")
     assert not offenders, (

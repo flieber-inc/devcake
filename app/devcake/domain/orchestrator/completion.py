@@ -63,10 +63,14 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-class MergedCause(StrEnum):
+class CompletionCause(StrEnum):
     REVIEW_AUTO_MERGE = "review_auto_merge"        # finalize: our merge landed, or found merged on the re-probe
     SWEEP_EXTERNAL_MERGE = "sweep_external_merge"  # merge sweep: PR turned up merged (human / CI)
     DEFERRED_RETRY_MERGE = "deferred_retry_merge"  # windowed retry: our merge landed
+    # ADR-0017 addendum — ticket delivery: the PR's files are on the ticket
+    # and the PR is closed unmerged; NO repository changed
+    REVIEW_DELIVERED_TO_TICKET = "review_delivered_to_ticket"   # finalize: approve in ticket mode
+    SWEEP_DELIVERED_TO_TICKET = "sweep_delivered_to_ticket"     # merge sweep: a person wrote to=ticket on a parked PR
 
 
 @dataclass(frozen=True)
@@ -76,22 +80,25 @@ class _Cause:
     what: str                 # .format(pr_url=…) — the notice head's one sentence (ADR-0042 §4)
     audit_action: str
     disclose_before: bool     # ADR-0031 D1 disclose-only pre-step
+    # False for ticket delivery: the repository did NOT change, so neither
+    # the mirror invalidation nor the post-merge archive applies
+    repo_changed: bool = True
 
 
-_CAUSES: dict[MergedCause, _Cause] = {
-    MergedCause.REVIEW_AUTO_MERGE: _Cause(
+_CAUSES: dict[CompletionCause, _Cause] = {
+    CompletionCause.REVIEW_AUTO_MERGE: _Cause(
         remove_label=LABEL_REVIEW,
         feed="✅ REVIEW approved; PR merged ({pr_url}). Mission done.",
         what="Review approved and {pr_url} merged — the mission is done.",
         audit_action="review_approve_merged",
         disclose_before=False),
-    MergedCause.SWEEP_EXTERNAL_MERGE: _Cause(
+    CompletionCause.SWEEP_EXTERNAL_MERGE: _Cause(
         remove_label=LABEL_MERGE,
         feed="✅ PR {pr_url} merged — mission done (merge sweep).",
         what="{pr_url} was merged outside DevCake — the mission is done.",
         audit_action="merge_sweep_done",
         disclose_before=False),
-    MergedCause.DEFERRED_RETRY_MERGE: _Cause(
+    CompletionCause.DEFERRED_RETRY_MERGE: _Cause(
         remove_label=LABEL_MERGE,
         feed="✅ Merged after deferred retry ({pr_url}). Mission done.",
         what="The deferred retry merged {pr_url} — the mission is done.",
@@ -100,28 +107,50 @@ _CAUSES: dict[MergedCause, _Cause] = {
         # closes (the merge was operator-sanctioned) but never silently
         audit_action="merge_retry_succeeded",
         disclose_before=True),
+    CompletionCause.REVIEW_DELIVERED_TO_TICKET: _Cause(
+        remove_label=LABEL_REVIEW,
+        feed="✅ REVIEW approved; the pull request's files are attached to this "
+             "ticket and the pull request {pr_url} was closed without merging "
+             "— no repository changed. Mission done.",
+        what="Review approved — the files are attached to this ticket and the "
+             "pull request {pr_url} is closed without merging; no repository "
+             "changed. The mission is done.",
+        audit_action="review_approve_delivered",
+        disclose_before=False, repo_changed=False),
+    CompletionCause.SWEEP_DELIVERED_TO_TICKET: _Cause(
+        remove_label=LABEL_MERGE,
+        feed="✅ Delivered to this ticket on your instruction; the pull request "
+             "{pr_url} was closed without merging — no repository changed. "
+             "Mission done.",
+        what="The files are attached to this ticket as you asked and the pull "
+             "request {pr_url} is closed without merging; no repository "
+             "changed. The mission is done.",
+        # the gate passed at approve, minutes-to-hours ago (deferred-merge posture)
+        audit_action="merge_sweep_delivered",
+        disclose_before=True, repo_changed=False),
 }
 
 
-async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
+async def complete_mission(mgr, cause: CompletionCause, *, ref: MissionRef,
                           mission_key: str, pr, pr_url: str,
                           run: Run | None = None,
                           mission: Mission | None = None) -> None:
-    """Complete a mission whose PR is merged. Fixed order for every cause:
+    """Complete a mission — its PR merged, or its files delivered to the
+    ticket (ADR-0017 addendum). Fixed order for every cause:
     disclose pre-step (table-driven) → core (status → swap → feed → audit;
     checkpointed as ``review:done`` when a Run is in flight, direct on sweep
     paths) → deliverable zip (best-effort — packaging must NEVER un-Done the
     mission, deliver.py doctrine). ``pr`` is forwarded verbatim to the zip
     path (a PR on the run path, a PR/PRState on the sweep paths)."""
     assert run is not None or mission is not None, (
-        "complete_merged needs a Run (finalize path) or a Mission (sweep path)")
+        "complete_mission needs a Run (finalize path) or a Mission (sweep path)")
     spec = _CAUSES[cause]
     # the repository just changed under DevCake's hands — its PR is merged,
     # by the app or found merged — so the mirror's freshness is dropped
     # FIRST: a dependent child dispatched this very cycle must resync
     # (own-write invalidation, ADR-0024 item 7). Idempotent; never raises.
     repo = run.repo_ref if run is not None else (mission.repo or "")
-    if repo:
+    if repo and spec.repo_changed:
         mgr.repo_cache.invalidate(repo)
     with tracer.start_as_current_span("mission.complete") as span:
         span.set_attribute("devcake.mission.key", mission_key)
@@ -169,6 +198,8 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
             await activity_payload.record_activity(
                 mgr, ref.pmo_id, ref.kind, mission_key, spec.audit_action,
                 act=act)
+        if not spec.repo_changed:
+            return          # ticket delivery: the files landed BEFORE Done; no archive
         anchor = posted[0] if posted else None
         try:
             if run is not None:

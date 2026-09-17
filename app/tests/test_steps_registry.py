@@ -33,6 +33,8 @@ def test_past_gate_steps_matches_the_pre_registry_literal_tuple():
         "review:done", "review:merge", "review:merge_failed",
         "review:merge_deferred", "review:conflict_routed",
         "review:awaiting_merge", "review:merge_settle",
+        # ADR-0017 addendum: ticket delivery at approve (deliberate widening)
+        "review:ticket_delivery", "review:pr_closed",
     }
 
 

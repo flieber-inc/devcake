@@ -25,7 +25,6 @@ async function mockApis(page, { storeEnabled = true } = {}) {
     dismissed_alerts: [],
     poll_interval_sec: 30,
     adoption_mode: "manual",
-    attach_merged_changeset_to_pmo: false,
   };
   await page.route(/\/api\/v1\/config$/, (route) =>
     route.fulfill({

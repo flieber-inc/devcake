@@ -550,3 +550,16 @@ def test_active_only_returns_non_terminal_runs(tmp_path):
     assert out["total"] == 3
     assert all(r["state"] in ("dispatched", "running", "finalizing")
                for r in out["runs"])
+
+
+def test_rows_and_csv_carry_the_delivery_destination(tmp_path):
+    """ADR-0017 addendum: a run's snapshotted destination rides the flat
+    rows and the CSV contract (after pr_url); legacy records read empty."""
+    a, b = _run(1), _run(2)
+    b.delivery_to = "ticket"
+    store = _store(tmp_path, [a, b])
+    out = list_runs_response(store, PRICED, limit=25, offset=0)
+    rows = {r["mission_key"]: r for r in out["runs"]}
+    assert rows["A-1"]["delivery_to"] == "" and rows["A-2"]["delivery_to"] == "ticket"
+    header, *_ = _csv_rows(runs_csv_response(store, PRICED))
+    assert header.index("delivery_to") == header.index("pr_url") + 1

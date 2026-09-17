@@ -143,6 +143,15 @@ connections and a staffed harness, dispatch one authorized small ticket,
 inspect its transcript and PR, and observe REVIEW and the merge handoff.
 A hello success proves plumbing, not model credentials or real mission quality.
 
+A mission's change set always rides a pull request; its **delivery
+destination** — the repository (merge) or the ticket (files attached at
+approve, pull request closed unmerged) — is a backticked line in the ticket
+description, `` `devcake:delivery:v1 to=ticket` ``, that DevCake writes from
+ONBOARD's declaration and that a person edits to steer (last line wins; add
+it to a mission parked at `DEVCAKE-MERGE` to have the sweep deliver instead
+of merge). A Dev asking for a change parks the mission under
+`DEVCAKE-NEEDS-HUMAN` with the exact line to paste; your edit is the decision.
+
 CLI exits: `0` success, `2` usage, `3` preflight, `4` bake/compose,
 `5` setup conflict, `6` baker/supervisor, `1` other. Read the receipt and
 stderr as well as the code. An existing roster is not something to erase

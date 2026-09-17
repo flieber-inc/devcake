@@ -1,7 +1,8 @@
 # ADR-0017 — Blocker RO work mounts + optional PMO changeset zip
 
 - **Status:** accepted (2026-07-21); **amended 2026-07-28** (cross-instance
-  blocker resolution via `BlockerLocator`). Mechanism is an RO **token** +
+  blocker resolution via `BlockerLocator`); **amended 2026-09-17** (§1 retired
+  in favour of the delivery destination — addendum below). Mechanism is an RO **token** +
   prompt contract in ordinary writable clone dirs — not a filesystem mount
   (falls back to the write token when no `token_ro` is configured)
 - **Context:** Two usability gaps. (1) Zero-repo / internal missions always zip the merged change set to the PMO (ADR-0010); configured work repos never did — operators who live in Linear saw no files. (2) Pipeline missions ordered by `blocked_by` had no way to see upstream **internal** work trees: each mission gets its own internal repo, so dependents started empty and could only recover artifacts by downloading Linear attachments (losing git shape). Zip-on-A does not appear in B’s activity folder (per-mission materialization).
@@ -40,3 +41,20 @@ Canceled blockers do not mount. A blocker repo with **no read credential at disp
 - Docs/14: blocker RO tokens (other mission’s read token) enter the Dev under Zone B trust — documented, same class as reference repos.
 
 > Amended by ADR-0043 §4: beside the work-repo mount, a direct done blocker's whole record is now copied under `upstream/{KEY}/` in the dependent's activity folder. The mount contract above is unchanged.
+
+## Addendum — the delivery destination (2026-09-17)
+
+**Context.** A research mission whose deliverable was a report needed no repository change. Its ONBOARD planned a step that posts the report to the ticket — a step no Dev can perform (INV-4: the app is the only PMO writer, and the Dev→app payload is a closed set) — its EXECUTE opened no pull request, the `executed` transition advanced anyway, REVIEW approved, and the mission parked at `DEVCAKE-MERGE` with nothing to merge and no way out. The only mechanism that carries files to the ticket was §1's toggle: post-merge, deployment-wide, all missions or none. The report reached the ticket only because it was embedded in the attached plan.
+
+**Decision.** Every mission's change set rides a pull request on the mission branch; what a mission carries is where that change set **lands** — its **delivery destination**:
+
+- `repository` (the default, silent): the pull request merges, as before.
+- `ticket`: at REVIEW approve the app attaches the pull request's changed files to the ticket (each file its own attachment when the set is small and every file fits the PMO cap; otherwise the archive with its MANIFEST, exactly as the post-merge path builds it), completes the mission through the one completion chokepoint with copy that says **no repository changed**, and closes the pull request without merging (`ForgePort.close_pr`, best-effort after Done). No formal forge approval and no approval footer are posted. EXECUTE and REVIEW mechanics do not change: the pull request is still where the work is reviewed.
+
+The destination is **mission-record data**: a backticked description marker, `` `devcake:delivery:v1 to=ticket` `` with a `Reason:` line, that the **app** writes once — from ONBOARD's structured result on a mission that carries no marker, or from a parent's decomposition child fields — and that only a **person** changes afterwards (last marker wins). Any later differing declaration by a Dev (ONBOARD on a recorded mission, EXECUTE) is a **proposal**: one notice with the exact line to paste and `DEVCAKE-NEEDS-HUMAN`, never a write. REVIEW never proposes; it rejects and says why. A person may also write the line onto a mission parked at `DEVCAKE-MERGE`, and the merge sweep honours it. The park at ONBOARD follows the board's `plan_approval`; on a board whose PMO cannot hold attachments the ticket destination is unavailable. Runs snapshot the destination at dispatch (`Run.delivery_to`). Dispatch enforces the conveyor: an `executed` whose branch carries no pull request is `DEV_BAD_OUTPUT`; a parked mission with no pull request is handed back to a person, never wedged.
+
+**§1 is retired.** `attach_merged_changeset_to_pmo` is removed. The ticket receives a change set exactly when the mission's destination is the ticket, or — as always — after merge for the invisible internal forge (ADR-0010). Pre-v1: an old key is an unknown key (the generic warning, no migration), and the Policies → Delivery card is gone.
+
+**Rejected.** A Dev posting to the ticket (INV-4). A Dev-authored file payload on `run.artifacts` attached at the step card — a second attachment chokepoint, a second completion doctrine, size caps, and it bypasses the forge review surface (diff, reviewer token, PR comments). Embedding the deliverable in `PLAN.md` — the incident. A new label (ADR-0004's fixed set). A per-board or deployment-wide switch — the choice is a fact about one mission, so it lives on that mission's record where a person can read and edit it. Deleting the mission branch at close — a separate port surface; the branch stays as provenance.
+
+**Consequences.** Both destinations demand the same pull request of EXECUTE, so a destination change never invalidates work and costs no rework before approve — which is what lets a Dev's power be bounded to asking. A ticket-destination mission on a code repository still opens a pull request there (pipelines run, owners see it); operators who want reports elsewhere route such missions to a documents repository through the existing `devcake-repo:` card. The app never inspects the change set's content: REVIEW's deliverable-files-only rule and the plan gate are the controls. After Done the pull request is closed, not deleted; a person can reopen and merge it, and nothing detects that afterwards (docs/14 zone C residual). Description appends now go through one path, `feed.append_note` with `feed.marked_note` (ADR-0034: the third tenant made the chokepoint). Docs 02, 03, 04, 05, 06, 08, 10, 11, 14, 16; ADR-0016, ADR-0020, ADR-0034.

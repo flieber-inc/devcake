@@ -13,6 +13,68 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+## v0.6.7 (2026-09-17)
+
+Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.9. No profile change: `devcake up --release v0.6.7` is the whole upgrade.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.7).
+
+- **Fixed — a finished blocker's record now reaches the Dev on Linear
+  boards.** The upstream offer read the blocker edges from the mission
+  node the activity read returned, and the Linear activity query fetched
+  no relations, so every Linear mission read as "no blockers": the
+  finished blocker's record never landed under `upstream/{KEY}/` and no
+  gap was disclosed. The dispatch's own live-resolved done set (the
+  handoff notes, mission id included) is now the edge source for the
+  mirror, its done-ness outranks a same-cycle stale snapshot, and the
+  Linear activity read carries relations whole (paginated like `get`).
+  ADR-0043 §4 addendum; docs/05 §4.
+- **Handoff excerpts say where the whole note is.** The per-blocker
+  excerpt cap rises from 700 to 1,500 characters (the blocker section's
+  byte budget still bounds the sum; the steward's family package keeps
+  its own 700-character head), and a cropped excerpt ends with a pointer
+  to the whole handoff — the blocker's mirrored record when this dispatch
+  has it, else the mission's description on the board — in both the
+  prompt note and MISSION.md. ADR-0032.
+- **A missing grandparent is a named gap.** The ancestor walk stops at
+  the first parent the board snapshot does not hold; only the mission's
+  own missing parent was reported, so an ancestor dropped from the
+  listing (archived, another board) vanished silently while the nearer
+  ancestors mirrored as if the chain were whole. The missing ancestor is
+  now named wherever the chain breaks — a strict-gate gap with a banner —
+  and the resolved ancestors still mirror.
+- **An executed outcome requires a pull request; a parked mission with
+  none is handed back, never wedged.** An EXECUTE that reports no pull
+  request makes the app ask the forge for the mission branch's PR; a
+  forge-found one becomes the record's url, and a branch with none fails
+  the run as `DEV_BAD_OUTPUT` instead of advancing to REVIEW. A REVIEW
+  approve with no forge-visible PR opens the deferred merge window on
+  every repository (naming the branch), the sweep merges or hands back
+  once when the window elapses, and a zero window hands back at once.
+  DevCake never cancels for a missing pull request. docs/02, 03, 04, 11,
+  15.
+- **Delivery destination — the ticket as a legitimate end of a pull
+  request.** Every change set still rides a pull request; a mission may
+  now record where it lands: the repository (default, silent, merge as
+  before) or the ticket. The record is one description marker
+  (`` `devcake:delivery:v1 to=repository|ticket` ``), written once by the
+  app when ONBOARD declares it on a fresh mission (the park follows the
+  board's plan-approval setting), carried by decomposition children from
+  birth, and changed afterwards only by a person: a later differing
+  declaration by ONBOARD or EXECUTE is a proposal that parks the mission
+  under `DEVCAKE-NEEDS-HUMAN` with the exact line to paste; REVIEW never
+  proposes. In ticket mode a REVIEW approve attaches the pull request's
+  files to the ticket (file by file when small, else the archive with its
+  manifest; text redacted), completes the mission through the one
+  completion chokepoint with "no repository changed", and closes the pull
+  request unmerged (`ForgePort.close_pr`, all three forges, contract
+  battery row 15). A person may write the marker onto a mission parked at
+  `DEVCAKE-MERGE` and the sweep honours it. Description appends now go
+  through one chokepoint (`feed.append_note`) with a structure guard.
+  Missions that declare nothing are unchanged. docs/02, 03, 04, 05, 06,
+  08, 14; ADR-0016 and ADR-0034 addenda.
+- **Docs — installing without an agent.** The README carries the AppArmor
+  profile step for people setting a host up by hand.
+
 ## v0.6.6 (2026-09-11)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.9. Re-run the two Dev-container profile commands after upgrading (the profile changed; the doctor reports the old copy as outdated).

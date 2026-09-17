@@ -26,6 +26,10 @@ class ForgePort(Protocol):
         # squash merge; retries the forge's transient merge race (GitHub/GitLab
         # 409 head-modified; Gitea 405 "try again later") up to 2 times —
         # only real failures propagate
+    async def close_pr(self, pr_number: int) -> None: ...
+        # close WITHOUT merging — ticket delivery (ADR-0017 addendum, docs/03 §4):
+        # the state probe comes first; a closed PR is success, a MERGED one
+        # raises ForgeError so a caller never mistakes a merge for a close
     async def mergeable(self, pr_number: int) -> Optional[bool]: ...
         # single-shot, non-blocking tri-state (§5): False = auto-resolvable by
         # a branch sync; True = ready to merge now; None = wait (computing, CI
@@ -251,6 +255,7 @@ Two layers:
 | 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea), including `branch_protection_write` |
 | 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
 | 13 | `approve()`: False without reviewer; same write/reviewer token no-ops on `self_approval_blocked` forges and still posts on GitLab; `post_pr_comment` redacts known secret shapes on the wire (`test_forge_http.py`) |
+| 15 | `close_pr`: closes an unmerged PR (GitHub/Gitea `PATCH state=closed`, GitLab `PUT state_event=close`), is a silent success on an already-closed one, and refuses a merged one with `ForgeError` without writing — verified live against Gitea in the contract battery (row 15) |
 | 14 | `apply_default_branch_protection`: shape from discovered checks; approvals only with distinct reviewer; already-as-strict no-op; 403 names write token + permission; hermetic Gitea MockTransport round-trip (`test_forge_apply_protection.py`) |
 
 **HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape, full URL assembly, PR-comment redaction, self-approval same-token honesty for GitHub/GitLab, and Gitea's `APPROVED` review event, so empty `_headers()` or a broken `_req` URL fails the suite. The live forge battery (`scripts/contract_tests_forge.py`) is **gitea-only** (default / `DEVCAKE_CONTRACT_FORGE=gitea`; non-gitea values hard-exit). GitHub/GitLab live forge proof is the M12 acceptance ritual / `scripts/acceptance.py` (tester-side tokens), not this script.

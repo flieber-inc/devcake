@@ -24,12 +24,13 @@ import httpx
 
 from devcake import security
 from devcake.adapters.registry import make_forge
+from devcake.ports.forge import ForgeError
 from devcake.config import RepoInstance
 
 PASS, FAIL = "PASS", "FAIL"
 # Pinned check count (ids 1–14). A vanished check must fail the battery —
 # never self-grade N/N from len(results) alone (CAKE-83).
-EXPECTED_ROWS = 14
+EXPECTED_ROWS = 15
 results: list[tuple[str, str, str]] = []
 
 
@@ -272,6 +273,28 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     except Exception as e:
         ok14, note14 = False, str(e)[:150]
     check("14", "apply_default_branch_protection round-trip", ok14, note14)
+
+    # 15 — close_pr (ticket delivery, ADR-0017 addendum): closes an unmerged
+    # PR, is idempotent on a closed one, and REFUSES a merged one (row 8's).
+    ok15, note15 = True, ""
+    try:
+        n2 = fixture.make_branch_and_pr(
+            f"devcake/CONTRACT-CLOSE-{fixture.suffix}", "contract: close me")
+        await forge.close_pr(n2)
+        st = await forge.pr_state(n2)
+        closed_ok = st.state == "closed" and not st.merged
+        await forge.close_pr(n2)                       # idempotent
+        refused = False
+        try:
+            await forge.close_pr(n)                    # the merged PR of row 8
+        except ForgeError:
+            refused = True
+        ok15 = closed_ok and refused
+        note15 = f"closed={closed_ok} refused_merged={refused}"
+    except Exception as e:
+        ok15, note15 = False, str(e)[:150]
+    check("15", "close_pr closes unmerged, idempotent, refuses merged",
+          ok15, note15)
 
 
 def main():

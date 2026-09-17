@@ -174,6 +174,19 @@ class GitHubForge:
                     return
                 raise
 
+    async def close_pr(self, pr_number: int) -> None:
+        """Close without merging (ticket delivery, docs/03 §4). Idempotent:
+        an already-closed PR is success; a MERGED one raises ForgeError — the
+        caller must never mistake a merge for a close. The state probe comes
+        first so the write is never sent at a merged PR."""
+        state = await self.pr_state(pr_number)
+        if state.merged:
+            raise ForgeError(f"PR {pr_number} is merged — it cannot be closed "
+                             f"as unmerged", status=409)
+        if state.state == "closed":
+            return
+        await self._req("PATCH", f"/pulls/{pr_number}", json={"state": "closed"})
+
     async def _already_merged(self, pr_number: int) -> bool:
         try:
             state = await self.pr_state(pr_number)

@@ -218,6 +218,7 @@ class FakeForge:
         self.merge_exc = merge_exc
         self.mergeable_result = mergeable_result
         self.merges = []
+        self.closed = []              # close_pr numbers, in order
         self.pr_comments = []
         self.capabilities = SimpleNamespace(mergeable_tristate=True)
         self.lookups = 0            # get_pr_by_branch calls (the memoized read)
@@ -241,6 +242,11 @@ class FakeForge:
         self.merges.append(pr_number)
         if self.merge_exc:
             raise self.merge_exc
+
+    async def close_pr(self, pr_number):
+        self.closed.append(pr_number)
+        if getattr(self, "close_exc", None):
+            raise self.close_exc
 
     async def mergeable(self, pr_number):
         return self.mergeable_result

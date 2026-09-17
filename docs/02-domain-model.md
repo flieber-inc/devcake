@@ -61,7 +61,7 @@ Mission Type is a **pure function of live PMO state** — it is computed, never 
 | 7 | any active | `DEVCAKE-SKIP` present | *human opt-out — do not schedule (overrides rows 1–4)* |
 | 8 | any active | `DEVCAKE-FAILED` present | *needs human attention — do not schedule (overrides rows 1–4)* |
 | 9 | `in_progress` | none | *no derivable type — a human moved it or a transition half-applied; do not schedule, log at INFO. It becomes schedulable again when a human sets a stage label or moves it back to backlog.* |
-| 10 | any active | `DEVCAKE-MERGE` present | *awaiting merge — not schedulable; handled by the merge sweep (`04-orchestrator.md` §1), which completes the Mission when its PR merges (or cancels it if the PR is closed unmerged).* |
+| 10 | any active | `DEVCAKE-MERGE` present | *awaiting merge — not schedulable; handled by the merge sweep (`04-orchestrator.md` §1), which completes the Mission when its PR merges, cancels it if the PR is closed unmerged, or hands it back to a person — once, by branch name — when no PR exists after the deferred window (`03-mission-lifecycle.md` §4.1).* |
 | 11 | any active | `DEVCAKE-NEEDS-HUMAN` present | *awaiting human action — do not schedule (overrides rows 1–4). A Dev deliberately handed off to a human (`03-mission-lifecycle.md` §4a), or a board with plan approval on is waiting for a person to approve a fresh plan (`03` §2a); removing the label resumes the Mission at the same stage.* |
 
 Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything except 5.

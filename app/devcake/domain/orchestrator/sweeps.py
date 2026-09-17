@@ -10,14 +10,15 @@ from opentelemetry.trace import Status, StatusCode
 
 from ...ports.forge import ForgeError, legacy_branch, mission_branch
 from ...ports.pmo import PMOTransient
+from ...security import redact
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
-from . import (activity_payload, board, completion, discovery, dispatch,
+from . import (activity_payload, board, completion, deliver, discovery, dispatch,
                feed, feed_memo,
                freshness, status_comment)
-from .markers import (MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
-                      MERGE_SETTLE_MARKER)
+from .markers import (DELIVERY_TICKET, MERGE_HANDOFF_MARKER,
+                      MERGE_RETRY_MARKER, MERGE_SETTLE_MARKER, delivery_of)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -224,8 +225,8 @@ async def merge_sweep(mgr, m: Mission) -> None:
             span.set_attribute("devcake.outcome",
                                "merged" if state.merged else "closed")
             if state.merged:
-                await completion.complete_merged(
-                    mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+                await completion.complete_mission(
+                    mgr, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
                     ref=m.ref, mission_key=m.key,
                     pr=state, pr_url=state.url, mission=m)
             else:
@@ -257,6 +258,12 @@ async def merge_sweep(mgr, m: Mission) -> None:
                         mgr, m.pmo_id, m.pmo_kind or "issue", m.key,
                         "merge_sweep_canceled", act=act)
     else:
+        if delivery_of(m.description) == DELIVERY_TICKET:
+            # ADR-0017 addendum — a person wrote `to=ticket` on a parked
+            # pull request ("do not merge this, put it on the ticket"):
+            # the sweep honours the record — deliver → Done → close
+            await _deliver_parked_to_ticket(mgr, m, pr, state, forge)
+            return
         # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
         # human — unless the deferred-retry window is actively running
         # (_deferred_merge_retry pops the entry while it drives the window)
@@ -267,6 +274,65 @@ async def merge_sweep(mgr, m: Mission) -> None:
             await _deferred_merge_retry(mgr, m, pr, state.url, inst)
         elif m.pmo_id in mgr._missing_pr_deferred:
             await _await_after_missing_pr(mgr, m, state.url)
+
+
+async def _deliver_parked_to_ticket(mgr, m: Mission, pr, state, forge) -> None:
+    """A parked pull request whose mission record now says `to=ticket`:
+    files to the ticket, Done through the completion chokepoint (disclose-
+    only freshness, like the deferred merge — the gate passed at approve),
+    then the pull request closed unmerged. A delivery failure hands back
+    ONCE (process-local latch + a `✋` notice) instead of retrying every
+    cycle; the mission stays parked for the person."""
+    if m.pmo_id in mgr._merge_window_closed:
+        mgr.merge_handoffs[m.pmo_id] = (
+            f"{m.key}: ticket delivery failed — awaiting you ({state.url})")
+        return
+    ref = mission_branch(m.instance, m.key)
+    try:
+        with completion.write_back_class():
+            await deliver.deliver_change_set(
+                mgr, repo_ref=m.repo, mission_key=m.key, pmo_id=m.pmo_id,
+                pmo_kind=m.pmo_kind or "issue", pr=pr, ref=ref)
+    except Exception as e:  # noqa: BLE001 — the files are the deliverable: a failure is handed to a person once, the mission stays parked
+        log.warning("ticket delivery failed for parked %s", m.key, exc_info=True)
+        mgr._merge_window_closed.add(m.pmo_id)
+        mgr.merge_handoffs[m.pmo_id] = (
+            f"{m.key}: ticket delivery failed — awaiting you ({state.url})")
+        mgr._audit(m.pmo_id, "ticket_delivery_failed", str(e)[:200])
+        with completion.write_back_class():
+            await mgr._feed(
+                m.pmo_id, "issue",
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"You asked for the pull request's files on this ticket, "
+                    f"but DevCake could not attach them ({redact(str(e))[:160]}). "
+                    f"The pull request {state.url} stays open and unmerged.",
+                    f"⚠️ Ticket delivery failed for {state.url} — awaiting you "
+                    f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}",
+                    todo="Fix the cause and remove then re-add DEVCAKE-MERGE to "
+                         "retry, attach the files yourself and mark the ticket "
+                         "Done, or remove the `devcake:delivery:v1` line to merge "
+                         "instead."))
+        return
+    await completion.complete_mission(
+        mgr, completion.CompletionCause.SWEEP_DELIVERED_TO_TICKET,
+        ref=m.ref, mission_key=m.key, pr=pr, pr_url=state.url, mission=m)
+    try:
+        await forge.close_pr(pr.number)
+        mgr._audit(m.pmo_id, "pr_closed_unmerged", state.url)
+    except Exception as e:  # noqa: BLE001 — best-effort AFTER Done: the person is told the PR is still open
+        mgr._audit(m.pmo_id, "pr_close_failed", str(e)[:200])
+        with completion.write_back_class():
+            await mgr._feed(
+                m.pmo_id, "issue",
+                feed.notice(
+                    mgr, feed.NEEDS_YOU,
+                    f"The files are on this ticket and the mission is done, but "
+                    f"the pull request {state.url} could not be closed — close "
+                    f"it yourself, and do not merge it.",
+                    f"⚠️ Pull request {state.url} is still open after ticket "
+                    f"delivery — close it without merging.",
+                    todo="Close the pull request without merging."))
 
 
 async def _merge_stamps(mgr, m: Mission):
@@ -554,8 +620,8 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         span.set_attribute("devcake.outcome", "merged")
         # disclose-only freshness pre-step rides the cause table
         # (DEFERRED_RETRY_MERGE → disclose_before=True)
-        await completion.complete_merged(
-            mgr, completion.MergedCause.DEFERRED_RETRY_MERGE,
+        await completion.complete_mission(
+            mgr, completion.CompletionCause.DEFERRED_RETRY_MERGE,
             ref=m.ref, mission_key=m.key, pr=pr, pr_url=pr_url, mission=m)
 
 

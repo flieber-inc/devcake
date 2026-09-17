@@ -228,8 +228,8 @@ def _completion_site(tmp_path):
     async def no_zip(*a, **kw):
         pass
     mgr.deliver_internal_zip_for_mission = no_zip
-    run_coro(completion.complete_merged(
-        mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+    run_coro(completion.complete_mission(
+        mgr, completion.CompletionCause.SWEEP_EXTERNAL_MERGE,
         ref=MissionRef("p1", "issue"), mission_key="T-1",
         pr=SimpleNamespace(url="https://forge.example/pr/8"),
         pr_url="https://forge.example/pr/8", mission=m))

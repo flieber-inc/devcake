@@ -185,6 +185,20 @@ class GitLabForge:
                         pass
                 raise
 
+    async def close_pr(self, pr_number: int) -> None:
+        """Close without merging (ticket delivery, docs/03 §4). Idempotent:
+        an already-closed PR is success; a MERGED one raises ForgeError — the
+        caller must never mistake a merge for a close. The state probe comes
+        first so the write is never sent at a merged PR."""
+        state = await self.pr_state(pr_number)
+        if state.merged:
+            raise ForgeError(f"MR {pr_number} is merged — it cannot be closed "
+                             f"as unmerged", status=409)
+        if state.state == "closed":
+            return
+        await self._req("PUT", f"/merge_requests/{pr_number}",
+                        json={"state_event": "close"})
+
     async def mergeable(self, pr_number: int) -> Optional[bool]:
         """Port contract (docs/06 §5) — same tri-state as GitHubForge.mergeable.
         Prefers detailed_merge_status (GitLab ≥ 15.6); falls back to the legacy

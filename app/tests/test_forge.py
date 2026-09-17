@@ -766,3 +766,56 @@ def test_gitlab_pr_files_clears_truncated_via_access_raw_diffs():
     assert [f.path for f in result.files] == ["a.py", "b.py", "c.py"]
     assert calls[0].endswith("/merge_requests/7/changes")
     assert "access_raw_diffs=true" in calls[1]
+
+
+# ── close_pr: close without merging (ticket delivery) ────────────────────────
+
+_OPEN = {"number": 8, "html_url": "https://x/8", "web_url": "https://x/8",
+         "iid": 8, "state": "open", "merged": False}
+_CLOSED = {**_OPEN, "state": "closed"}
+# merged, in each vendor's own shape: GitHub/Gitea say closed + merged,
+# GitLab says state "merged" (normalized to closed + merged=True)
+_MERGED_GH = {**_OPEN, "state": "closed", "merged": True,
+              "merged_at": "2026-07-13T00:00:00Z"}
+_MERGED_GL = {**_OPEN, "state": "merged"}
+
+
+def _closing(forge, state_payload):
+    writes = []
+
+    async def _req(method, path, **kw):
+        if method == "GET":
+            return state_payload
+        writes.append((method, path, kw.get("json")))
+    forge._req = _req
+    return writes
+
+
+@pytest.mark.parametrize("make,write", [
+    (gh, ("PATCH", "/pulls/8", {"state": "closed"})),
+    (gl, ("PUT", "/merge_requests/8", {"state_event": "close"})),
+    (gt, ("PATCH", "/pulls/8", {"state": "closed"})),
+])
+def test_close_pr_closes_an_open_pr(make, write):
+    forge = make()
+    writes = _closing(forge, _OPEN)
+    run_coro(forge.close_pr(8))
+    assert writes == [write]
+
+
+@pytest.mark.parametrize("make", [gh, gl, gt])
+def test_close_pr_on_a_closed_pr_is_a_silent_success(make):
+    forge = make()
+    writes = _closing(forge, _CLOSED)
+    run_coro(forge.close_pr(8))
+    assert writes == []
+
+
+@pytest.mark.parametrize("make,merged", [(gh, _MERGED_GH), (gl, _MERGED_GL),
+                                         (gt, _MERGED_GH)])
+def test_close_pr_refuses_a_merged_pr_without_writing(make, merged):
+    forge = make()
+    writes = _closing(forge, merged)
+    with pytest.raises(ForgeError):
+        run_coro(forge.close_pr(8))
+    assert writes == []          # a merge is never mistaken for a close

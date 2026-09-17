@@ -104,6 +104,10 @@ REVIEW_FRESHNESS_OK = "review:freshness_ok"
 REVIEW_FRESHNESS_TRIPPED = "review:freshness_tripped"
 # Auto-merge settle park (past gate: approve already sanctioned)
 REVIEW_MERGE_SETTLE = "review:merge_settle"
+# ADR-0017 addendum — ticket delivery at approve: the files land on the
+# ticket (before Done), then the pull request is closed unmerged (after)
+REVIEW_TICKET_DELIVERY = "review:ticket_delivery"
+REVIEW_PR_CLOSED = "review:pr_closed"
 
 # ── discovery.py (ADR-0033 harvest) ──────────────────────────────────────────
 DISCOVERY_POST = "discovery:post"
@@ -178,6 +182,8 @@ REGISTRY: tuple[Step, ...] = (
     Step(REVIEW_MERGE_FAILED, stage_after=None, past_freshness_gate=True),
     Step(REVIEW_AWAITING_MERGE, stage_after=None, past_freshness_gate=True),
     Step(REVIEW_MERGE_SETTLE, stage_after=None, past_freshness_gate=True),
+    Step(REVIEW_TICKET_DELIVERY, past_freshness_gate=True),
+    Step(REVIEW_PR_CLOSED, past_freshness_gate=True),
     Step(REVIEW_REJECT_FEED),
     Step(REVIEW_REJECT_PR_COMMENT),
     Step(REVIEW_REJECT_LABELS, stage_after=LABEL_EXECUTE),

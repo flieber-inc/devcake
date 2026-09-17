@@ -225,6 +225,7 @@ class FakeForge:
         self.branch_pr = PullRequest(number=8, url="https://forge/pr/8", state="open")
         self.states = {}            # number → PullRequest answered by pr_state
         self.state_exc = {}         # number → exception raised by pr_state
+        self.descriptor = SimpleNamespace(pr_noun="pull request")
 
     async def get_pr_by_branch(self, branch):
         self.lookups += 1
@@ -3400,3 +3401,102 @@ def test_review_human_needed_still_posts_a_reply(tmp_path):
         "Need merge permission on the protected branch.", "human_needed"))
     reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
     assert "Need merge permission" in reply
+
+
+# ── executed requires a pull request (docs/03 §3, §6) ─────────────────────────
+# The pull request is the deliverable. An `executed` that names no url and
+# whose branch carries no forge-visible pull request is a structurally
+# invalid payload behind a legal outcome → DEV_BAD_OUTPUT (docs/03 §6 last
+# paragraph), never a silent march to REVIEW that parks at MERGE forever.
+
+def _executed_run_payload(**result_over):
+    result = {"outcome": "executed", "summary": "s"}
+    result.update(result_over)
+    return _finalize_payload(result=result)
+
+
+def test_executed_without_pr_anywhere_is_bad_output(tmp_path):
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-EXECUTE"}
+    with pytest.raises(ValueError) as ei:
+        run_coro(transitions.transition(
+            mgr, _run(), {"outcome": "executed", "summary": "s"}, None))
+    msg = str(ei.value)
+    assert "devcake/T-1" in msg                 # the branch a person can check (legacy ref shape)
+    assert "the pull request is the deliverable" in msg
+    assert "DEVCAKE-EXECUTE" in m.labels and "DEVCAKE-REVIEW" not in m.labels
+
+
+def test_executed_without_pr_fails_run_as_bad_output(tmp_path):
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-EXECUTE"}
+    run = _run()
+    run.state = "finalizing"
+    mgr.runs.store.save(run)
+    run_coro(mgr.finalize(run, _executed_run_payload()))
+    assert run.state == "failed"
+    assert run.error_class == "DEV_BAD_OUTPUT"
+    assert "devcake/T-1" in (run.error or "")
+    assert "DEVCAKE-REVIEW" not in m.labels
+
+
+def test_executed_without_reported_url_but_forge_pr_advances(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()                          # branch_pr = https://forge/pr/8
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    run = _run()
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "executed", "summary": "s"}, None))
+    assert "DEVCAKE-REVIEW" in m.labels
+    assert run.pr_url == "https://forge/pr/8"    # the forge-verified url is the record's
+    assert forge.lookups == 2                    # tripwire probe + the deliverable check
+
+
+def test_executed_with_reported_url_needs_no_forge_lookup(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    run = _run()
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "executed", "summary": "s",
+                   "pr_url": "https://forge/pr/9"}, None))
+    assert "DEVCAKE-REVIEW" in m.labels
+    assert run.pr_url == "https://forge/pr/9"
+    assert forge.lookups == 1                    # only the pre-existing out-of-pipeline tripwire read
+
+
+def test_executed_forge_probe_error_propagates_not_bad_output(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+
+    async def _boom(_branch):
+        raise ForgeError("forge down", status=503)
+    forge.get_pr_by_branch = _boom
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    with pytest.raises(ForgeError):
+        run_coro(transitions.transition(
+            mgr, _run(), {"outcome": "executed", "summary": "s"}, None))
+    assert "DEVCAKE-EXECUTE" in m.labels          # a transient never counts as bad output
+
+
+def test_executed_without_forge_configured_skips_the_check(tmp_path):
+    # resolution-failure contract: a vanished repo card is the operator's
+    # gap (surfaced by /health), never a Dev's bad output
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)     # no forge
+    run_coro(transitions.transition(
+        mgr, _run(), {"outcome": "executed", "summary": "s"}, None))
+    assert "DEVCAKE-REVIEW" in m.labels
+
+
+def test_executed_card_never_claims_a_pull_request_it_cannot_name(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    run = _run()
+    run.state = "finalizing"
+    store.save(run)
+    run_coro(mgr.finalize(run, _executed_run_payload()))
+    card = next(c for c in fake.comments if "`1_EXECUTE.md`" in c)
+    assert "Pull request opened." not in card
+    assert "No pull request url reported" in card

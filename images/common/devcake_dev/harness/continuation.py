@@ -115,9 +115,10 @@ def next_continuation(config: ContinuationConfig, state: ContinuationState, *,
 # ── nudge prompts ────────────────────────────────────────────────────────────
 # The nudge NEVER restates the result.json JSON shape: the per-type contracts
 # carry required fields beyond outcome/summary (REVIEW's verdict/report_md,
-# EXECUTE's pr_url, ONBOARD's decomposition payload), and a reduced example
-# here would pass the entrypoint's first-line check yet fail app-side
-# finalization. Resume mode points back into the session's own instructions;
+# EXECUTE's pull request — the app fails an `executed` whose branch carries
+# no PR as DEV_BAD_OUTPUT, ONBOARD's decomposition payload), and a reduced
+# example here would pass the entrypoint's first-line check yet fail
+# app-side finalization. Resume mode points back into the session's own instructions;
 # fresh mode embeds the ORIGINAL prompt verbatim — which IS the contract
 # (and the frozen ADR-0016 assembly: identifying prompt + playbook + skills).
 

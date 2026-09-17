@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from ...ports.forge import run_branch
 from ...security import redact
 from ..model import (LABEL_EXECUTE, LABEL_NEEDS_HUMAN, LABEL_PLAN, LABEL_REVIEW,
                      LABEL_SKIP, MissionRef)
@@ -225,6 +226,28 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
         reported = str(result.get("pr_url") or "").strip()
         if reported and not run.pr_url:
             run.pr_url = redact(reported)[:500]
+        if not run.pr_url:
+            # docs/03 §3/§6: the pull request IS the deliverable. No url
+            # reported → ask the forge for the branch's PR (the forge-verified
+            # url is the record's, ADR-0042); none there either → a
+            # structurally invalid payload behind a legal outcome, i.e.
+            # DEV_BAD_OUTPUT (finalize maps the ValueError), never a silent
+            # march to REVIEW that parks at MERGE with nothing to merge. A
+            # ForgeError propagates (transient → redelivery). No forge
+            # configured for the repo → the check is skipped: a vanished
+            # card is the operator's gap (resolution-failure contract).
+            _probe = mgr.forges.get(run.repo_ref)
+            if _probe is not None:
+                branch = run_branch(run)
+                pr = await _probe.get_pr_by_branch(branch)
+                if pr is not None and pr.url:
+                    run.pr_url = pr.url
+                else:
+                    raise ValueError(
+                        f"EXECUTE reported done but opened no pull request on "
+                        f"branch {branch}; in DevCake the pull request is the "
+                        f"deliverable. A mission that should change nothing "
+                        f"ends with human_needed and says why.")
 
         async def _executed_labels():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
@@ -237,7 +260,8 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             await mgr._feed(
                 pmo_id, run.pmo_kind,
                 f"🔀 DevCake opened/updated the {noun}: "
-                f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
+                f"{run.pr_url or result.get('pr_url', '(no url reported)')} "
+                f"— awaiting REVIEW.")
 
         await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_LABELS, _executed_labels)
         if steps.STEP_CARD in run.finalized_steps:

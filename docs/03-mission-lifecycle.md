@@ -87,7 +87,7 @@ The Dev reads the latest `PLAN.md` and the latest REVIEW report from `ACTIVITY.m
 
 `result.json`: `outcome: "executed"` with `pr_url` and `summary`.
 
-**Finalization:** transcript + token report → swap `DEVCAKE-EXECUTE` → `DEVCAKE-REVIEW` → post the PR link as a feed comment. The PR-link comment is **not** idempotent by scanning prior `pr_url` posts — redelivery safety rides `run.finalized_steps` checkpoints, not a feed scan for the same URL.
+**Finalization:** transcript + token report → **the pull request is verified** → swap `DEVCAKE-EXECUTE` → `DEVCAKE-REVIEW` → post the PR link as a feed comment. The pull request is the deliverable: an `executed` that reports no `pr_url` makes the app ask the forge for the mission branch's pull request (`get_pr_by_branch`; the forge-verified url becomes the record's), and when the branch carries none the payload is structurally invalid behind a legal outcome — the run fails as `DEV_BAD_OUTPUT` (§6, a counted attempt) with the branch named in the error, never a silent march to REVIEW that parks at `DEVCAKE-MERGE` with nothing to merge. A forge error during that read propagates (transient → redelivery); a repository whose card has vanished skips the check (resolution-failure contract — the operator's gap, surfaced by `/health`). A mission that should change nothing ends with `human_needed` and says why. The PR-link comment is **not** idempotent by scanning prior `pr_url` posts — redelivery safety rides `run.finalized_steps` checkpoints, not a feed scan for the same URL.
 
 ## 4. REVIEW
 
@@ -262,7 +262,7 @@ sweep; a vanished entry is re-created at the next dispatch.
   "edges": [                               // STEWARD 'stewarded' only (§4b)
     {"blocker": "ENG-10", "blocked": "ENG-12"}
   ],
-  "pr_url": "https://…",                   // executed / reviewed
+  "pr_url": "https://…",                   // executed (REQUIRED — or a forge-visible PR on the mission branch, §3) / reviewed
   "discoveries": [                         // optional — ONBOARD/EXECUTE/REVIEW (ADR-0033)
     {"finding": "…stated for a stranger…",
      "evidence": "…paths, error text, repro command, sha…",
@@ -287,7 +287,7 @@ A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.
 
 **STEWARD is not in `LEGAL_OUTCOMES`.** Steward runs finalize through a separate path (`finalize_steward`): the only accepted outcome is `stewarded` (renamed from `relations_mapped` — ADR-0033 addendum: one duty-agnostic outcome for every steward flavor); anything else marks the run **`failed`** (no `DEVCAKE-SKIP` parking — there is no host mission to park).
 
-A **structurally invalid payload** behind a legal outcome (empty decomposition, forward/self `blocked_by` index) is different: it fails the run as `DEV_BAD_OUTPUT` — a counted attempt that retries naturally (`15-errors-and-retries.md` §2) — because a formatting slip deserves a retry where a forged outcome does not.
+A **structurally invalid payload** behind a legal outcome (empty decomposition, forward/self `blocked_by` index, an `executed` whose branch carries no pull request) is different: it fails the run as `DEV_BAD_OUTPUT` — a counted attempt that retries naturally (`15-errors-and-retries.md` §2) — because a formatting slip deserves a retry where a forged outcome does not.
 
 ## 7. Canonical prompts (v0)
 

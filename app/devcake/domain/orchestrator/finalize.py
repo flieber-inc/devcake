@@ -500,7 +500,8 @@ def _card_copy(mgr, run: Run, result: dict, outcome: str, *,
                else "DevCake — EXECUTE.")
         return ("📋", "planned", "Plan posted below.", nxt)
     if mtype == "EXECUTE" and outcome == "executed":
-        where = f"Pull request {pr_url}." if pr_url else "Pull request opened."
+        where = (f"Pull request {pr_url}." if pr_url else
+                 "No pull request url reported — DevCake checks the branch.")
         return ("🔀", "executed", where, "DevCake — REVIEW.")
     if mtype == "REVIEW" and outcome == "reviewed":
         verdict = str(result.get("verdict") or "").lower()

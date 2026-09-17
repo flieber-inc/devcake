@@ -92,7 +92,11 @@ handoff}` per **done** blocker — collected BEFORE the same-repo drop, the
 mountability drop, the repo_ref dedup, and the 8-cap: narrative is
 deliberately decoupled from the mount list, so a blocker whose repo
 collapsed into another's (or overflowed the cap) still speaks. Excerpts are
-bounded (`HANDOFF_EXCERPT_MAX`, 700). The prompt's blocker note renders a
+bounded (`HANDOFF_EXCERPT_MAX`, 1,500 characters; a cropped excerpt ends
+with a pointer to the whole handoff — the blocker's record under
+`upstream/{KEY}/` when the dispatch mirrored it, else the mission's
+description on the board — ADR-0043 §4 addendum). The prompt's blocker
+note renders a
 `Handoff:` line under each mounted blocker plus note-only lines for
 unmounted ones, and now states the staleness rule: *the mission description
 predates the handoffs; where they conflict, the handoff is newer*.

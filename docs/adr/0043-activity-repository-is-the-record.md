@@ -96,6 +96,16 @@ can predate a completion in the same cycle. A rebuild with no dispatch in hand
 (the record push at a later boundary) follows the mission's own `blocked_by`,
 which every adapter's activity read must carry whole (docs/05 §4).
 
+Two consequences ride with it. The handoff excerpt (ADR-0032) that is
+cropped at `HANDOFF_EXCERPT_MAX` ends with a pointer to the whole note —
+`upstream/{KEY}/MISSION.md` when that blocker's record landed in this
+payload, else the mission's description on the board — so the excerpt is
+never mistaken for the end of the handoff. And the ancestor walk names the
+first ancestor the board snapshot does not hold wherever the chain breaks
+(a grandparent the listing dropped, not only the mission's own parent): the
+nearer ancestors still mirror, the missing one is a strict-gate gap, and
+the Dev never reads a truncated chain as a whole one.
+
 ### 5 — Delivery
 
 Three stages, each releasable: (1) the port read operations and the record

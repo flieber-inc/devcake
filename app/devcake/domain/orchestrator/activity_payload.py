@@ -156,6 +156,31 @@ def _activity_snapshot_files(payload: dict) -> list[dict]:
     return files
 
 
+def upstream_folder(mission_key: str) -> str:
+    """The folder a mission's record mirrors under (ADR-0043 §3)."""
+    return f"upstream/{_safe_upstream_key(mission_key) or mission_key}/"
+
+
+def handoff_line(note: dict, mirrored: set[str] | None = None) -> str:
+    """One blocker's `Handoff:` line for the prompt note and MISSION.md
+    (ADR-0032). A cropped excerpt (`note["cropped"]`) says where the whole
+    handoff is: the blocker's record under upstream/{KEY}/ when this
+    payload mirrored it (`mirrored`), else that mission's description on
+    the board — never a bare cut that reads as the end of the note."""
+    text = note.get("handoff") or ""
+    if not text:
+        return ""
+    if note.get("cropped"):
+        key = note.get("mission_key") or ""
+        if mirrored is not None and key in mirrored:
+            text += (" … (excerpt — the whole handoff is in "
+                     f"`{upstream_folder(key)}MISSION.md`)")
+        else:
+            text += (" … (excerpt — the whole handoff is in that "
+                     "mission's description on the board)")
+    return "Handoff: " + text
+
+
 def _safe_upstream_key(key: str) -> str | None:
     """One path segment for upstream/{KEY}/ — reject empty/slippery keys."""
     seg = (key or "").strip().replace("\\", "/").split("/")[-1]
@@ -216,7 +241,7 @@ async def _offer_upstream(mgr, mission, used: set[str], *,
     was ever gated on blocker context). `done_blockers` is the dispatch's
     live-resolved done set (see `family_graph.upstream_chain`); None means
     the mission's own blocked_by decides. Returns (attachment_dicts,
-    gating_gaps, truncated_keys, banner_lines)."""
+    gating_gaps, truncated_keys, banner_lines, mirrored_mission_keys)."""
     # Lazy import: family_graph → dispatch → activity_payload (cycle).
     from . import family_graph
     from ...ports.internal_forge import activity_repo_name
@@ -226,19 +251,31 @@ async def _offer_upstream(mgr, mission, used: set[str], *,
     outside = family_graph.blockers_outside(mission, missions,
                                             done_blockers=done_blockers)
     # A trusted parent_ref that does not resolve in the snapshot is a gap —
-    # the Dev must not start believing the chain is empty when it is not.
-    pref = decomposition_parent_ref(mission)
-    if pref and not any(u.relation == family_graph.RELATION_PARENT
-                        for u in chain):
+    # the Dev must not start believing the chain is complete when it is
+    # not. Checked at the FAR end of the ancestor walk, not only on the
+    # mission itself: the walk stops at the first parent the snapshot does
+    # not hold (archived, another board), so a grandparent the listing
+    # dropped would otherwise vanish without a word while the nearer
+    # ancestors mirror as if the chain were whole. Every ancestor is
+    # offered or named; a missing one is a strict-gate gap (ADR-0036 §4).
+    parents = [u for u in chain if u.relation == family_graph.RELATION_PARENT]
+    far = parents[-1].mission if parents else mission
+    pref = decomposition_parent_ref(far) if far is not None else None
+    chain_gaps: list[dict] = []
+    chain_banners: list[str] = []
+    if pref:
         pool = {m.pmo_id for m in missions}
         pool |= {m.key.upper() for m in missions if m.key}
         if pref not in pool and pref.upper() not in pool:
-            gap = {"key": pref, "pmo_id": pref,
-                   "reason": "ancestor not in board snapshot"}
-            banner = ("⚠ UPSTREAM GAP — activity for "
-                      f"`{pref}` is unavailable: ancestor not in board "
-                      "snapshot.")
-            return [], [gap], [], [banner]
+            where = ("ancestor" if not parents
+                     else f"ancestor beyond `{far.key or far.pmo_id}`")
+            chain_gaps.append({"key": pref, "pmo_id": pref,
+                               "reason": f"{where} not in board snapshot"})
+            chain_banners.append(
+                "⚠ UPSTREAM GAP — activity for "
+                f"`{pref}` is unavailable: {where} not in board snapshot.")
+            if not parents:
+                return [], chain_gaps, [], chain_banners, []
 
     try:
         budget = mgr._attachment_cap()
@@ -246,7 +283,7 @@ async def _offer_upstream(mgr, mission, used: set[str], *,
         budget = 25 * 1024 * 1024
 
     files: list[dict] = []
-    gaps: list[dict] = []            # gating (ancestor / project)
+    gaps: list[dict] = list(chain_gaps)   # gating (ancestor / project)
     soft_gaps: list[dict] = []       # disclosed only (blocker)
     truncated: list[str] = []
     banners: list[str] = []
@@ -380,6 +417,7 @@ async def _offer_upstream(mgr, mission, used: set[str], *,
                 f"⚠ UPSTREAM GAP — activity for `{g.get('key')}` is "
                 f"unavailable: {g.get('reason', 'unreadable')}.")
         banners.append("")
+    mirrored = [key for key, _relation, _title, _source in included]
 
     if truncated:
         banners.append(
@@ -388,7 +426,7 @@ async def _offer_upstream(mgr, mission, used: set[str], *,
             + ", ".join(f"`{k}`" for k in truncated) + ".")
         banners.append("")
 
-    return files, gaps, truncated, banners
+    return files, gaps, truncated, banners, mirrored
 
 
 async def push_activity_repo(mgr, mission, mtype, seq: int,
@@ -687,14 +725,9 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     last = act.entries[-1] if act.entries else None
     watermark = ({"entry_id": last.entry_id or "", "ts": last.ts.isoformat()}
                  if last is not None else {})
-    blocker_lines = []
-    for n in blocker_notes or []:
-        blocker_lines.append(f"- `{n['mission_key']}` — {n['title']}")
-        if n.get("handoff"):
-            blocker_lines.append(f"  Handoff: {n['handoff']}")
-
     upstream_gaps: list[dict] = []
     upstream_truncated: list[str] = []
+    upstream_included: list[str] = []
     if include_upstream:
         # Dispatch passes its notes (every done blocker its live pre-launch
         # read resolved, pmo_id included): that resolved set is the blocker
@@ -705,8 +738,9 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         done_blockers = (
             [n["pmo_id"] for n in blocker_notes if n.get("pmo_id")]
             if blocker_notes is not None else None)
-        up_files, upstream_gaps, upstream_truncated, banners = \
-            await _offer_upstream(mgr, m, used, done_blockers=done_blockers)
+        (up_files, upstream_gaps, upstream_truncated, banners,
+         upstream_included) = await _offer_upstream(
+            mgr, m, used, done_blockers=done_blockers)
         attachments.extend(up_files)
         if banners:
             # Banners precede the feed mirror so a Dev scanning ACTIVITY.md
@@ -719,6 +753,13 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
                if include_upstream else None)
     if resumed is not None:
         lines = resume.banner_lines(resumed, act.entries) + lines
+    # ADR-0032 handoff block — rendered AFTER the offer so a cropped
+    # excerpt can point at the blocker's mirrored record
+    blocker_lines = []
+    for n in blocker_notes or []:
+        blocker_lines.append(f"- `{n['mission_key']}` — {n['title']}")
+        if n.get("handoff"):
+            blocker_lines.append("  " + handoff_line(n, set(upstream_included)))
     mission_md = _mission_md(m, mission_lines, document_lines, blocker_lines,
                              _discovery_lines(act.entries))
     if resumed is not None:
@@ -731,5 +772,8 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
             # (a wire-safe extra key; the fallback consumers ignore it)
             "status_entry_id": find_status_entry(act.entries) or "",
             "upstream_gaps": upstream_gaps,
-            "upstream_truncated": upstream_truncated}
+            "upstream_truncated": upstream_truncated,
+            # the mission keys whose record landed under upstream/ — the
+            # prompt's blocker note points cropped excerpts at them
+            "upstream_included": upstream_included}
 

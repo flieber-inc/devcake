@@ -183,7 +183,8 @@ def test_notes_survive_same_repo_drop(tmp_path):
         mgr, b, "shared", [_blocker_run("a", "T-A", "shared")]))
     assert entries == []
     assert notes == [{"mission_key": "T-A", "title": "title T-A",
-                      "handoff": "the schema moved to v2", "pmo_id": "a"}]
+                      "handoff": "the schema moved to v2", "pmo_id": "a",
+                      "cropped": False}]
 
 
 def test_notes_survive_the_cap_and_excerpts_are_bounded(tmp_path):
@@ -261,3 +262,26 @@ def test_playbooks_carry_the_contract():
     assert "handoff_md" in REVIEW_PLAYBOOK
     assert "REQUIRED on approve" in REVIEW_PLAYBOOK
     assert "handoff_md" in CS_PLAYBOOKS["REVIEW"]
+
+def test_cropped_excerpt_points_at_the_mirrored_record(tmp_path):
+    """A handoff longer than the excerpt cap is cut, and the cut says where
+    the whole note is: the blocker's record under upstream/{KEY}/ when this
+    dispatch mirrored it, else the mission's description on the board."""
+    a = _blocker_mission("a", "T-A", handoff="x" * (HANDOFF_EXCERPT_MAX + 50))
+    b = _blocker_mission("b", "T-B", status="backlog", blocked_by=["a"])
+    mgr = _locator_mgr(tmp_path, {"a": a, "b": b})
+    _entries, _skips, notes = run_coro(dispatch.resolve_blocker_work(
+        mgr, b, "shared", [_blocker_run("a", "T-A", "shared")]))
+    assert notes[0]["cropped"] is True
+    assert len(notes[0]["handoff"]) == HANDOFF_EXCERPT_MAX
+    mirrored = dispatch._blocker_repos_note(mgr, [], [], notes, mirrored={"T-A"})
+    assert "… (excerpt — the whole handoff is in `upstream/T-A/MISSION.md`)" \
+        in mirrored
+    bare = dispatch._blocker_repos_note(mgr, [], [], notes, mirrored=set())
+    assert "upstream/T-A/" not in bare
+    assert "the whole handoff is in that mission's description" in bare
+    # an uncropped note renders exactly as before — no pointer, no ellipsis
+    short = [{"mission_key": "T-A", "title": "t", "handoff": "moved X",
+              "pmo_id": "a", "cropped": False}]
+    assert "Handoff: moved X\n" in dispatch._blocker_repos_note(
+        mgr, [], [], short, mirrored={"T-A"}) + "\n"

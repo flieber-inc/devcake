@@ -244,8 +244,13 @@ HANDOFF_MARKER = "`devcake:handoff:v1`"
 # App-side cap at append time — the entrypoint does not bound handoff_md,
 # and a vendor description-cap failure must stay in best-effort territory.
 HANDOFF_APPEND_MAX = 4000
-# Per-blocker excerpt bound in the prompt note and MISSION.md.
-HANDOFF_EXCERPT_MAX = 700
+# Per-blocker excerpt bound in the prompt note and MISSION.md. A handoff
+# that says what changed, what was found and what downstream must apply
+# runs past a few hundred characters; the excerpt carries that head, the
+# blocker note's byte budget (prompts.BLOCKER_NOTE_MAX_BYTES) bounds the
+# sum, and a cropped excerpt says where the whole handoff is (the
+# blocker's record under upstream/{KEY}/, ADR-0043 §4 addendum).
+HANDOFF_EXCERPT_MAX = 1500
 
 
 def defang(text: str) -> str:

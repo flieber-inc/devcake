@@ -947,7 +947,11 @@ until that run exists, field evidence below stays operator-self-reported.
   live-resolved done set (the handoff notes, pmo_id included) is the edge
   source, its done-ness outranks a same-cycle stale snapshot, and the
   Linear activity read carries relations whole (paginated like `get`).
-  Tests at both seams. Docs: ADR-0043.
+  With it: the handoff excerpt cap rises to 1,500 characters and a
+  cropped excerpt points at the whole handoff (the mirrored record, else
+  the board); a decomposition ancestor missing from the snapshot is
+  named wherever the chain breaks, not only when it is the mission's own
+  parent. Tests at both seams. Docs: ADR-0032, ADR-0043.
 
 ### Field evidence (receipted)
 

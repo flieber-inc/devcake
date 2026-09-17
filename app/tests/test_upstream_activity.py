@@ -721,3 +721,47 @@ def test_blockers_outside_follow_the_dispatch_edge_source():
                                          done_blockers=["a"]) == 0
     assert family_graph.blockers_outside(issue, [issue, a],
                                          done_blockers=["peer-2"]) == 1
+
+
+def test_cropped_handoff_in_mission_md_points_at_the_mirrored_record(tmp_path):
+    blk = _blocker("b", "BLK-1")
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["b"]
+    pmo = MultiActivityPMO([blk, issue], {"i": _act(issue, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [blk, issue]
+    mgr.internal_forge = _forge_with_record("activity-linear-blk-1",
+                                            {"MISSION.md": b"whole handoff"})
+    notes = [{"mission_key": "BLK-1", "title": "BLK-1", "pmo_id": "b",
+              "handoff": "head of the note", "cropped": True}]
+    payload = run_coro(mgr.activity_payload("i", blocker_notes=notes))
+    assert payload["upstream_included"] == ["BLK-1"]
+    assert ("Handoff: head of the note … (excerpt — the whole handoff is in "
+            "`upstream/BLK-1/MISSION.md`)") in payload["mission_md"]
+    # the record is unreadable → not mirrored → the pointer goes to the board
+    forge = _forge_with_record("activity-linear-blk-1", {"MISSION.md": b"x"})
+    forge.fail_reads.add("activity-linear-blk-1")
+    mgr.internal_forge = forge
+    payload = run_coro(mgr.activity_payload("i", blocker_notes=notes))
+    assert payload["upstream_included"] == []
+    assert "upstream/BLK-1/MISSION.md" not in payload["mission_md"]
+    assert "that mission's description on the board" in payload["mission_md"]
+
+
+def test_grandparent_missing_from_the_snapshot_is_a_named_gap(tmp_path):
+    """The ancestor walk stops at the first parent the snapshot lacks; the
+    missing one must be NAMED (strict gate), and the nearer ancestors still
+    mirror — a silent stop would read as a whole chain."""
+    parent = _m("p", "PARENT-1", parent="gone-root", depth=1)
+    child = _m("c", "CHILD-1", parent="p", depth=2)
+    pmo = MultiActivityPMO([parent, child], {"c": _act(child, "child feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [parent, child]          # root not listed
+    mgr.internal_forge = _forge_with_record("activity-linear-parent-1",
+                                            {"MISSION.md": b"parent brief"})
+    payload = run_coro(mgr.activity_payload("c"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert "upstream/PARENT-1/MISSION.md" in names
+    gaps = payload["upstream_gaps"]
+    assert [g["key"] for g in gaps] == ["gone-root"]
+    assert "beyond `PARENT-1`" in gaps[0]["reason"]
+    assert "`gone-root`" in payload["activity_md"]

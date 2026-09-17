@@ -701,6 +701,12 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
         env_note = _environment_note()
         ident = _identifying_prompt(mgr, dev_type)
         playbook = _pb(mtype.value)
+        # ADR-0017 addendum: the recorded destination rides the prompt as a
+        # code-owned epilogue (the marker is also in the description the Dev
+        # receives); ONBOARD learns whether the board can hold attachments
+        delivery_to = markers.delivery_of(live.description)
+        delivery_recorded = markers.delivery_recorded(live.description)
+        ticket_ok = feed._attachments_supported(mgr)
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(
                 ident, live, playbook=playbook,
@@ -710,13 +716,16 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 decomposition_rule=decomposition_rule(mgr, live),
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
                 discoveries_cap=mgr.config.budgets.discoveries_per_run,
-                environment_note=env_note),
+                environment_note=env_note,
+                delivery_to=delivery_to, delivery_recorded=delivery_recorded,
+                ticket_delivery_available=ticket_ok),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
-                environment_note=env_note),
+                environment_note=env_note,
+                delivery_to=delivery_to),
             MissionType.EXECUTE: lambda: execute_prompt(
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
@@ -726,13 +735,15 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
                 blocker_repos=blocker_note,
                 plan_approval_rule=plan_approval_rule(mgr, mtype),
                 discoveries_cap=mgr.config.budgets.discoveries_per_run,
-                environment_note=env_note),
+                environment_note=env_note,
+                delivery_to=delivery_to),
             MissionType.REVIEW: lambda: review_prompt(
                 ident, live, playbook=playbook,
                 reference_repos=ref_note,
                 blocker_repos=blocker_note,
                 discoveries_cap=mgr.config.budgets.discoveries_per_run,
-                environment_note=env_note),
+                environment_note=env_note,
+                delivery_to=delivery_to),
         }[mtype]()
         size_line = prompt_size_report(prompt, {
             "identity": ident, "playbook": playbook,
@@ -776,6 +787,7 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
             run.memory_mounts)
         run.branch = mission_branch(mgr.instance_name, mission.key)
         run.stage_label_at_dispatch = stage_of(live)
+        run.delivery_to = markers.delivery_of(live.description)
         run.mission_pmo_id = mission.pmo_id
         try:
             await mgr.runs.bootstrap.launch(

@@ -259,6 +259,67 @@ def defang(text: str) -> str:
         "`devcake-repo:", "devcake-repo:")
 
 
+# ADR-0017 addendum — the change set's DESTINATION, a mission-record fact
+# written by the app (ONBOARD's declaration, a parent's decomposition child
+# fields) or by a person editing the description. Every change set rides a
+# pull request; the destination decides how REVIEW approve ends: merge into
+# the repository (default, silent — no marker) or files attached to the
+# ticket with the pull request closed unmerged. Read like the handoff:
+# LAST marker wins, so a person reverts by writing a newer line; not
+# label-gated (the description is operator-owned). Model-authored text
+# reaching the description is redacted AND defanged first (feed.marked_note),
+# so a Dev can never mint this marker from prose.
+DELIVERY_REPOSITORY = "repository"
+DELIVERY_TICKET = "ticket"
+DELIVERY_MARKER_RE = re.compile(
+    r"`devcake:delivery:v1 to=(repository|ticket)`")
+DELIVERY_REASON_MAX = 300
+
+
+def delivery_marker(to: str) -> str:
+    """The backticked marker line for a destination (render twin of
+    DELIVERY_MARKER_RE — a round-trip test pins the bytes)."""
+    if to not in (DELIVERY_REPOSITORY, DELIVERY_TICKET):
+        raise ValueError(f"unknown delivery destination {to!r}")
+    return f"`devcake:delivery:v1 to={to}`"
+
+
+def delivery_of(description: str | None) -> str:
+    """The mission's recorded destination: the LAST marker in the
+    description, `repository` when there is none."""
+    matches = list(DELIVERY_MARKER_RE.finditer(description or ""))
+    return matches[-1].group(1) if matches else DELIVERY_REPOSITORY
+
+
+def delivery_recorded(description: str | None) -> bool:
+    """Whether ANY destination marker is on the record — the write/propose
+    switch (docs/03 §1.2): a Dev's declaration is written only onto a
+    mission that carries none; afterwards a differing one is a proposal."""
+    return DELIVERY_MARKER_RE.search(description or "") is not None
+
+
+def delivery_declaration(fields: dict) -> tuple[str | None, str]:
+    """A Dev's structured destination declaration (an ONBOARD result or a
+    decomposition child draft): (destination or None when absent, one-line
+    reason). A bad shape raises ValueError — the structurally-invalid-payload
+    arm (docs/03 §6), never a silent default. The reason is collapsed to one
+    line and bounded here; redaction/defang happen on the append path."""
+    raw = fields.get("delivery_to")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, ""
+    if not isinstance(raw, str) or raw.strip() not in (DELIVERY_REPOSITORY,
+                                                       DELIVERY_TICKET):
+        raise ValueError(
+            f"delivery_to must be \"{DELIVERY_REPOSITORY}\" or "
+            f"\"{DELIVERY_TICKET}\", got {raw!r}")
+    to = raw.strip()
+    reason = " ".join(str(fields.get("delivery_reason") or "").split())
+    if to == DELIVERY_TICKET and not reason:
+        raise ValueError(
+            "delivery_to \"ticket\" requires a one-line delivery_reason")
+    return to, reason[:DELIVERY_REASON_MAX]
+
+
 def handoff_of(description: str | None) -> str:
     """The mission's current handoff note: text after the LAST handoff
     marker line, up to the next `---` rule or the end. "" when absent."""

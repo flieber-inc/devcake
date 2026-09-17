@@ -74,6 +74,12 @@ TRANSITION_PLAN_NEEDED_ATTACH_LABELS = "transition:plan_needed_attach:labels"
 TRANSITION_PLAN_NEEDED_ATTACH = "transition:plan_needed_attach"
 TRANSITION_PLAN_NEEDED = "transition:plan_needed"
 TRANSITION_HUMAN_NEEDED = "transition:human_needed"
+# ADR-0017 addendum — the delivery destination: the record write (before
+# the outcome's own labels), its plain notice on the bare plan_needed path,
+# and a Dev's change PROPOSAL (adds DEVCAKE-NEEDS-HUMAN, not a stage label)
+TRANSITION_DELIVERY_NOTE = "transition:delivery:note"
+TRANSITION_DELIVERY_FEED = "transition:delivery:feed"
+TRANSITION_DELIVERY_PROPOSAL = "transition:delivery:proposal"
 TRANSITION_UNKNOWN_PARK = "transition:unknown_park"
 
 # ── review.py / completion.py / freshness.py ────────────────────────────────
@@ -154,6 +160,9 @@ REGISTRY: tuple[Step, ...] = (
     Step(TRANSITION_PLAN_NEEDED_ATTACH),
     Step(TRANSITION_PLAN_NEEDED, stage_after=LABEL_PLAN),
     Step(TRANSITION_HUMAN_NEEDED),
+    Step(TRANSITION_DELIVERY_NOTE),
+    Step(TRANSITION_DELIVERY_FEED),
+    Step(TRANSITION_DELIVERY_PROPOSAL),
     Step(TRANSITION_UNKNOWN_PARK),
     Step(REVIEW_HANDOFF),
     Step(REVIEW_PR_COMMENT),

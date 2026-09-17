@@ -201,6 +201,8 @@ Images are built only by Bake (`docker-bake.hcl`; `13-deployment.md` §6) and re
 
 ## 3. Plan-mode mapping (the "/plan function")
 
+A PLAN run's `result.json` is synthesized by the entrypoint from the plan text, so PLAN can author neither `discoveries` nor a delivery-destination declaration (`03-mission-lifecycle.md` §1.2): the plan states the recorded destination it was given and, when the brief makes it impossible, says so for the person approving it.
+
 The PLAN playbook requires the harness's native planning capability where one exists (mission-doc requirement); the mapping is explicit:
 
 | Template | Plan invocation | Notes |

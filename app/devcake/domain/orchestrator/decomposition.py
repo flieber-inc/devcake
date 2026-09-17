@@ -11,7 +11,9 @@ from ..model import (LABEL_CREATED, LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_SKIP,
                      LABEL_TRACKING, MissionRef)
 from ..run import Run
 from . import feed, steps
-from .markers import (COMMENT_SENTINEL, at_decomposition_limit, defang,
+from .markers import (DELIVERY_REASON_MAX, DELIVERY_TICKET,
+                      at_decomposition_limit, defang, delivery_declaration,
+                      delivery_marker,
                       decomposition_depth, decomposition_marker)
 
 log = logging.getLogger("devcake.missions")
@@ -93,7 +95,21 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     repo_names = set(mgr.forges.instances)
     repo_urls = repo_urls_of(mgr.forges.instances)
     draft_repos: dict[int, str] = {}
+    # ADR-0017 addendum: a child's delivery destination rides the manifest as
+    # data too; the app stamps the marker itself (never Dev prose). A board
+    # that cannot receive files cannot deliver to the ticket — the child is
+    # created for the repository and the parent's card says so.
+    draft_delivery: dict[int, tuple[str, str]] = {}
+    ticket_ok = feed._attachments_supported(mgr)
     for i, d in enumerate(drafts, start=1):
+        try:
+            to, why = delivery_declaration(d)
+        except ValueError as e:
+            raise ValueError(f"decomposition part {i}: {e}") from e
+        if to == DELIVERY_TICKET and ticket_ok:
+            draft_delivery[i] = (to, why)
+        elif to == DELIVERY_TICKET:
+            mgr._audit(pmo_id, "delivery_forced_repository", f"part {i}")
         deps = d.get("blocked_by") or []
         if not all(isinstance(j, int) and not isinstance(j, bool) and 1 <= j < i
                    for j in deps):
@@ -134,6 +150,11 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         # the key is present only when a draft names a repo, so manifests of
         # existing families hash exactly as before (replay/top-up keys on it)
         **({"repo": draft_repos[i]} if i in draft_repos else {}),
+        # present only when a draft names the ticket, so existing families
+        # hash exactly as before (replay/top-up keys on the manifest)
+        **({"delivery_to": draft_delivery[i][0],
+            "delivery_reason": defang(redact(draft_delivery[i][1]))}
+           if i in draft_delivery else {}),
     } for i, d in enumerate(drafts, start=1)]
     canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"),
                            ensure_ascii=True)
@@ -261,6 +282,11 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 # Appended AFTER the manifest hash is computed, like the
                 # rest of the footer, so replay idempotency is unaffected.
                 footer += f"\n`devcake-repo:{child_repo}`"
+            if d.get("delivery_to") == DELIVERY_TICKET:
+                # the child's destination from birth (ADR-0017 addendum): its
+                # own ONBOARD may only PROPOSE a change afterwards
+                footer += (f"\n{delivery_marker(DELIVERY_TICKET)}\nReason: "
+                           f"{d.get('delivery_reason', '')[:DELIVERY_REASON_MAX]}")
             key, child_id = await mgr.pmo.create_mission(
                 mgr.instance.team_key, title,
                 d["description"] + footer,
@@ -368,11 +394,10 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         async def _parent_note():
             if note in (live.description or ""):
                 return
-            try:
-                await mgr.pmo.append_description(
-                    MissionRef(pmo_id, "issue"), note)
-            except Exception as e:  # noqa: BLE001 — lineage note is best-effort BY DESIGN (comment above); failure recorded in the audit, the cancel proceeds
-                mgr._audit(pmo_id, "lineage_note_failed", str(e)[:200])
+            # best-effort BY DESIGN (comment above): the append chokepoint
+            # audits `lineage_note_failed` and the cancel proceeds
+            await feed.append_note(mgr, MissionRef(pmo_id, "issue"), note,
+                                   audit_action="lineage_note_failed")
         await mgr._checkpoint(run, steps.DECOMP_PARENT_NOTE, _parent_note)
 
     links = ", ".join(created) or "(all already existed)"

@@ -33,6 +33,36 @@ def _attachments_supported(mgr) -> bool:
         return True
 
 
+def marked_note(marker: str, body: str, *, cap: int) -> str:
+    """A description note DevCake appends for a MARKED record (handoff,
+    delivery destination): the marker on its own line, then model-authored
+    text neutralized — redact() BEFORE the cap so truncation can never
+    split a secret across the boundary, then defang() so quoted marker
+    syntax keeps its words and loses its teeth (ADR-0032 D3). Consumers
+    read the LAST marker (markers.handoff_of / delivery_of), which is why
+    the genuine marker always follows the body it stamps."""
+    text = markers.defang(redact(body or ""))[:cap]
+    return f"\n\n---\n{marker}\n{text}\n"
+
+
+async def append_note(mgr, ref: MissionRef, note: str, *,
+                      audit_action: str) -> bool:
+    """The ONE description-append path (ADR-0034: the third tenant makes the
+    chokepoint — the handoff, the decomposition lineage note and the
+    delivery destination all ride it). Best-effort BY DESIGN (lineage-note
+    doctrine): a vendor description-cap failure or an archived mission
+    audits under `audit_action` and returns False; the caller decides what
+    that means for its own step, never by re-raising here. `note` is
+    already neutralized by the caller (marked_note for model text; app-own
+    prose needs nothing)."""
+    try:
+        await mgr.pmo.append_description(ref, note)
+        return True
+    except Exception as e:  # noqa: BLE001 — best-effort BY DESIGN (lineage-note precedent): the caller proceeds, the failure is audited
+        mgr._audit(ref.pmo_id, audit_action, str(e)[:200])
+        return False
+
+
 def _threads_supported(mgr) -> bool:
     """Vendor nests comments (`feed_threads`). Missing/broken caps ⇒ top
     level: threading is presentation, so the safe default is flat."""

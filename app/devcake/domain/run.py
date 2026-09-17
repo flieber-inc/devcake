@@ -93,6 +93,13 @@ class Run(BaseModel):
     harness_version: str = ""
     seq: int
     attempt_of_step: int = 1
+    # ADR-0017 addendum: the change set's destination this run was dispatched
+    # under — markers.delivery_of(live.description) at dispatch ("repository"
+    # | "ticket"; "" on legacy records reads as repository). Snapshotted like
+    # stage_label_at_dispatch: a person editing the marker mid-run steers the
+    # NEXT dispatch, never re-judges the running one; finalize-time readers
+    # pay no PMO read.
+    delivery_to: str = ""
     # Done direct blockers' work repos (non-secret snapshot at dispatch):
     # [{repo_ref, mission_key}] — tokens are attached at runspec time.
     # Empty on legacy / relations-steward / no-blocker runs. The ADR-0033

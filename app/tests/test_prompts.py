@@ -304,3 +304,71 @@ def test_plan_approval_rule_texts_name_the_mechanics():
     assert "human_needed" in PLAN_APPROVAL_RULE_ONBOARD
     assert "never" in PLAN_APPROVAL_RULE_ONBOARD.lower()
     assert "approved" in PLAN_APPROVAL_RULE_EXECUTE
+
+
+
+# ── delivery destination epilogue (ADR-0017 addendum) ───────────────────────
+
+def test_onboard_fresh_mission_gets_the_declaration_contract():
+    p = onboard_prompt("ID", M)
+    flat = " ".join(p.split())                  # the epilogue is hard-wrapped
+    assert "### Delivery destination (result field — ONBOARD only)" in p
+    assert "You cannot write to the ticket" in flat
+    assert "Never plan a step that posts, attaches or comments on the ticket" in flat
+    assert '"delivery_to": "ticket"' in p and '"delivery_reason"' in p
+    assert "ONLY when no file in any repository should change" in flat
+    assert "unavailable on this board" not in p
+
+
+def test_onboard_epilogue_names_unavailability():
+    p = onboard_prompt("ID", M, ticket_delivery_available=False)
+    assert "Ticket delivery is unavailable on this board" in p
+    assert 'Do not declare "ticket"' in p
+
+
+def test_onboard_on_a_recorded_mission_may_only_propose():
+    p = onboard_prompt("ID", M, delivery_to="ticket", delivery_recorded=True)
+    assert "### Delivery destination (recorded)" in p
+    assert "recorded as **ticket**" in p
+    assert "is a PROPOSAL a person must accept" in p
+    assert "ONBOARD only" not in p
+
+
+def test_execute_epilogue_follows_the_recorded_destination():
+    ticket = execute_prompt("ID", M, "repo", GH_PR, delivery_to="ticket")
+    assert "recorded as **ticket**" in ticket
+    assert "will never merge" in ticket and "only deliverable files" in ticket
+    assert "steps above about opening the pull request still apply" in " ".join(ticket.split())
+    repo = execute_prompt("ID", M, "repo", GH_PR)
+    assert "recorded as **repository**" in repo
+    assert "A pull request is required; there is no other way to deliver" in repo
+    assert "will never merge" not in repo
+
+
+def test_review_epilogue_never_proposes():
+    for to in ("ticket", "repository"):
+        p = review_prompt("ID", M, delivery_to=to)
+        assert "You never propose a destination" in " ".join(p.split())
+        assert "reject" in p.lower()
+    assert "only deliverable files" in review_prompt("ID", M, delivery_to="ticket")
+
+
+def test_plan_epilogue_states_the_recorded_destination():
+    p = plan_prompt("ID", M, delivery_to="ticket")
+    assert "recorded as **ticket**" in p and "Your plan cannot change it" in " ".join(p.split())
+
+
+def test_delivery_epilogue_survives_operator_overrides():
+    # ADR-0037: the contract is code-owned, appended after render
+    custom = "custom playbook {key}"
+    assert "Delivery destination" in onboard_prompt("ID", M, playbook=custom)
+    assert "Delivery destination" in plan_prompt("ID", M, playbook=custom)
+    assert "Delivery destination" in execute_prompt("ID", M, "r", GH_PR, playbook=custom)
+    assert "Delivery destination" in review_prompt("ID", M, playbook=custom)
+
+
+def test_default_onboard_playbooks_name_the_child_delivery_fields():
+    from devcake.prompts import DEFAULT_PLAYBOOKS
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+    for pb in (DEFAULT_PLAYBOOKS["ONBOARD"], CS_PLAYBOOKS["ONBOARD"]):
+        assert '"delivery_to": "ticket", "delivery_reason"' in pb

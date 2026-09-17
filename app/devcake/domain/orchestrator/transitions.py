@@ -10,7 +10,9 @@ from ..model import (LABEL_EXECUTE, LABEL_NEEDS_HUMAN, LABEL_PLAN, LABEL_REVIEW,
                      LABEL_SKIP, MissionRef)
 from ..run import Run
 from . import decomposition, feed, review, steps
-from .markers import COMMENT_SENTINEL, LEGAL_OUTCOMES, _SWAP_MARKER_STAGE
+from .markers import (COMMENT_SENTINEL, DELIVERY_REASON_MAX, DELIVERY_TICKET,
+                      LEGAL_OUTCOMES, _SWAP_MARKER_STAGE, delivery_declaration,
+                      delivery_marker, delivery_of, delivery_recorded)
 
 log = logging.getLogger("devcake.missions")
 
@@ -77,6 +79,119 @@ def _plan_gate_labels(mgr) -> set[str]:
     """Labels a fresh plan adds beyond DEVCAKE-EXECUTE: the approval park
     when the board gates plans, nothing otherwise."""
     return {LABEL_NEEDS_HUMAN} if mgr.instance.plan_approval else set()
+
+
+# ── delivery destination (ADR-0017 addendum) ─────────────────────────────────
+# Every change set rides a pull request; the destination decides how REVIEW
+# approve ends. It is mission-record data (a description marker) that the
+# app WRITES once — a Dev's declaration on a mission that carries no marker
+# yet (ONBOARD), or a parent's decomposition child fields — and that only a
+# person changes afterwards: any later differing declaration is a PROPOSAL
+# (one notice with the exact line to paste, DEVCAKE-NEEDS-HUMAN), never a
+# write. Both destinations demand the same pull request of EXECUTE, so a
+# destination change never invalidates work already done.
+
+class _Delivery:
+    __slots__ = ("declared", "reason", "recorded", "action")
+
+    def __init__(self, declared, reason, recorded, action):
+        self.declared, self.reason = declared, reason
+        self.recorded, self.action = recorded, action
+
+
+def _ticket_line(to: str = DELIVERY_TICKET) -> str:
+    return delivery_marker(to)
+
+
+def delivery_paragraph(d: "_Delivery") -> str:
+    """The plain sentence a plan comment / notice carries about the
+    destination. Silent ("") for the repository default and for a no-op."""
+    if d.action == "written" or (d.action == "restated"
+                                 and d.recorded == DELIVERY_TICKET):
+        why = f" Reason: {d.reason}." if d.reason else ""
+        return (f"\n\n**Delivery:** to this ticket — after review, DevCake "
+                f"attaches the pull request's files here and closes the pull "
+                f"request without merging; no repository changes.{why} To "
+                f"change this, edit the `devcake:delivery:v1` line in the "
+                f"description.")
+    if d.action == "forced_repository":
+        return (f"\n\n**Delivery:** the triage asked for this ticket, but this "
+                f"board cannot receive files — the change set will be merged "
+                f"into the repository instead. Reason given: {d.reason}.")
+    if d.action == "unrecorded":
+        return (f"\n\n**Delivery:** DevCake could not write the destination to "
+                f"the description; this mission will deliver to the repository "
+                f"unless you add this line to the description yourself: "
+                f"{_ticket_line()}")
+    return ""
+
+
+async def _apply_delivery(mgr, run: Run, live, result: dict, *,
+                          may_write: bool) -> "_Delivery":
+    """Read the Dev's declaration and act on it: write (ONBOARD on a mission
+    with no marker), force repository (board without attachments), propose
+    (a differing value on a recorded mission), or nothing. Raises ValueError
+    on a malformed declaration (→ DEV_BAD_OUTPUT)."""
+    pmo_id = run.mission_pmo_id
+    declared, reason = delivery_declaration(result)
+    recorded = delivery_of(live.description)
+    if declared is None:
+        return _Delivery(None, "", recorded, "none")
+    if may_write and not delivery_recorded(live.description):
+        if declared != DELIVERY_TICKET:
+            return _Delivery(declared, reason, recorded, "none")  # the silent default
+        if not feed._attachments_supported(mgr):
+            mgr._audit(pmo_id, "delivery_forced_repository", reason[:120])
+            return _Delivery(declared, reason, recorded, "forced_repository")
+        box: list[bool] = []
+
+        async def _write():
+            ok = await feed.append_note(
+                mgr, MissionRef(pmo_id, "issue"),
+                feed.marked_note(_ticket_line(), f"Reason: {reason}",
+                                 cap=DELIVERY_REASON_MAX + len("Reason: ")),
+                audit_action="delivery_note_failed")
+            box.append(ok)
+            if ok:
+                mgr._audit(pmo_id, "delivery_recorded", DELIVERY_TICKET)
+        await mgr._checkpoint(run, steps.TRANSITION_DELIVERY_NOTE, _write)
+        # a redelivery after a checkpointed write finds the marker on the
+        # live record; a fresh entry trusts the append's own answer
+        written = box[0] if box else delivery_recorded(live.description)
+        return _Delivery(declared, reason, recorded,
+                         "written" if written else "unrecorded")
+    if declared == recorded:
+        return _Delivery(declared, reason, recorded, "noop")
+    # a change to a recorded decision: ask, never write
+    why = f" Reason: {reason}." if reason else ""
+    line = _ticket_line(declared)
+    other = ("keep the repository" if declared == DELIVERY_TICKET
+             else "keep this ticket")
+    what = ("delivering to this ticket instead of merging"
+            if declared == DELIVERY_TICKET else
+            "merging into the repository instead of delivering to this ticket")
+
+    async def _propose():
+        await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                   remove=set(), add={LABEL_NEEDS_HUMAN})
+        await mgr._feed(
+            pmo_id, run.pmo_kind,
+            feed.notice(
+                mgr, feed.NEEDS_YOU,
+                f"{run.mission_type} proposes {what}.{why} DevCake changed "
+                f"nothing: the recorded destination stays until you decide.",
+                f"⏸ {run.mission_type} proposed a delivery change "
+                f"({recorded} → {declared}).{why}",
+                todo=(f"To accept, add this line to the description: {line} "
+                      f"— then remove DEVCAKE-NEEDS-HUMAN. To {other}, just "
+                      f"remove the label.")))
+        mgr._audit(pmo_id, "delivery_proposed", f"{recorded}->{declared}")
+    await mgr._checkpoint(run, steps.TRANSITION_DELIVERY_PROPOSAL, _propose)
+    mgr.needs_human[pmo_id] = (
+        f"{run.mission_key}: proposed delivery change ({recorded} → "
+        f"{declared}) awaiting your decision"
+        + (f" — {live.url}" if live.url else ""))
+    return _Delivery(declared, reason, recorded, "proposed")
 
 
 def _note_plan_gate(mgr, run: Run, live, plan_name: str) -> None:
@@ -182,6 +297,9 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
     if outcome == "planned":
         plan_name = f"PLAN_{run.seq}.md"
         plan_url_box: list[str] = []
+        # PLAN cannot declare (its result is entrypoint-synthesized); the
+        # plan comment restates the RECORDED destination for the reader
+        restated = _Delivery(None, "", delivery_of(live.description), "restated")
 
         async def _plan_upload():
             if not feed._attachments_supported(mgr):
@@ -199,6 +317,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             else:
                 body = (f"📋 DevCake plan for this mission (`{plan_name}`):\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
+            body += delivery_paragraph(restated)
             if mgr.instance.plan_approval:
                 body += plan_approval_note(plan_md, plan_name)
             await mgr._feed(pmo_id, run.pmo_kind, body)
@@ -264,6 +383,9 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"— awaiting REVIEW.")
 
         await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_LABELS, _executed_labels)
+        # a destination declared here is never written — EXECUTE runs under
+        # the destination it was dispatched with; a differing value asks
+        await _apply_delivery(mgr, run, live, result, may_write=False)
         if steps.STEP_CARD in run.finalized_steps:
             # ADR-0042: the PR line is the step card's Transition section;
             # only a pre-card run mid-flight still posts it on its own
@@ -276,6 +398,11 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             run.finalized_steps.append(steps.TRANSITION_EXECUTED)
             mgr.runs.store.save(run)
     elif outcome == "reviewed":
+        if result.get("delivery_to") not in (None, ""):
+            # REVIEW never proposes a destination (docs/03 §4): it rejects
+            # with the reason in its report, and the next EXECUTE proposes
+            mgr._audit(pmo_id, "delivery_ignored_at_review",
+                       str(result.get("delivery_to"))[:40])
         await review.finalize_review(mgr, run, result)
     elif outcome == "decomposed":
         await decomposition.finalize_decomposition(mgr, run, result)
@@ -286,6 +413,9 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
         # link (plan_url_box is always empty on a fresh transition entry).
         plan_name = f"PLAN_{run.seq}.md"
         plan_url_box: list[str] = []
+        # the destination is written BEFORE the outcome's own labels: a
+        # dispatch must never see DEVCAKE-EXECUTE without the record
+        delivery = await _apply_delivery(mgr, run, live, result, may_write=True)
 
         async def _plan_attach_upload():
             if not feed._attachments_supported(mgr):
@@ -304,6 +434,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 body = (f"📋 DevCake attached an opportunistic plan from triage "
                         f"(`{plan_name}`) — skipping the PLAN step:\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
+            body += delivery_paragraph(delivery)
             if mgr.instance.plan_approval:
                 body += plan_approval_note(plan_md, plan_name)
             await mgr._feed(pmo_id, run.pmo_kind, body)
@@ -327,10 +458,22 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             run.finalized_steps.append(steps.TRANSITION_PLAN_NEEDED_ATTACH)
             mgr.runs.store.save(run)
     elif outcome == "plan_needed":
+        delivery = await _apply_delivery(mgr, run, live, result, may_write=True)
+        paragraph = delivery_paragraph(delivery).strip()
+
+        async def _delivery_feed():
+            if not paragraph:
+                return
+            await mgr._feed(pmo_id, run.pmo_kind, feed.notice(
+                mgr, feed.INFO,
+                paragraph.replace("**Delivery:** ", "Delivery: ", 1),
+                f"📎 {paragraph}"))
+
         async def _plan_needed():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                        remove=set(), add={LABEL_PLAN})
             mgr._audit(pmo_id, "label_add", LABEL_PLAN)
+        await mgr._checkpoint(run, steps.TRANSITION_DELIVERY_FEED, _delivery_feed)
         await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED, _plan_needed)
     elif outcome == "human_needed":
         # deliberate hand-off (docs/03 §4a, ADR-0007): the run finished

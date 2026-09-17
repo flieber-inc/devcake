@@ -78,20 +78,22 @@ await withPage(async (page) => {
   check("Decomposition depth lives on Counting budgets",
     (await page.locator('select[aria-label="Decomposition depth limit"]').count()) === 1 &&
     await page.locator("#policies-budgets").count() === 1);
-  // CAKE-161 six domain cards + CAKE-159 Delivery (attach-merged moved here)
-  check("Policies view renders the domain-grouped cards + Delivery",
+  // CAKE-161 domain cards; the Delivery card is retired (ADR-0017 addendum:
+  // a ticket receives files by the mission's declared destination, never a
+  // deployment-global switch)
+  check("Policies view renders the domain-grouped cards, no Delivery card",
     await page.locator("#policies").count() === 1 &&
     await page.locator("#policies-attempts").count() === 1 &&
     await page.locator("#policies-budgets").count() === 1 &&
     await page.locator("#policies-recovery").count() === 1 &&
     await page.locator("#policies-mirrors").count() === 1 &&
     await page.locator("#policies-memory").count() === 1 &&
-    await page.locator("#policies-delivery").count() === 1);
+    await page.locator("#policies-delivery").count() === 0);
   check("Fleet bounds carries timeout and container cgroups together",
     (await page.locator('#policies input[aria-label="Dev run timeout (minutes)"]').count()) === 1 &&
     (await page.locator('#policies input[aria-label="Container memory limit (MB)"]').count()) === 1);
-  check("attach-merged toggle lives on Settings → Policies → Delivery",
-    (await page.locator("text=Also attach merged change set to PMO").count()) >= 1);
+  check("no deployment-global attach-merged toggle anywhere in Settings",
+    (await page.locator("text=Also attach merged change set to PMO").count()) === 0);
   check("the Service auto-restart informational row is gone",
     (await page.locator("text=managed in compose").count()) === 0 &&
     (await page.locator("text=Service auto-restart").count()) === 0);

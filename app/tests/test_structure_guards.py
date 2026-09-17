@@ -682,3 +682,29 @@ def test_mcp_catalogue_names_no_route():
     for mod in sorted((cli / "devcake_cli").glob("mcp*.py")):
         literals = re.findall(r'"(/api/v1/[^"]*)"', mod.read_text())
         assert literals in ([], ["/api/v1/openapi.json"]), f"{mod.name} names routes: {literals}"
+
+
+# ── description appends go through feed.append_note (ADR-0034) ──────────────
+# `PMOPort.append_description` is a raw pass-through in every adapter — the
+# one model-output sink without its own neutralization. The handoff, the
+# decomposition lineage note and the delivery destination all append through
+# `feed.append_note` (best-effort + audit) with `feed.marked_note` (redact →
+# defang → cap) for model-authored text. A fourth direct call is a defect.
+
+def test_description_appends_only_through_feed_append_note():
+    offenders = []
+    for p in sorted(DOMAIN.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        rel = str(p.relative_to(DOMAIN))
+        if rel == "orchestrator/feed.py":
+            continue
+        for node in ast.walk(ast.parse(p.read_text())):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "append_description"):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, (
+        "description appends must go through feed.append_note (with "
+        "feed.marked_note for model text) — ADR-0034 chokepoint: "
+        + "; ".join(offenders))

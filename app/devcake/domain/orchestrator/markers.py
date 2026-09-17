@@ -259,6 +259,45 @@ def defang(text: str) -> str:
         "`devcake-repo:", "devcake-repo:")
 
 
+# ADR-0017 addendum — the change set's DESTINATION, a mission-record fact
+# written by the app (ONBOARD's declaration, a parent's decomposition child
+# fields) or by a person editing the description. Every change set rides a
+# pull request; the destination decides how REVIEW approve ends: merge into
+# the repository (default, silent — no marker) or files attached to the
+# ticket with the pull request closed unmerged. Read like the handoff:
+# LAST marker wins, so a person reverts by writing a newer line; not
+# label-gated (the description is operator-owned). Model-authored text
+# reaching the description is redacted AND defanged first (feed.marked_note),
+# so a Dev can never mint this marker from prose.
+DELIVERY_REPOSITORY = "repository"
+DELIVERY_TICKET = "ticket"
+DELIVERY_MARKER_RE = re.compile(
+    r"`devcake:delivery:v1 to=(repository|ticket)`")
+DELIVERY_REASON_MAX = 300
+
+
+def delivery_marker(to: str) -> str:
+    """The backticked marker line for a destination (render twin of
+    DELIVERY_MARKER_RE — a round-trip test pins the bytes)."""
+    if to not in (DELIVERY_REPOSITORY, DELIVERY_TICKET):
+        raise ValueError(f"unknown delivery destination {to!r}")
+    return f"`devcake:delivery:v1 to={to}`"
+
+
+def delivery_of(description: str | None) -> str:
+    """The mission's recorded destination: the LAST marker in the
+    description, `repository` when there is none."""
+    matches = list(DELIVERY_MARKER_RE.finditer(description or ""))
+    return matches[-1].group(1) if matches else DELIVERY_REPOSITORY
+
+
+def delivery_recorded(description: str | None) -> bool:
+    """Whether ANY destination marker is on the record — the write/propose
+    switch (docs/03 §1.2): a Dev's declaration is written only onto a
+    mission that carries none; afterwards a differing one is a proposal."""
+    return DELIVERY_MARKER_RE.search(description or "") is not None
+
+
 def handoff_of(description: str | None) -> str:
     """The mission's current handoff note: text after the LAST handoff
     marker line, up to the next `---` rule or the end. "" when absent."""

@@ -12,7 +12,7 @@ from . import completion, dispatch, feed, steps
 from .freshness import review_freshness_gate
 from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
                       MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
-                      MERGE_SETTLE_MARKER, defang)
+                      MERGE_SETTLE_MARKER)
 
 log = logging.getLogger("devcake.missions")
 
@@ -91,13 +91,10 @@ async def _append_handoff(mgr, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
 
     async def _note():
-        body = defang(redact(text))[:HANDOFF_APPEND_MAX]
-        note = f"\n\n---\n{HANDOFF_MARKER}\n{body}\n"
-        try:
-            await mgr.pmo.append_description(
-                MissionRef(pmo_id, "issue"), note)
-        except Exception as e:  # noqa: BLE001 — best-effort BY DESIGN (lineage-note precedent): the close proceeds, the failure is audited
-            mgr._audit(pmo_id, "handoff_append_failed", str(e)[:200])
+        await feed.append_note(
+            mgr, MissionRef(pmo_id, "issue"),
+            feed.marked_note(HANDOFF_MARKER, text, cap=HANDOFF_APPEND_MAX),
+            audit_action="handoff_append_failed")
     await mgr._checkpoint(run, steps.REVIEW_HANDOFF, _note)
 
 

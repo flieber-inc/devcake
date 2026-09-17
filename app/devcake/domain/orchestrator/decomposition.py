@@ -11,7 +11,7 @@ from ..model import (LABEL_CREATED, LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_SKIP,
                      LABEL_TRACKING, MissionRef)
 from ..run import Run
 from . import feed, steps
-from .markers import (COMMENT_SENTINEL, at_decomposition_limit, defang,
+from .markers import (at_decomposition_limit, defang,
                       decomposition_depth, decomposition_marker)
 
 log = logging.getLogger("devcake.missions")
@@ -368,11 +368,10 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         async def _parent_note():
             if note in (live.description or ""):
                 return
-            try:
-                await mgr.pmo.append_description(
-                    MissionRef(pmo_id, "issue"), note)
-            except Exception as e:  # noqa: BLE001 — lineage note is best-effort BY DESIGN (comment above); failure recorded in the audit, the cancel proceeds
-                mgr._audit(pmo_id, "lineage_note_failed", str(e)[:200])
+            # best-effort BY DESIGN (comment above): the append chokepoint
+            # audits `lineage_note_failed` and the cancel proceeds
+            await feed.append_note(mgr, MissionRef(pmo_id, "issue"), note,
+                                   audit_action="lineage_note_failed")
         await mgr._checkpoint(run, steps.DECOMP_PARENT_NOTE, _parent_note)
 
     links = ", ".join(created) or "(all already existed)"

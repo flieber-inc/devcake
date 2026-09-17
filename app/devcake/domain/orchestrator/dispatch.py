@@ -29,7 +29,8 @@ from ..model import Activity, LABEL_FAILED, Mission, MissionType, derive
 from ..workspaces import WorkspaceUnavailable
 from . import feed, markers
 from . import schedule
-from .activity_payload import activity_payload, push_activity_repo
+from .activity_payload import (activity_payload, handoff_line,
+                               push_activity_repo)
 from ..run import Run, aware, utcnow
 from .feed import is_devcake_comment, stage_of, unquoted
 from .markers import STEP_MARKER
@@ -204,8 +205,15 @@ async def resolve_blocker_work(
                 skip.append(f"{b.key}: not done ({b.status})")
             continue
         handoff = markers.handoff_of(b.description)
+        # pmo_id rides along so the activity payload mirrors THIS resolved
+        # done set under upstream/{KEY}/ (ADR-0043 §4) instead of re-deriving
+        # blockers from a second vendor read
         notes.append({"mission_key": b.key, "title": b.title,
-                      "handoff": handoff[:markers.HANDOFF_EXCERPT_MAX]})
+                      "handoff": handoff[:markers.HANDOFF_EXCERPT_MAX],
+                      "pmo_id": b.pmo_id,
+                      # a cropped excerpt renders with a pointer to the
+                      # whole handoff (the record under upstream/{KEY}/)
+                      "cropped": len(handoff) > markers.HANDOFF_EXCERPT_MAX})
         runs = [r for r in (by_mid.get(bid) or [])
                 if getattr(r, "pmo_ref", "") in res.accepted_pmo_refs]
         runs_sorted = sorted(
@@ -241,7 +249,8 @@ async def resolve_blocker_work(
 
 def _blocker_repos_note(mgr, entries: list[dict[str, str]],
                         skip_reasons: list[str],
-                        notes: list[dict[str, str]] | None = None) -> str:
+                        notes: list[dict] | None = None,
+                        mirrored: set[str] | None = None) -> str:
     """Prompt section naming RO blocker work clones plus each done blocker's
     HANDOFF note (ADR-0032). Empty when there is nothing to say. Handoffs
     render for mounted AND unmounted done blockers — the narrative is
@@ -254,7 +263,10 @@ def _blocker_repos_note(mgr, entries: list[dict[str, str]],
     of excerpts. Mounted blockers ride first (their clones are in the
     workspace), then the note-only ones in blocked_by order, then the skip
     reasons; whatever does not fit is counted in one closing line that
-    points at MISSION.md, which always carries every handoff."""
+    points at MISSION.md, which always carries every handoff. `mirrored`
+    names the blockers whose record landed under upstream/{KEY}/ in this
+    dispatch's activity payload: a cropped excerpt then points at the
+    whole handoff there (see `activity_payload.handoff_line`)."""
     from ...prompts import BLOCKER_NOTE_MAX_BYTES
     notes = notes or []
     handoffs = {n["mission_key"]: n for n in notes}
@@ -280,13 +292,13 @@ def _blocker_repos_note(mgr, entries: list[dict[str, str]],
         block = f"- `{e['mission_key']}` (`{name}`) → /workspace/repo/{slug}/"
         n = handoffs.get(e["mission_key"])
         if n and n["handoff"]:
-            block += f"\n  Handoff: {n['handoff']}"
+            block += "\n  " + handoff_line(n, mirrored)
         blocks.append(block)
     for n in notes:
         if n["mission_key"] in listed or not n["handoff"]:
             continue
         blocks.append(f"- `{n['mission_key']}` — {n['title']} (no work-repo "
-                      f"mount)\n  Handoff: {n['handoff']}")
+                      f"mount)\n  " + handoff_line(n, mirrored))
     body = (
         "\n### Completed blocker work (read-only)\n"
         "Shallow clones of work repositories from missions that block this "
@@ -666,8 +678,9 @@ async def _dispatch(mgr, mission: Mission, mtype: MissionType,
         mgr, live, mtype, seq, blocker_notes=blocker_notes,
         payload=activity)
 
-    blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips,
-                                       blocker_notes)
+    blocker_note = _blocker_repos_note(
+        mgr, blocker_entries, blocker_skips, blocker_notes,
+        mirrored=set(activity.get("upstream_included") or []))
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)

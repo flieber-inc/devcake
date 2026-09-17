@@ -733,6 +733,12 @@ def steward_discovery_prompt(identifying_prompt: str, package: str) -> str:
 
 STEWARD_MISSION_CAP = 200          # prompt-size bound; truncation is logged
 STEWARD_DESC_HEAD_CHARS = 300
+# A done family member's handoff head in the steward's package. Its own
+# bound, not the Dev prompt's HANDOFF_EXCERPT_MAX: the package is packed
+# to the steward's byte budget (rows dropped past it), so a longer excerpt
+# here trades member rows for note length — the routing decision needs the
+# head of every member more than the whole note of a few.
+STEWARD_HANDOFF_EXCERPT_CHARS = 700
 # EVERY prompt rides the harness argv as ONE element, and Linux caps a
 # single argument at 131,072 bytes (MAX_ARG_STRLEN): past it the container
 # dies at execve before the model is called (the entrypoint refuses first —

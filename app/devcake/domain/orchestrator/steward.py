@@ -235,9 +235,10 @@ def build_discovery_package(mgr, family, pending: dict, runs: list, *,
     terminal members' rows, as many as still fit. The package ends with a
     line saying what was left out, so the steward never mistakes a partial
     family for the whole one."""
-    from ...prompts import STEWARD_DESC_HEAD_CHARS, STEWARD_MISSION_CAP
+    from ...prompts import (STEWARD_DESC_HEAD_CHARS,
+                            STEWARD_HANDOFF_EXCERPT_CHARS, STEWARD_MISSION_CAP)
     from .discovery import harvest_run_index, valid_entries
-    from .markers import HANDOFF_EXCERPT_MAX, handoff_of
+    from .markers import handoff_of
 
     def head(m) -> str:
         return (" ".join((m.description or "").split())
@@ -251,7 +252,7 @@ def build_discovery_package(mgr, family, pending: dict, runs: list, *,
         if m.status in ("done", "canceled"):
             note = handoff_of(m.description)
             if note:
-                text += f"\n  Handoff: {note[:HANDOFF_EXCERPT_MAX]}"
+                text += f"\n  Handoff: {note[:STEWARD_HANDOFF_EXCERPT_CHARS]}"
         return text
     by_id = family.by_id
     members = family.members[:STEWARD_MISSION_CAP]

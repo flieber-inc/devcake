@@ -104,7 +104,8 @@ def containing_project_ref(mission: Mission) -> str | None:
     return mission.parent_ref or None
 
 
-def upstream_chain(source: Mission, missions: list[Mission]) -> list[Upstream]:
+def upstream_chain(source: Mission, missions: list[Mission], *,
+                   done_blockers: list[str] | None = None) -> list[Upstream]:
     """The missions whose activity a dispatched Dev is offered, nearest
     first (ADR-0036 + addendum, ADR-0043 §4): the decomposition ancestors,
     then the containing project of the chain's last issue (the source
@@ -119,7 +120,15 @@ def upstream_chain(source: Mission, missions: list[Mission]) -> list[Upstream]:
     transitively (their own upstream is in their own record). A blocker the
     snapshot does not hold (another board, ADR-0009) is not listed — see
     `blockers_outside`. Cycle-safe by construction of the walk plus the
-    `seen` set."""
+    `seen` set.
+
+    `done_blockers`: the dispatch's OWN answer — the blocker ids its live
+    pre-launch read resolved as done (the same read that gates the launch,
+    ADR-0034). When given, it replaces `source.blocked_by` as the edge set
+    and its done-ness is trusted over the cycle snapshot's status (the
+    snapshot can predate a completion in the same cycle). None = no
+    dispatch in hand (a rebuild): the source's own blocked_by, snapshot
+    status decides."""
     chain = [Upstream(m.pmo_id, m.pmo_kind or "issue", RELATION_PARENT, m)
              for m in decomposition_ancestors(source, missions)]
     last = chain[-1].mission if chain else source
@@ -132,9 +141,12 @@ def upstream_chain(source: Mission, missions: list[Mission]) -> list[Upstream]:
         if proj is None or (proj.pmo_kind or "issue") == "project":
             chain.append(Upstream(pid, "project", RELATION_PROJECT, proj))
             seen.add(pid)
-    for ref in source.blocked_by or []:
+    refs = source.blocked_by if done_blockers is None else done_blockers
+    for ref in refs or []:
         b = _resolve_in_pool(ref, by_id, by_key)
-        if b is None or b.pmo_id in seen or b.status != "done":
+        if b is None or b.pmo_id in seen:
+            continue
+        if done_blockers is None and b.status != "done":
             continue
         chain.append(Upstream(b.pmo_id, b.pmo_kind or "issue",
                               RELATION_BLOCKER, b))
@@ -142,13 +154,17 @@ def upstream_chain(source: Mission, missions: list[Mission]) -> list[Upstream]:
     return chain
 
 
-def blockers_outside(source: Mission, missions: list[Mission]) -> int:
+def blockers_outside(source: Mission, missions: list[Mission], *,
+                     done_blockers: list[str] | None = None) -> int:
     """How many of the source's direct blockers the snapshot does not hold
     (peer-board blockers, ADR-0009): they are counted in the offer banner,
-    never mirrored — the walk runs over ONE board's snapshot."""
+    never mirrored — the walk runs over ONE board's snapshot. Same edge
+    source as `upstream_chain`: the dispatch's `done_blockers` when given,
+    else the source's own blocked_by."""
     by_id = {m.pmo_id for m in missions if m.pmo_id}
     by_key = {m.key.upper() for m in missions if m.key}
-    return sum(1 for ref in (source.blocked_by or [])
+    refs = source.blocked_by if done_blockers is None else done_blockers
+    return sum(1 for ref in (refs or [])
                if ref not in by_id and ref.upper() not in by_key)
 
 

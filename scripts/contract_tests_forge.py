@@ -104,10 +104,11 @@ class GiteaFixture:
             name="contract", forge="gitea",
             url=f"{GITEA_URL}/{admin_user}/{self.repo}.git")
 
-    def make_branch_and_pr(self, branch: str, title: str) -> int:
+    def make_branch_and_pr(self, branch: str, title: str,
+                           path: str = "out.bin") -> int:
         admin_user = self.admin[0]
         content = base64.b64encode(b"contract battery \xf0\x9f\x8d\xb0").decode()
-        self._req("POST", f"/repos/{admin_user}/{self.repo}/contents/out.bin",
+        self._req("POST", f"/repos/{admin_user}/{self.repo}/contents/{path}",
                   json={"content": content, "message": "contract",
                         "branch": "main", "new_branch": branch})
         pr = self._req("POST", f"/repos/{admin_user}/{self.repo}/pulls",
@@ -278,8 +279,10 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     # PR, is idempotent on a closed one, and REFUSES a merged one (row 8's).
     ok15, note15 = True, ""
     try:
+        # a second file: row 8 merged out.bin into main already
         n2 = fixture.make_branch_and_pr(
-            f"devcake/CONTRACT-CLOSE-{fixture.suffix}", "contract: close me")
+            f"devcake/CONTRACT-CLOSE-{fixture.suffix}", "contract: close me",
+            path="close-me.bin")
         await forge.close_pr(n2)
         st = await forge.pr_state(n2)
         closed_ok = st.state == "closed" and not st.merged

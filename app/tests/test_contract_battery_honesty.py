@@ -19,7 +19,7 @@ _SCRIPTS = next((p for p in _SCRIPT_ROOTS if p.is_dir()), None)
 
 # Documented check-id sets (plan lock). Counts are independent literals —
 # not recomputed from the scripts' check() call sites.
-EXPECTED_FORGE_ROWS = 14  # CAKE-181 adds apply_default_branch_protection round-trip
+EXPECTED_FORGE_ROWS = 15  # row 15: close_pr (ticket delivery, ADR-0017 addendum)  # CAKE-181 adds apply_default_branch_protection round-trip
 EXPECTED_PMO_ROWS = 15  # 1,2,3,4,5,5b,8,9,10,11,12,13,14,15,16
 
 
@@ -52,7 +52,7 @@ def _extract(path: Path) -> dict:
     return ns
 
 
-def test_forge_expected_rows_pinned_at_14():
+def test_forge_expected_rows_pinned_at_15():
     ns = _extract(_script("contract_tests_forge.py"))
     assert ns["EXPECTED_ROWS"] == EXPECTED_FORGE_ROWS
 

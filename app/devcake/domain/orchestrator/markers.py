@@ -298,6 +298,28 @@ def delivery_recorded(description: str | None) -> bool:
     return DELIVERY_MARKER_RE.search(description or "") is not None
 
 
+def delivery_declaration(fields: dict) -> tuple[str | None, str]:
+    """A Dev's structured destination declaration (an ONBOARD result or a
+    decomposition child draft): (destination or None when absent, one-line
+    reason). A bad shape raises ValueError — the structurally-invalid-payload
+    arm (docs/03 §6), never a silent default. The reason is collapsed to one
+    line and bounded here; redaction/defang happen on the append path."""
+    raw = fields.get("delivery_to")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, ""
+    if not isinstance(raw, str) or raw.strip() not in (DELIVERY_REPOSITORY,
+                                                       DELIVERY_TICKET):
+        raise ValueError(
+            f"delivery_to must be \"{DELIVERY_REPOSITORY}\" or "
+            f"\"{DELIVERY_TICKET}\", got {raw!r}")
+    to = raw.strip()
+    reason = " ".join(str(fields.get("delivery_reason") or "").split())
+    if to == DELIVERY_TICKET and not reason:
+        raise ValueError(
+            "delivery_to \"ticket\" requires a one-line delivery_reason")
+    return to, reason[:DELIVERY_REASON_MAX]
+
+
 def handoff_of(description: str | None) -> str:
     """The mission's current handoff note: text after the LAST handoff
     marker line, up to the next `---` rule or the end. "" when absent."""

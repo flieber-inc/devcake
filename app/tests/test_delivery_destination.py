@@ -138,3 +138,253 @@ def test_legacy_run_record_reads_as_repository():
             mission_type="EXECUTE", dev_type="d", seq=1)
     assert r.delivery_to == ""       # "" ⇒ repository for every consumer
     _ = datetime.now(timezone.utc)   # keep the import honest for future rows
+
+
+# ── ONBOARD declares; the app writes once, then only proposes ────────────────
+
+def _tx():
+    from test_transitions import _finalize_payload, _run, make_mgr, mission
+    from devcake.domain.orchestrator import transitions, steps
+    return _finalize_payload, _run, make_mgr, mission, transitions, steps
+
+
+def _delivery_notices(fake):
+    return [c for c in fake.comments if "Delivery" in c or "delivery" in c]
+
+
+def test_onboard_bare_plan_needed_writes_the_marker_and_says_so(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, steps = _tx()
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _s = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "plan_needed", "summary": "s",
+                   "delivery_to": "ticket",
+                   "delivery_reason": "the deliverable is a usage report"}, None))
+    assert "`devcake:delivery:v1 to=ticket`\nReason: the deliverable is a usage report" in m.description
+    assert "DEVCAKE-PLAN" in m.labels and "DEVCAKE-NEEDS-HUMAN" not in m.labels
+    notes = _delivery_notices(fake)
+    assert len(notes) == 1 and "to this ticket" in notes[0]
+    assert "edit the `devcake:delivery:v1` line" in notes[0]
+    assert steps.TRANSITION_DELIVERY_NOTE in run.finalized_steps
+    assert steps.TRANSITION_DELIVERY_FEED in run.finalized_steps
+    # the record write precedes the outcome's own label (a dispatch must
+    # never see the stage label without the destination)
+    ops = [op[0] for op in fake.ops]
+    assert "append_description" in ops
+
+
+def test_onboard_opportunistic_plan_states_the_destination_and_follows_plan_approval(tmp_path, monkeypatch):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    for gated in (True, False):
+        m = mission("in_progress", {"DEVCAKE"})
+        mgr, fake, _s = make_mgr(tmp_path / str(gated), m)
+        monkeypatch.setattr(mgr.instance, "plan_approval", gated)
+        run_coro(transitions.transition(
+            mgr, _run("ONBOARD", None),
+            {"outcome": "plan_needed", "summary": "s", "delivery_to": "ticket",
+             "delivery_reason": "report only"}, "# plan"))
+        plan_comment = next(c for c in fake.comments if "opportunistic plan" in c)
+        assert "**Delivery:** to this ticket" in plan_comment
+        assert "Reason: report only." in plan_comment
+        assert "DEVCAKE-EXECUTE" in m.labels
+        assert ("DEVCAKE-NEEDS-HUMAN" in m.labels) is gated   # the park follows plan_approval
+        assert "`devcake:delivery:v1 to=ticket`" in m.description
+
+
+def test_onboard_default_and_repository_are_silent(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    for result in ({"outcome": "plan_needed", "summary": "s"},
+                   {"outcome": "plan_needed", "summary": "s",
+                    "delivery_to": "repository"}):
+        m = mission("in_progress", {"DEVCAKE"})
+        mgr, fake, _s = make_mgr(tmp_path / str(len(result)), m)
+        before = m.description
+        run_coro(transitions.transition(mgr, _run("ONBOARD", None), result, "# plan"))
+        assert m.description == before
+        assert not any("Delivery" in c for c in fake.comments)
+
+
+@pytest.mark.parametrize("result", [
+    {"outcome": "plan_needed", "summary": "s", "delivery_to": "ticket"},
+    {"outcome": "plan_needed", "summary": "s", "delivery_to": "archive",
+     "delivery_reason": "x"},
+    {"outcome": "plan_needed", "summary": "s", "delivery_to": 3},
+])
+def test_onboard_malformed_declaration_is_bad_output(tmp_path, result):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _s = make_mgr(tmp_path, m)
+    with pytest.raises(ValueError):
+        run_coro(transitions.transition(mgr, _run("ONBOARD", None), result, None))
+    assert "DEVCAKE-PLAN" not in m.labels
+
+
+def test_onboard_ticket_on_a_board_without_attachments_is_forced_to_repository(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _s = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    run_coro(transitions.transition(
+        mgr, _run("ONBOARD", None),
+        {"outcome": "plan_needed", "summary": "s", "delivery_to": "ticket",
+         "delivery_reason": "report"}, "# plan"))
+    assert "devcake:delivery" not in m.description
+    plan_comment = next(c for c in fake.comments if "opportunistic plan" in c)
+    assert "cannot receive files" in plan_comment
+    assert "DEVCAKE-EXECUTE" in m.labels
+
+
+def test_onboard_append_failure_is_honest_and_never_strands(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, steps = _tx()
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _s = make_mgr(tmp_path, m)
+    fake.fail_append = True
+    run = _run("ONBOARD", None)
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "plan_needed", "summary": "s",
+                   "delivery_to": "ticket", "delivery_reason": "report"}, None))
+    assert "DEVCAKE-PLAN" in m.labels                    # the transition completed
+    assert "devcake:delivery" not in (m.description or "")
+    note = _delivery_notices(fake)[0]
+    assert "could not write the destination" in note
+    assert "`devcake:delivery:v1 to=ticket`" in note      # the line to paste
+    assert steps.TRANSITION_PLAN_NEEDED in run.finalized_steps
+
+
+def test_onboard_on_a_recorded_mission_only_proposes(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, steps = _tx()
+    m = mission("in_progress", {"DEVCAKE"})
+    m.description = "brief\n\n---\n`devcake:delivery:v1 to=repository`\n"
+    mgr, fake, _s = make_mgr(tmp_path, m)
+    before = m.description
+    run = _run("ONBOARD", None)
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "plan_needed", "summary": "s",
+                   "delivery_to": "ticket", "delivery_reason": "a person asked"}, None))
+    assert m.description == before                      # never written by a Dev
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels             # even with plan_approval off
+    assert "DEVCAKE-PLAN" in m.labels
+    notice = next(c for c in fake.comments if "proposes" in c)
+    assert "`devcake:delivery:v1 to=ticket`" in notice
+    assert "remove DEVCAKE-NEEDS-HUMAN" in notice
+    assert steps.TRANSITION_DELIVERY_PROPOSAL in run.finalized_steps
+    assert "proposed delivery change" in mgr.needs_human["p1"]
+
+
+def test_execute_differing_declaration_proposes_and_still_advances(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, steps = _tx()
+    from test_transitions import FakeForge
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _s = make_mgr(tmp_path, m, forge=FakeForge())
+    run = _run()                                        # delivery_to "" ⇒ repository
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "executed", "summary": "s",
+                   "pr_url": "https://forge/pr/9", "delivery_to": "ticket",
+                   "delivery_reason": "the human comment asked for the report here"},
+        None))
+    assert "DEVCAKE-REVIEW" in m.labels                  # the work stands
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels             # the change asks
+    assert "devcake:delivery" not in (m.description or "")
+    assert any("EXECUTE proposes" in c for c in fake.comments)
+
+
+def test_execute_matching_declaration_is_a_noop(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    from test_transitions import FakeForge
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _s = make_mgr(tmp_path, m, forge=FakeForge())
+    run_coro(transitions.transition(
+        mgr, _run(), {"outcome": "executed", "summary": "s",
+                      "pr_url": "https://forge/pr/9", "delivery_to": "repository"},
+        None))
+    assert "DEVCAKE-NEEDS-HUMAN" not in m.labels
+    assert not any("proposes" in c for c in fake.comments)
+
+
+def test_review_never_proposes(tmp_path):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    from test_transitions import FakeForge
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    mgr, fake, _s = make_mgr(tmp_path, m, forge=FakeForge())
+    before = m.description
+    run_coro(transitions.transition(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"outcome": "reviewed", "verdict": "approve", "report_md": "ok",
+         "pr_url": "https://forge/pr/8", "delivery_to": "ticket",
+         "delivery_reason": "x"}, None))
+    assert m.description == before
+    assert "DEVCAKE-NEEDS-HUMAN" not in m.labels
+    assert not any("proposes" in c for c in fake.comments)
+
+
+def test_planned_gate_restates_the_recorded_destination(tmp_path, monkeypatch):
+    _fp, _run, make_mgr, mission, transitions, _steps = _tx()
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    m.description = "brief\n\n---\n`devcake:delivery:v1 to=ticket`\nReason: report\n"
+    mgr, fake, _s = make_mgr(tmp_path, m)
+    monkeypatch.setattr(mgr.instance, "plan_approval", True)
+    before = m.description
+    run_coro(transitions.transition(
+        mgr, _run("PLAN", "DEVCAKE-PLAN"), {"outcome": "planned"}, "# plan"))
+    plan_comment = next(c for c in fake.comments if "DevCake plan for this mission" in c)
+    assert "**Delivery:** to this ticket" in plan_comment
+    assert "This board requires a human to approve plans" in plan_comment
+    assert m.description == before                      # PLAN writes nothing
+
+
+# ── decomposition children carry the destination from birth ─────────────────
+
+def _decompose(tmp_path, drafts, *, attachments=True):
+    _fp, _run, make_mgr, mission, _t, _s = _tx()
+    from devcake.domain.orchestrator import decomposition
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.attachments_supported = attachments
+    descs = []
+    orig = fake.create_mission
+
+    async def rec(team, title, description, *a, **k):
+        descs.append(description)
+        return await orig(team, title, description, *a, **k)
+    fake.create_mission = rec
+    run_coro(decomposition.finalize_decomposition(
+        mgr, _run("ONBOARD", None),
+        {"outcome": "decomposed", "summary": "s", "decomposition": drafts}))
+    return descs
+
+
+def test_decomposition_child_carries_the_destination_marker(tmp_path):
+    descs = _decompose(tmp_path, [
+        {"title": "measure", "description": "Measure usage.",
+         "delivery_to": "ticket", "delivery_reason": "a report for the ticket"},
+        {"title": "remove", "description": "Remove the unused fields."},
+    ])
+    assert len(descs) == 2
+    assert descs[0].endswith(
+        "`devcake:delivery:v1 to=ticket`\nReason: a report for the ticket")
+    assert "devcake:decomposition:v1" in descs[0]     # the lineage marker stays
+    assert "devcake:delivery" not in descs[1]
+
+
+def test_decomposition_child_reason_is_neutralized(tmp_path):
+    descs = _decompose(tmp_path, [
+        {"title": "a", "description": "d", "delivery_to": "ticket",
+         "delivery_reason": "see `devcake:delivery:v1 to=repository` too"},
+    ])
+    body, _, tail = descs[0].rpartition("`devcake:delivery:v1 to=ticket`")
+    assert "`devcake:delivery:v1 to=repository`" not in body + tail   # defanged
+    assert delivery_of(descs[0]) == DELIVERY_TICKET
+
+
+def test_decomposition_child_without_reason_is_bad_output(tmp_path):
+    with pytest.raises(ValueError):
+        _decompose(tmp_path, [{"title": "a", "description": "d",
+                               "delivery_to": "ticket"}])
+
+
+def test_decomposition_child_on_board_without_attachments_stays_repository(tmp_path):
+    descs = _decompose(tmp_path, [
+        {"title": "a", "description": "d", "delivery_to": "ticket",
+         "delivery_reason": "r"}], attachments=False)
+    assert "devcake:delivery" not in descs[0]

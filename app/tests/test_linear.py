@@ -408,3 +408,55 @@ def test_get_many_reads_a_hundred_ids_per_query_and_keys_by_id():
     assert set(got) == {f"id{i}" for i in range(249)}
     assert got["id7"].key == "T-7" and got["id7"].status == "done"
     assert ad.capabilities().batch_get is True
+
+
+# ── the activity's mission is a WHOLE Mission: relations ride the read ───────
+
+def _relation_adapter(queries, *, pages: int = 1):
+    """Serve one issue with `pages` × 50 `blocks` relations across cursor
+    pages, one comment, so the relations walk is the only pagination."""
+    ad = LinearAdapter("key")
+
+    def _rel_page(n):
+        start = n * 50
+        return {"pageInfo": {"hasNextPage": n + 1 < pages,
+                             "endCursor": f"r{n + 1}"},
+                "nodes": [{"type": "blocks", "issue": {"id": f"blk{i}"}}
+                          for i in range(start, start + 50)]}
+
+    async def _gql(query, variables=None):
+        queries.append((query, dict(variables or {})))
+        after = (variables or {}).get("after")
+        if "inverseRelations(first: 50, after" in query:
+            return {"issue": {"inverseRelations": _rel_page(int(after[1:]))}}
+        issue = _header()
+        issue["inverseRelations"] = _rel_page(0)
+        issue["comments"] = {"pageInfo": {"hasNextPage": False,
+                                          "endCursor": None},
+                             "nodes": [_comment(0)]}
+        return {"issue": issue}
+    ad._gql = _gql
+    return ad
+
+
+def test_get_activity_mission_carries_blocked_by():
+    """Field finding: the upstream offer read `act.mission.blocked_by` while
+    the activity query fetched no relations, so a finished blocker never
+    mirrored under upstream/{KEY}/ and no gap was disclosed (0 relations
+    never trips the truncation heuristic). Both the shallow and the full
+    read now carry the relations exactly as `get` does."""
+    for full in (False, True):
+        queries = []
+        act = run_coro(_relation_adapter(queries).get_activity(
+            MissionRef("i1", "issue"), full=full))
+        assert "inverseRelations(first: 50)" in queries[0][0]
+        assert act.mission.blocked_by == [f"blk{i}" for i in range(50)]
+        assert len(queries) == 1                      # no extra request
+
+
+def test_get_activity_walks_relations_past_a_full_page():
+    queries = []
+    act = run_coro(_relation_adapter(queries, pages=3).get_activity(
+        MissionRef("i1", "issue")))
+    assert act.mission.blocked_by == [f"blk{i}" for i in range(150)]
+    assert [q[1].get("after") for q in queries] == [None, "r1", "r2"]

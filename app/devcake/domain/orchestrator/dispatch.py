@@ -204,8 +204,12 @@ async def resolve_blocker_work(
                 skip.append(f"{b.key}: not done ({b.status})")
             continue
         handoff = markers.handoff_of(b.description)
+        # pmo_id rides along so the activity payload mirrors THIS resolved
+        # done set under upstream/{KEY}/ (ADR-0043 §4) instead of re-deriving
+        # blockers from a second vendor read
         notes.append({"mission_key": b.key, "title": b.title,
-                      "handoff": handoff[:markers.HANDOFF_EXCERPT_MAX]})
+                      "handoff": handoff[:markers.HANDOFF_EXCERPT_MAX],
+                      "pmo_id": b.pmo_id})
         runs = [r for r in (by_mid.get(bid) or [])
                 if getattr(r, "pmo_ref", "") in res.accepted_pmo_refs]
         runs_sorted = sorted(

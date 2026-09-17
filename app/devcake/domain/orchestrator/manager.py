@@ -253,8 +253,10 @@ class MissionManager:
         return dispatch.runspec_secret_payload(self, run)
 
     @with_pmo_call("critical", wait_budget_s=CRITICAL_BOUNDED_WAIT_S)
-    async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
-        return await activity_payload_mod.activity_payload(self, pmo_id, kind)
+    async def activity_payload(self, pmo_id: str, kind: str = 'issue',
+                               blocker_notes: list[dict] | None = None):
+        return await activity_payload_mod.activity_payload(
+            self, pmo_id, kind, blocker_notes=blocker_notes)
 
     async def resolve_repo_live(self, mission, all_runs=None):
         return await dispatch.resolve_repo_live(self, mission, all_runs)

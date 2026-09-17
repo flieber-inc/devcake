@@ -568,6 +568,8 @@ class LinearAdapter:
                  labels(first: 50) { pageInfo { hasNextPage endCursor }
                                     nodes { name } }
                  project { id }
+                 inverseRelations(first: 50) { pageInfo { hasNextPage endCursor }
+                                            nodes { type issue { id } } }
                  %s
                  comments(first: 100, orderBy: createdAt) {
                    pageInfo { hasNextPage endCursor }
@@ -576,6 +578,12 @@ class LinearAdapter:
             } }""" % (attachments_part, comment_fields), {"id": pmo_id})
         issue = data["issue"]
         await self._paginate_issue_labels(pmo_id, issue)
+        # The activity's mission is a WHOLE Mission (docs/05 §4): the
+        # upstream offer reads its blocked_by, so the relations ride here
+        # exactly as on `get` — an issue node without them would silently
+        # read as "no blockers" (0 relations never trips the length check)
+        if ((issue.get("inverseRelations") or {}).get("pageInfo") or {}).get("hasNextPage"):
+            await self._paginate_issue_relations(pmo_id, issue)
         conn = issue["comments"]
         nodes = list(conn["nodes"])
         max_pages = MAX_COMMENT_PAGES_FULL if full else MAX_COMMENT_PAGES

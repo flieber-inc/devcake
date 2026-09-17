@@ -183,7 +183,7 @@ def test_notes_survive_same_repo_drop(tmp_path):
         mgr, b, "shared", [_blocker_run("a", "T-A", "shared")]))
     assert entries == []
     assert notes == [{"mission_key": "T-A", "title": "title T-A",
-                      "handoff": "the schema moved to v2"}]
+                      "handoff": "the schema moved to v2", "pmo_id": "a"}]
 
 
 def test_notes_survive_the_cap_and_excerpts_are_bounded(tmp_path):

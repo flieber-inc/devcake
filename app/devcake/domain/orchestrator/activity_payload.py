@@ -199,7 +199,8 @@ def _nested_snapshot_bytes(payload: dict) -> list[tuple[str, bytes]]:
     return out
 
 
-async def _offer_upstream(mgr, mission, used: set[str]
+async def _offer_upstream(mgr, mission, used: set[str], *,
+                          done_blockers: list[str] | None = None,
                           ) -> tuple[list[dict], list[dict], list[str], list[str]]:
     """ADR-0043 §3-4 (CAKE-124 / ADR-0036 lineage): mirror each upstream
     mission — every decomposition ancestor, the containing project, then
@@ -212,14 +213,18 @@ async def _offer_upstream(mgr, mission, used: set[str]
     tree's sizes before a byte is fetched; the farthest truncate first.
     An unreadable ancestor or project is a strict-gate gap; an unreadable
     blocker is a disclosed gap that never defers a dispatch (no dispatch
-    was ever gated on blocker context). Returns (attachment_dicts,
+    was ever gated on blocker context). `done_blockers` is the dispatch's
+    live-resolved done set (see `family_graph.upstream_chain`); None means
+    the mission's own blocked_by decides. Returns (attachment_dicts,
     gating_gaps, truncated_keys, banner_lines)."""
     # Lazy import: family_graph → dispatch → activity_payload (cycle).
     from . import family_graph
     from ...ports.internal_forge import activity_repo_name
     missions = await _missions_snapshot(mgr)
-    chain = family_graph.upstream_chain(mission, missions)
-    outside = family_graph.blockers_outside(mission, missions)
+    chain = family_graph.upstream_chain(mission, missions,
+                                        done_blockers=done_blockers)
+    outside = family_graph.blockers_outside(mission, missions,
+                                            done_blockers=done_blockers)
     # A trusted parent_ref that does not resolve in the snapshot is a gap —
     # the Dev must not start believing the chain is empty when it is not.
     pref = decomposition_parent_ref(mission)
@@ -691,8 +696,17 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     upstream_gaps: list[dict] = []
     upstream_truncated: list[str] = []
     if include_upstream:
+        # Dispatch passes its notes (every done blocker its live pre-launch
+        # read resolved, pmo_id included): that resolved set is the blocker
+        # edge source for the mirror — not `m.blocked_by` from the activity
+        # read, which is a second vendor read of the same edges and, on an
+        # adapter that omits relations from the activity node, an empty
+        # one. No notes (a rebuild) → the mission's own blocked_by.
+        done_blockers = (
+            [n["pmo_id"] for n in blocker_notes if n.get("pmo_id")]
+            if blocker_notes is not None else None)
         up_files, upstream_gaps, upstream_truncated, banners = \
-            await _offer_upstream(mgr, m, used)
+            await _offer_upstream(mgr, m, used, done_blockers=done_blockers)
         attachments.extend(up_files)
         if banners:
             # Banners precede the feed mirror so a Dev scanning ACTIVITY.md

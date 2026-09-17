@@ -934,6 +934,21 @@ until that run exists, field evidence below stays operator-self-reported.
   dispatch passes route through it, and the two dispatch passes share one
   memo. Same mission now: four requests per attempt. Docs 04, 05,
   ADR-0009, CHANGELOG.
+- **Finished blockers' records mirrored from the dispatch's own read**
+  (2026-09-17, field incident, ADR-0043 §4 addendum): a build mission
+  dispatched three minutes after its design blocker finished got the
+  project's record under `upstream/` and the blocker's 700-character
+  handoff excerpt, but not the blocker's record — the Dev noticed and
+  wrote the gap into its plan. Cause: the offer read the blocker edges
+  from the mission node the activity read returned, and the Linear
+  activity query fetched no relations, so every Linear mission read as
+  "no blockers" with nothing to disclose (the blocker mirror had never
+  fired on a Linear board since it shipped). Now the dispatch's
+  live-resolved done set (the handoff notes, pmo_id included) is the edge
+  source, its done-ness outranks a same-cycle stale snapshot, and the
+  Linear activity read carries relations whole (paginated like `get`).
+  Tests at both seams. Docs: ADR-0043.
+
 ### Field evidence (receipted)
 
 - **Discoveries in full + the status comment's Discoveries section**

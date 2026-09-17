@@ -650,3 +650,74 @@ def test_budget_is_decided_from_record_sizes_before_download(tmp_path):
     assert not any(n.startswith("upstream/BLK-1/") for n in names)
     assert "BLK-1" in payload["upstream_truncated"]
     assert ("activity-linear-blk-1", "big.bin") not in forge.read_calls
+
+
+# ── the dispatch's resolved done set is the blocker edge source ──────────────
+
+def test_dispatch_notes_drive_the_blocker_mirror_not_the_activity_mission(tmp_path):
+    """Field finding: an adapter whose activity read returned the mission
+    WITHOUT its relations made the offer see no blockers and disclose no
+    gap. Dispatch already resolved the done set live (the launch gate);
+    its notes carry each blocker's pmo_id and are the edge source."""
+    blk = _blocker("b", "BLK-1")
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["b"]
+    bare = _m("i", "ISSUE-1")                        # activity node: no edges
+    assert bare.blocked_by == []
+    pmo = MultiActivityPMO([blk, issue], {"i": _act(bare, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [blk, issue]
+    mgr.internal_forge = _forge_with_record("activity-linear-blk-1", {
+        "MISSION.md": b"blocker brief", "ACTIVITY.md": b"blocker feed"})
+    notes = [{"mission_key": "BLK-1", "title": "BLK-1",
+              "handoff": "delivered the spec", "pmo_id": "b"}]
+    payload = run_coro(mgr.activity_payload("i", blocker_notes=notes))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert "upstream/BLK-1/MISSION.md" in names
+    assert "`upstream/BLK-1/` — blocker" in payload["activity_md"]
+    assert "Handoff: delivered the spec" in payload["mission_md"]
+
+
+def test_dispatch_notes_outrank_a_snapshot_that_still_says_open(tmp_path):
+    """Same-cycle completion: the cycle snapshot can predate the sweep that
+    finished the blocker; the dispatch's live read said done, so the record
+    is mirrored anyway."""
+    blk = _blocker("b", "BLK-1", status="in_progress")   # stale snapshot
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["b"]
+    pmo = MultiActivityPMO([blk, issue], {"i": _act(issue, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [blk, issue]
+    mgr.internal_forge = _forge_with_record("activity-linear-blk-1",
+                                            {"MISSION.md": b"x"})
+    notes = [{"mission_key": "BLK-1", "title": "BLK-1", "handoff": "",
+              "pmo_id": "b"}]
+    payload = run_coro(mgr.activity_payload("i", blocker_notes=notes))
+    assert any(a["filename"].startswith("upstream/BLK-1/")
+               for a in payload["attachments"])
+
+
+def test_empty_dispatch_notes_mean_no_blocker_folders(tmp_path):
+    """Dispatch found no done blocker (its notes are an empty list): the
+    activity mission's own edges are NOT consulted — one read decides."""
+    blk = _blocker("b", "BLK-1")
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["b"]
+    pmo = MultiActivityPMO([blk, issue], {"i": _act(issue, "issue feed")})
+    mgr = make_mgr(tmp_path, pmo)
+    mgr._upstream_missions = [blk, issue]
+    mgr.internal_forge = _forge_with_record("activity-linear-blk-1",
+                                            {"MISSION.md": b"x"})
+    payload = run_coro(mgr.activity_payload("i", blocker_notes=[]))
+    assert not any(a["filename"].startswith("upstream/")
+                   for a in payload["attachments"])
+    # a rebuild with no dispatch in hand still follows the mission's edges
+    payload = run_coro(mgr.activity_payload("i"))
+    assert any(a["filename"].startswith("upstream/BLK-1/")
+               for a in payload["attachments"])
+
+
+def test_blockers_outside_follow_the_dispatch_edge_source():
+    issue = _m("i", "ISSUE-1"); issue.blocked_by = ["peer-1", "a"]
+    a = _blocker("a", "BLK-A")
+    assert family_graph.blockers_outside(issue, [issue, a],
+                                         done_blockers=["a"]) == 0
+    assert family_graph.blockers_outside(issue, [issue, a],
+                                         done_blockers=["peer-2"]) == 1

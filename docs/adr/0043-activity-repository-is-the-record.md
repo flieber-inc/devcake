@@ -84,6 +84,18 @@ not mirrored. An unreadable **ancestor or project** stays a strict-gate gap
 (ADR-0036 §4); an unreadable **blocker** is a disclosed gap that never defers
 a dispatch, because no dispatch was ever gated on blocker context.
 
+**Addendum — one read decides the blocker set.** The dispatch's pre-launch
+read already resolves every direct blocker live and keeps the done ones as
+the handoff notes (ADR-0032, ADR-0034); those notes, pmo_id included, are the
+blocker edge source for the mirror. The offer never re-derives the edges from
+the mission node the activity read returned — that is a second read of the
+same edges, and an adapter whose activity node omits relations would make it
+read as "no blockers" with no gap to disclose (the failure this addendum
+records). The dispatch's done-ness outranks the cycle snapshot's status, which
+can predate a completion in the same cycle. A rebuild with no dispatch in hand
+(the record push at a later boundary) follows the mission's own `blocked_by`,
+which every adapter's activity read must carry whole (docs/05 §4).
+
 ### 5 — Delivery
 
 Three stages, each releasable: (1) the port read operations and the record

@@ -187,6 +187,10 @@ RUN_SCALAR_COLUMNS = {
     "continuations_used", "store_gen",
     # #165 — provision stamps harness --version; dispatch snapshots mission.url
     "harness_version", "mission_url",
+    # ADR-0017 addendum — the change set's delivery destination this run was
+    # dispatched under ("repository" | "ticket"; "" on legacy records);
+    # TEXT DEFAULT '' in DDL (deliberate widening)
+    "delivery_to",
 }
 RUN_BLOB_COLUMNS = {
     "blocker_work", "mirror_repos", "spec_skills", "spec_env",

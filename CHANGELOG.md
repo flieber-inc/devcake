@@ -13,6 +13,28 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+## v0.6.8 (2026-09-17)
+
+Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.9. No profile change: `devcake up --release v0.6.8` is the whole upgrade. A stored config that still carries `attach_merged_changeset_to_pmo` logs the usual unknown-key warning on load and runs without it — nothing to migrate.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.8).
+
+- **Retired — the deployment-global "attach merged change set to PMO"
+  toggle and its Settings → Policies → Delivery card.** With the delivery
+  destination shipped in v0.6.7, the ticket receives a change set exactly
+  when the mission's recorded destination is the ticket, or — as always —
+  after merge for the invisible internal forge. A deployment-wide switch
+  had no place left: configured repositories no longer receive a
+  post-merge archive, the forge pull request is their canonical artifact.
+  ADR-0017 gains the addendum that records the decision, the rejected
+  alternatives (a Dev posting to the ticket, a Dev-authored file payload,
+  embedding the deliverable in the plan, a new label, a per-board or
+  global switch) and the residuals. docs/02, 10, 11, 16; ADR-0020; the
+  operator skill.
+- **Runs carry their delivery destination.** The Runs API rows and the
+  CSV export gain `delivery_to` (`repository`, `ticket`, or empty for
+  older records) right after `pr_url`; the mission drawer labels a
+  ticket-destination pull request "PR → ticket". docs/11.
+
 ## v0.6.7 (2026-09-17)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.9. No profile change: `devcake up --release v0.6.7` is the whole upgrade.

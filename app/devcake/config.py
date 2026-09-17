@@ -1103,14 +1103,12 @@ class AppConfig(BaseModel):
     max_continuations: int = Field(2, ge=0)
     # ge=1: used as a modulo cadence; 0 would ZeroDivisionError
     review_loop_warning_every: int = Field(3, ge=1)
-    # After a REVIEW-approved merge, also zip the PR change set onto the PMO
-    # feed for CONFIGURED (external) work repos. Internal/zero-repo missions
-    # always zip (ADR-0010) regardless of this flag. Default OFF: the forge
-    # PR is the canonical artifact for eng repos; zips are merge-time
-    # snapshots (can omit large files, dual-truth vs main, secrets risk).
     # (Merge doctrine — auto_merge / auto-resolve / retry window — lives on
-    # each RepoInstance; see ADR-0020.)
-    attach_merged_changeset_to_pmo: bool = False
+    # each RepoInstance; see ADR-0020. The former deployment-global
+    # `attach_merged_changeset_to_pmo` zip toggle is retired — ADR-0017
+    # addendum: the ticket receives a change set by a mission's declared
+    # DESTINATION, or always for the invisible internal forge; pre-v1, an old
+    # key is dropped by the generic unknown-key warning.)
     # operator switch: no NEW runs dispatch while paused; in-flight runs finish
     # and sweeps keep running (docs/11)
     intake_paused: bool = False

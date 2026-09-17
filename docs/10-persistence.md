@@ -180,7 +180,7 @@ repo_mirror:                         # ADR-0024: source-mirror knobs (the mirror
                                      #   own writes (finished run, merge, claims push), which always resync
   lfs: false                         #   true = mirrors also carry LFS content
 review_loop_warning_every: 3
-attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
+# (attach_merged_changeset_to_pmo is retired — ADR-0017 addendum: a ticket receives files by the mission's declared destination; internal repos still archive after merge)
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
 # each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
 # … and plan_approval: true  # per-board plan approval gate (03 §2a): fresh plans and decomposition children park under DEVCAKE-NEEDS-HUMAN

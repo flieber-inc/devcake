@@ -68,8 +68,7 @@ missions for repos that flipped OFF→ON (`auto_merge_flipped_on` +
 
 ### 4 — Out of scope
 
-`attach_merged_changeset_to_pmo`, `adoption_mode`, and concurrency remain
-deployment-global.
+`adoption_mode` and concurrency remain deployment-global. (`attach_merged_changeset_to_pmo`, listed here originally, was retired by the ADR-0017 addendum: a ticket receives files by the mission's declared destination.)
 
 ## Consequences
 

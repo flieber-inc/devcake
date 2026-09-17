@@ -35,7 +35,9 @@ _LIST_FIELDS = {"run_id", "mission_key", "mission_type", "dev_type", "seq",
                 "continuations_used", "memory_mounts",
                 "harness_version", "mission_url",
                 # CAKE-167: TEAM/synthetic-key hover needs these on flat rows
-                "pmo_ref", "steward_duty", "outcome_summary"}
+                "pmo_ref", "steward_duty", "outcome_summary",
+                # ADR-0017 addendum: where this run's change set lands
+                "delivery_to"}
 
 _DETAIL_FIELDS = _LIST_FIELDS | {
     "schema_version", "mission_pmo_id", "pmo_kind", "pmo_ref", "repo_ref",
@@ -375,7 +377,8 @@ _CSV_COLUMNS = ("run_id", "pmo_ref", "mission_key", "mission_type", "dev_type",
                 "continuations_used", "input_tokens", "output_tokens",
                 "cache_read_tokens", "cache_write_tokens", "total_tokens",
                 "reasoning_tokens", "model", "cost_usd", "cost_usd_estimated",
-                "cost_usd_effective", "rate_card_id", "pr_url", "mission_url")
+                "cost_usd_effective", "rate_card_id", "pr_url", "delivery_to",
+                "mission_url")
 
 
 def _csv_cell(v):

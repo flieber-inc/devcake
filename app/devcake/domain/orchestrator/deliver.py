@@ -1,10 +1,13 @@
-"""Deliverable packaging: zip the merged PR change set onto the PMO feed.
+"""Deliverable packaging: the change set onto the PMO feed.
 
-Internal/zero-repo missions ALWAYS deliver (docs/16 M11, F4, ADR-0010) —
-the internal forge may be invisible, so the PMO is the one place the user
-looks. Configured (external) work repos deliver only when the operator
-enables AppConfig.attach_merged_changeset_to_pmo (default off: the forge
-PR is the canonical eng artifact).
+Two paths share the forge reads and the zip builder. (1) The post-merge
+ARCHIVE: internal/zero-repo missions ALWAYS deliver it (docs/16 M11, F4,
+ADR-0010) — the internal forge may be invisible, so the PMO is the one place
+the user looks; configured (external) work repos never do — the forge PR is
+the canonical artifact (the former deployment-global toggle is retired,
+ADR-0017 addendum). (2) TICKET delivery (ADR-0017 addendum): a mission whose
+record says `to=ticket` gets the pull request's files attached BEFORE Done,
+and the pull request is closed unmerged — `deliver_change_set` below.
 
 Fired AFTER the Done checkpoint from all three merge sites, guarded by
 its own idempotency key so redelivery never double-posts. A packaging
@@ -52,14 +55,12 @@ async def deliver_internal_zip(mgr, run, pr, *, anchor=None) -> None:
 
 
 def _should_deliver_zip(mgr, repo_ref: str | None) -> bool:
-    """Internal repos always; configured repos only when the operator opt-in
-    is on (AppConfig.attach_merged_changeset_to_pmo). None/empty never
-    delivers — merge sweep only calls this with a resolved m.repo."""
-    if not repo_ref:
-        return False
-    if repo_ref in mgr.forges.internal:
-        return True
-    return bool(getattr(mgr.config, "attach_merged_changeset_to_pmo", False))
+    """The post-merge archive is for the INVISIBLE forge only: internal
+    repos always, configured repos never (the forge PR is canonical; a
+    ticket wants files by declared destination, not by a global switch —
+    ADR-0017 addendum). None/empty never delivers — the merge sweep only
+    calls this with a resolved m.repo."""
+    return bool(repo_ref) and repo_ref in mgr.forges.internal
 
 
 async def deliver_internal_zip_for_mission(mgr, m, pr, *, anchor=None) -> None:

@@ -29,7 +29,6 @@ const linkClass =
 // fields, same route (#/settings/policies; legacy #/config/limits and #/config/traffic redirect); the
 // informational "Service auto-restart" row is gone (it was a knob-shaped
 // non-knob — the restart policy is compose's, documented in docs/13).
-// CAKE-159: attach_merged_changeset_to_pmo moved here from Repositories.
 
 // Domain-grouped policies (CAKE-161): fleet bounds, attempts, counting
 // budgets, result recovery, mirrors, memory. Same AppConfig knobs; route
@@ -308,26 +307,6 @@ export default function PoliciesSection() {
         </div>
       </Section>
 
-      <Section id="policies-delivery" title="Delivery"
-        description="What DevCake posts back to the PMO after a merge.">
-        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
-          <SettingRow label="Also attach merged change set to PMO"
-            desc={cfg.attach_merged_changeset_to_pmo
-              ? "ON — after merge, zip PR files onto the PMO feed (configured repos too)."
-              : "OFF (recommended for eng repos) — only zero-repo / internal missions attach a zip."}
-            help={"Zero-repo missions always attach a deliverable zip; this toggle only affects "
-              + "configured work repos. Leave OFF for normal software work: the forge PR is "
-              + "the canonical artifact. When ON, DevCake posts a merge-time file snapshot to "
-              + "the PMO (can omit large files under the attachment size cap; may go stale vs "
-              + "main; repo file bytes become visible to the PMO team). This does not pass work "
-              + "into other missions' workspaces — dependency edges and blocker clones do that."}>
-            <Toggle on={!!cfg.attach_merged_changeset_to_pmo}
-              label="Also attach merged change set to PMO"
-              onClick={() => setField("cfg.attach_merged_changeset_to_pmo",
-                !cfg.attach_merged_changeset_to_pmo)} />
-          </SettingRow>
-        </div>
-      </Section>
       <ConfirmDialog open={mergeOnConfirm}
         title="Turn memory auto-merge on?"
         body={MEMORY_AUTO_MERGE_COPY}

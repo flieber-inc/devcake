@@ -692,14 +692,17 @@ def test_mission_zip_delivery_skips_on_unquoted_marker(tmp_path):
     assert not uploaded
 
 
-def test_attach_merged_changeset_default_off():
+def test_attach_merged_changeset_toggle_is_retired():
+    """ADR-0017 addendum: the ticket receives a change set by a mission's
+    declared destination, never by a deployment-global switch; pre-v1 the
+    old key is simply an unknown key (generic warning, no migration)."""
     from devcake.config import AppConfig
-    assert AppConfig().attach_merged_changeset_to_pmo is False
+    assert "attach_merged_changeset_to_pmo" not in AppConfig.model_fields
 
 
-def test_external_zip_delivery_gated_by_toggle(tmp_path):
-    """Configured (non-internal) work repos only zip when the operator
-    enables attach_merged_changeset_to_pmo; internal always zips."""
+def test_external_repos_never_zip_after_merge(tmp_path):
+    """Configured (non-internal) work repos never receive the post-merge
+    archive: the forge PR is canonical. Internal always zips (below)."""
     from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
     from fakes import make_mission_manager
     from devcake.adapters.files.run_store import RunStore
@@ -731,11 +734,10 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
         internal = set()          # external — not in forges.internal
         def get(self, name): return FakeForge()
 
-    cfg = AppConfig()
     mgr = make_mission_manager(
         pmo=FakePMO(), forge_runtime=RT(),
         runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
-        config=cfg,
+        config=AppConfig(),
     )
     async def _feed(pmo_id, kind, md): feed.append(md)
     mgr._feed = _feed
@@ -745,75 +747,14 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
     run.finalized_steps = []
     pr = PullRequest(number=1, url="http://gh/pr/1", state="closed",
                      merged=True)
-
-    # default OFF → no zip for external
     run_coro(mgr.deliver_internal_zip(run, pr))
-    assert not uploaded
+    assert not uploaded and feed == []
     assert "deliver:zip" not in run.finalized_steps
 
-    # toggle ON → zip
-    cfg.attach_merged_changeset_to_pmo = True
-    run_coro(mgr.deliver_internal_zip(run, pr))
-    assert "T-1-deliverable.zip" in uploaded
-    assert "deliver:zip" in run.finalized_steps
-    assert any(DELIVERABLE_TOKEN in f for f in feed)
-
-
-def test_external_mission_zip_respects_toggle(tmp_path):
-    """Merge-sweep path for a non-internal repo: toggle off skips, on delivers."""
-    from devcake.domain.model import Activity, ActivityEntry
-    from devcake.ports.forge import PRFile, PRFilesResult, PullRequest
-    from fakes import make_mission_manager
-    from devcake.adapters.files.run_store import RunStore
-    from devcake.config import AppConfig
-    from datetime import datetime, timezone
-
-    uploaded = {}
-    m = _m(key="T-1")
-    m.repo = "alpha"
-
-    class FakePMO:
-        async def get_activity(self, ref, full=False):
-            return Activity(mission=m, entries=[
-                ActivityEntry(ts=datetime.now(timezone.utc), author="a",
-                              kind="comment", body="no zip yet")])
-        async def upload_attachment(self, pmo_id, name, data):
-            uploaded[name] = data
-            return f"https://pmo/{name}"
-
-    class FakeForge:
-        async def pr_state(self, n):
-            return PullRequest(number=n, url="http://gh/pr/1",
-                               state="closed", merged=True,
-                               merge_commit_sha="abc")
-        async def pr_files(self, n):
-            return PRFilesResult(files=[PRFile(path="a.txt", status="added")])
-        async def file_content(self, path, ref):
-            return b"data"
-
-    class RT:
-        internal = set()
-        def get(self, name): return FakeForge()
-
-    cfg = AppConfig()
-    mgr = make_mission_manager(
-        pmo=FakePMO(), forge_runtime=RT(),
-        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
-        config=cfg,
-    )
-    feed = []
-    async def _feed(pmo_id, kind, md): feed.append(md)
-    mgr._feed = _feed
-    mgr._attachment_cap = lambda: 10 * 1024 * 1024
-    pr = PullRequest(number=1, url="http://gh/pr/1", state="closed",
-                     merged=True)
-
+    # the sweep path, same repo: nothing either
+    m = _m(key="T-1"); m.repo = "alpha"
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert not uploaded
-
-    cfg.attach_merged_changeset_to_pmo = True
-    run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
-    assert "T-1-deliverable.zip" in uploaded
 
 
 def test_deliver_zip_ref_from_pr_state_merge_commit_sha(tmp_path):

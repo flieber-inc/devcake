@@ -304,7 +304,8 @@ export default function MissionDrawer({ mission, multiPmo, syncing, rows, adopti
                                 onClick={(e) => e.stopPropagation()}
                                 className="inline-flex items-center gap-0.5 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
                               >
-                                PR <ExternalLink size={10} aria-hidden />
+                                {r.delivery_to === "ticket" ? "PR → ticket" : "PR"}{" "}
+                                <ExternalLink size={10} aria-hidden />
                               </a>
                             ) : (
                               <span className="text-xs text-neutral-400">—</span>

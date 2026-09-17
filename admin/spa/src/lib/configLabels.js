@@ -52,9 +52,6 @@ const EXACT = {
     warning: (o, n) => (n === "opt_out" ? ADOPTION_COPY : null),
   },
   "cfg.poll_interval_seconds": { group: "PMO", label: "Poll interval (s)" },
-  "cfg.attach_merged_changeset_to_pmo": {
-    group: "Limits", label: "Also attach merged change set to PMO", format: onOff,
-  },
   "cfg.steward.dev_type": { group: "Scheduled Tasks", label: "Relations Steward · Dev Type", format: orEmpty },
   "cfg.steward.interval_minutes": { group: "Scheduled Tasks", label: "Relations Steward · Interval (minutes)" },
   "cfg.steward.enabled": { group: "Scheduled Tasks", label: "Relations Steward · Periodic service", format: onOff },

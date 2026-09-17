@@ -225,6 +225,7 @@ class FakeForge:
         self.branch_pr = PullRequest(number=8, url="https://forge/pr/8", state="open")
         self.states = {}            # number → PullRequest answered by pr_state
         self.state_exc = {}         # number → exception raised by pr_state
+        self.descriptor = SimpleNamespace(pr_noun="pull request")
 
     async def get_pr_by_branch(self, branch):
         self.lookups += 1
@@ -2540,7 +2541,10 @@ def test_rearm_retained_when_parked_missions_pr_is_missing(tmp_path):
     async def _pr(_branch):
         return PullRequest(number=8, url="https://forge/pr/8", state="open")
     forge.get_pr_by_branch = _pr
+    # the no-PR wait read the feed and memoized its merge stamps (ADR-0033
+    # addendum); a vanished marker is only believable with a moved updated_at
     fake.activity_entries = []
+    m.updated_at = datetime.now(timezone.utc) + timedelta(seconds=1)
     run_coro(mgr.sweeps([m]))
     assert any("`devcake:merge-retry`" in c for c in fake.comments)
     assert mgr.rearm_merge_repos == set()
@@ -2573,16 +2577,110 @@ def test_finalize_missing_pr_auto_merge_opens_deferred_window(tmp_path):
     assert not any("Awaiting human merge" in c for c in fake.comments)
 
 
-def test_finalize_missing_pr_manual_repo_keeps_human_await(tmp_path):
-    """Contrast: auto_merge OFF + no PR → the honest human-await copy, no
-    retry marker (the app was never going to merge it)."""
+def test_finalize_missing_pr_manual_repo_opens_deferred_window(tmp_path):
+    """Decided reversal of the AUD-006 contrast (docs/03 §4.1): auto_merge OFF
+    + no PR used to post "Awaiting human merge of ?" and park forever. Every
+    repo now opens the deferred window; the copy names the branch, never a
+    "?", and never promises an app merge on a manual repo."""
     m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
     run_coro(review.finalize_review(
         mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
         {"verdict": "approve", "report_md": "ok", "pr_url": "https://forge/pr/8"}))
     assert "DEVCAKE-MERGE" in m.labels
-    assert any("Awaiting human merge" in c for c in fake.comments)
-    assert not any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+    joined = "\n".join(fake.comments)
+    assert "?" not in joined.replace("?)", "")   # no "merging ? is yours"
+    assert "devcake/T-1" in joined
+    assert "merging it is yours" in joined       # manual repo: no app merge promised
+    assert "Awaiting human merge of" not in joined
+
+
+def test_finalize_missing_pr_window_zero_hands_back_at_once(tmp_path):
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False, window=0)
+    run_coro(review.finalize_review(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"verdict": "approve", "report_md": "ok"}))
+    assert "DEVCAKE-MERGE" in m.labels
+    handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
+    assert len(handoffs) == 1
+    assert "no pull request exists on branch `devcake/T-1`" in handoffs[0]
+    assert "?" not in handoffs[0]
+    assert mgr.merge_handoffs["p1"].startswith("T-1: no pull request")
+
+
+def _no_pr_park(tmp_path, entries, *, auto_merge=False, window=30):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    forge = FakeForge()
+    forge.branch_pr = None                        # the forge knows no PR for the branch
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    mgr.forges.instance("main").auto_merge = auto_merge
+    mgr.forges.instance("main").merge_retry_window_minutes = window
+    fake.activity_entries = list(entries)
+    return m, mgr, fake, forge
+
+
+def _retry_entry(age_minutes):
+    return ActivityEntry(
+        ts=datetime.now(timezone.utc) - timedelta(minutes=age_minutes),
+        author="devcake", kind="comment",
+        body="⏳ deferred `devcake:merge-retry`\n\n`devcake:v1`")
+
+
+def test_sweep_no_pr_past_window_posts_one_handback(tmp_path):
+    m, mgr, fake, forge = _no_pr_park(tmp_path, [_retry_entry(31)])
+    run_coro(sweeps.merge_sweep(mgr, m))
+    handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
+    assert len(handoffs) == 1
+    assert "No pull request exists on branch `devcake/LINEAR-T-1`" in handoffs[0]
+    assert "p1" in mgr.merge_handoffs and "p1" not in mgr.blocked_reasons
+    assert "DEVCAKE-MERGE" in m.labels             # parked, never canceled by DevCake
+    run_coro(sweeps.merge_sweep(mgr, m))            # second cycle: silence
+    assert len([c for c in fake.comments if "`devcake:merge-handoff`" in c]) == 1
+
+
+def test_sweep_no_pr_without_any_marker_hands_back(tmp_path):
+    # a legacy park (pre-deferral) or a hand-edited one: nothing to wait for
+    m, mgr, fake, forge = _no_pr_park(tmp_path, [])
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert len([c for c in fake.comments if "`devcake:merge-handoff`" in c]) == 1
+
+
+def test_sweep_no_pr_inside_window_only_notes_blocked_reason(tmp_path):
+    m, mgr, fake, forge = _no_pr_park(tmp_path, [_retry_entry(1)])
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert fake.comments == []
+    assert "no pull request" in mgr.blocked_reasons["p1"]
+
+
+def test_sweep_no_pr_already_handed_back_stays_silent(tmp_path):
+    handoff = ActivityEntry(
+        ts=datetime.now(timezone.utc), author="devcake", kind="comment",
+        body="⚠️ handed back `devcake:merge-handoff`\n\n`devcake:v1`")
+    m, mgr, fake, forge = _no_pr_park(tmp_path, [_retry_entry(60), handoff])
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert fake.comments == []
+    assert "p1" in mgr.merge_handoffs
+
+
+def test_sweep_pr_appears_on_manual_repo_after_deferral_posts_one_await(tmp_path):
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    run_coro(review.finalize_review(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"verdict": "approve", "report_md": "ok"}))
+    assert "DEVCAKE-MERGE" in m.labels
+    forge = mgr.forges.get("main")
+
+    async def _found(_branch):                     # the PR surfaces on the forge
+        return PullRequest(number=8, url="https://forge/pr/8", state="open")
+    forge.get_pr_by_branch = _found
+    before = len(fake.comments)
+    run_coro(sweeps.merge_sweep(mgr, m))
+    new = fake.comments[before:]
+    assert len(new) == 1 and "`devcake:merge-handoff`" in new[0]
+    assert "https://forge/pr/8" in new[0] and "merging it is yours" in new[0].lower()
+    assert forge.merges == []                       # manual repo: never merged by the app
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert len(fake.comments) == before + 1        # one-shot
 
 
 def test_sweep_ignores_missions_without_retry_marker(tmp_path):
@@ -3400,3 +3498,102 @@ def test_review_human_needed_still_posts_a_reply(tmp_path):
         "Need merge permission on the protected branch.", "human_needed"))
     reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
     assert "Need merge permission" in reply
+
+
+# ── executed requires a pull request (docs/03 §3, §6) ─────────────────────────
+# The pull request is the deliverable. An `executed` that names no url and
+# whose branch carries no forge-visible pull request is a structurally
+# invalid payload behind a legal outcome → DEV_BAD_OUTPUT (docs/03 §6 last
+# paragraph), never a silent march to REVIEW that parks at MERGE forever.
+
+def _executed_run_payload(**result_over):
+    result = {"outcome": "executed", "summary": "s"}
+    result.update(result_over)
+    return _finalize_payload(result=result)
+
+
+def test_executed_without_pr_anywhere_is_bad_output(tmp_path):
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-EXECUTE"}
+    with pytest.raises(ValueError) as ei:
+        run_coro(transitions.transition(
+            mgr, _run(), {"outcome": "executed", "summary": "s"}, None))
+    msg = str(ei.value)
+    assert "devcake/T-1" in msg                 # the branch a person can check (legacy ref shape)
+    assert "the pull request is the deliverable" in msg
+    assert "DEVCAKE-EXECUTE" in m.labels and "DEVCAKE-REVIEW" not in m.labels
+
+
+def test_executed_without_pr_fails_run_as_bad_output(tmp_path):
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-EXECUTE"}
+    run = _run()
+    run.state = "finalizing"
+    mgr.runs.store.save(run)
+    run_coro(mgr.finalize(run, _executed_run_payload()))
+    assert run.state == "failed"
+    assert run.error_class == "DEV_BAD_OUTPUT"
+    assert "devcake/T-1" in (run.error or "")
+    assert "DEVCAKE-REVIEW" not in m.labels
+
+
+def test_executed_without_reported_url_but_forge_pr_advances(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()                          # branch_pr = https://forge/pr/8
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    run = _run()
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "executed", "summary": "s"}, None))
+    assert "DEVCAKE-REVIEW" in m.labels
+    assert run.pr_url == "https://forge/pr/8"    # the forge-verified url is the record's
+    assert forge.lookups == 2                    # tripwire probe + the deliverable check
+
+
+def test_executed_with_reported_url_needs_no_forge_lookup(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    run = _run()
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "executed", "summary": "s",
+                   "pr_url": "https://forge/pr/9"}, None))
+    assert "DEVCAKE-REVIEW" in m.labels
+    assert run.pr_url == "https://forge/pr/9"
+    assert forge.lookups == 1                    # only the pre-existing out-of-pipeline tripwire read
+
+
+def test_executed_forge_probe_error_propagates_not_bad_output(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+
+    async def _boom(_branch):
+        raise ForgeError("forge down", status=503)
+    forge.get_pr_by_branch = _boom
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    with pytest.raises(ForgeError):
+        run_coro(transitions.transition(
+            mgr, _run(), {"outcome": "executed", "summary": "s"}, None))
+    assert "DEVCAKE-EXECUTE" in m.labels          # a transient never counts as bad output
+
+
+def test_executed_without_forge_configured_skips_the_check(tmp_path):
+    # resolution-failure contract: a vanished repo card is the operator's
+    # gap (surfaced by /health), never a Dev's bad output
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)     # no forge
+    run_coro(transitions.transition(
+        mgr, _run(), {"outcome": "executed", "summary": "s"}, None))
+    assert "DEVCAKE-REVIEW" in m.labels
+
+
+def test_executed_card_never_claims_a_pull_request_it_cannot_name(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    run = _run()
+    run.state = "finalizing"
+    store.save(run)
+    run_coro(mgr.finalize(run, _executed_run_payload()))
+    card = next(c for c in fake.comments if "`1_EXECUTE.md`" in c)
+    assert "Pull request opened." not in card
+    assert "No pull request url reported" in card

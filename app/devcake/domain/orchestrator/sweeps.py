@@ -210,17 +210,12 @@ async def merge_sweep(mgr, m: Mission) -> None:
         return
     pr, state = await _parked_pr(mgr, forge, m)
     if not pr:
-        # AUD-006: a DEVCAKE-MERGE mission with no discoverable PR is not
-        # normal (forge list lag / branch-naming miss). Surface it instead of
-        # returning silently — otherwise a mission whose PR never appears sits
-        # parked with no visible reason. Self-clears next cycle once the PR is
-        # found (gate_map rebuilds blocked_reasons at the top of each poll).
-        # When auto_merge is ON, finalize has already posted a retry marker, so
-        # the merge auto-drives the moment the PR surfaces.
-        mgr.blocked_reasons[m.pmo_id] = (
-            f"{m.key}: no open PR found for branch "
-            f"{mission_branch(m.instance, m.key)} — merge sweep deferred "
-            f"(forge lag or branch mismatch)")
+        # AUD-006: a DEVCAKE-MERGE mission with no discoverable PR (forge
+        # list lag / branch-naming miss / never opened). Inside the deferred
+        # window it is a visible wait; past it — or with no window at all —
+        # it is handed back to a person ONCE, by branch name, so a mission
+        # whose PR never appears can never sit parked with no way out.
+        await _no_pr_handback(mgr, m, inst)
         return
     if state.merged or state.state == "closed":
         mgr._rearm_satisfied.add(m.pmo_id)   # AUD-005: mission completing
@@ -270,6 +265,114 @@ async def merge_sweep(mgr, m: Mission) -> None:
         from ...config import auto_merge_permitted
         if auto_merge_permitted(mgr.config, inst, m.repo, mgr.dev_types):
             await _deferred_merge_retry(mgr, m, pr, state.url, inst)
+        elif m.pmo_id in mgr._missing_pr_deferred:
+            await _await_after_missing_pr(mgr, m, state.url)
+
+
+async def _merge_stamps(mgr, m: Mission):
+    """Newest PMO timestamps of the three merge-state markers in the
+    mission's feed — (retry, handoff, settle), each None when absent.
+    Memoized per mission (ADR-0033 addendum): the stamps change only
+    through our own feed writes (which invalidate the memo) or a human's
+    comment (a changed `updated_at`, or the memo's safety rescan on a
+    vendor whose `updated_at` does not track comments). One copy for the
+    deferred-retry driver and the no-PR hand-back (ADR-0034)."""
+    memo = getattr(mgr, "feed_memo", None)
+    stamps = memo.get("merge", m) if memo is not None else None
+    if stamps is not None:
+        board.bump(mgr, "feed_scan_memo_hits")
+        return stamps
+    gen = memo.generation(m.pmo_id) if memo is not None else 0
+    floor = memo.witnessed(m.pmo_id) if memo is not None else None
+    board.bump(mgr, "feed_scan_reads")
+    act = await mgr.pmo.get_activity(m.ref)
+    retry_ts = handoff_ts = settle_ts = None
+    for e in act.entries:
+        body = feed.unquoted(e.body)
+        ts = aware(e.ts)  # a naive PMO timestamp must not TypeError
+        if MERGE_RETRY_MARKER in body:
+            retry_ts = max(retry_ts, ts) if retry_ts else ts
+        if MERGE_HANDOFF_MARKER in body:
+            handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
+        if MERGE_SETTLE_MARKER in body:
+            settle_ts = max(settle_ts, ts) if settle_ts else ts
+    if memo is not None and not getattr(act, "truncated", False):
+        memo.put("merge", m, (retry_ts, handoff_ts, settle_ts), gen,
+                 feed_until=feed_memo.feed_until(act.entries), floor=floor)
+    return retry_ts, handoff_ts, settle_ts
+
+
+async def _no_pr_handback(mgr, m: Mission, inst) -> None:
+    """docs/03 §4.1: a parked mission whose branch carries no pull request.
+    While the deferred window (the newest `devcake:merge-retry` marker) is
+    open the wait is a visible `blocked_reasons` line; once it has elapsed —
+    or when no window was ever opened (a legacy or hand-edited park) — the
+    sweep hands back ONCE (`devcake:merge-handoff`, marker-idempotent) and
+    keeps the Needs Human banner. DevCake never cancels here: opening the
+    pull request or canceling the ticket is the person's call."""
+    branch = mission_branch(m.instance, m.key)
+    banner = f"{m.key}: no pull request on branch {branch} — awaiting you"
+    if m.pmo_id in mgr._merge_window_closed:
+        mgr.merge_handoffs[m.pmo_id] = banner    # known handed back — no feed read
+        return
+    retry_ts, handoff_ts, _settle_ts = await _merge_stamps(mgr, m)
+    if handoff_ts and (not retry_ts or handoff_ts >= retry_ts):
+        mgr._merge_window_closed.add(m.pmo_id)
+        mgr.merge_handoffs[m.pmo_id] = banner
+        return
+    window = int(getattr(inst, "merge_retry_window_minutes", 0) or 0)
+    if retry_ts and (utcnow() - retry_ts).total_seconds() / 60 <= window:
+        mgr.blocked_reasons[m.pmo_id] = (
+            f"{m.key}: no pull request found for branch {branch} yet — "
+            f"waiting up to {window} min for it to appear (deferred window)")
+        return
+    mgr.merge_handoffs[m.pmo_id] = banner
+    with completion.write_back_class():
+        await mgr._feed(
+            m.pmo_id, "issue",
+            feed.notice(
+                mgr, feed.NEEDS_YOU,
+                f"No pull request exists on branch `{branch}` — DevCake "
+                f"cannot complete this mission.",
+                f"⚠️ No pull request on branch `{branch}` — nothing to merge; "
+                f"awaiting you (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}",
+                todo="Open a pull request on that branch (the merge sweep "
+                     "completes the mission once it merges), or cancel the "
+                     "ticket."))
+    mgr._audit(m.pmo_id, "merge_no_pr_handoff", branch)
+    mgr._merge_window_closed.add(m.pmo_id)
+    with completion.write_back_class():
+        act = await status_comment.refresh(mgr, m.pmo_id, reason="merge_handoff",
+                                           mission=m)
+        await activity_payload.record_activity(
+            mgr, m.pmo_id, m.pmo_kind or "issue", m.key, "merge_handoff",
+            act=act)
+
+
+async def _await_after_missing_pr(mgr, m: Mission, pr_url: str) -> None:
+    """The pull request a manual-merge repo's deferral was waiting for is
+    visible: say so once and name it — merging it is the person's."""
+    mgr._missing_pr_deferred.discard(m.pmo_id)
+    mgr.merge_handoffs[m.pmo_id] = f"{m.key}: awaiting human merge — {pr_url}"
+    with completion.write_back_class():
+        await mgr._feed(
+            m.pmo_id, "issue",
+            feed.notice(
+                mgr, feed.NEEDS_YOU,
+                f"The pull request is visible now: {pr_url}. Merging it is "
+                f"yours — the merge sweep completes the mission once it lands.",
+                f"✅ Pull request {pr_url} is visible — awaiting human merge "
+                f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}",
+                todo="Merge it once the forge allows; the merge sweep "
+                     "completes the mission once it lands."))
+    mgr._audit(m.pmo_id, "merge_await_after_missing_pr", pr_url)
+    mgr._merge_window_closed.add(m.pmo_id)
+    with completion.write_back_class():
+        act = await status_comment.refresh(mgr, m.pmo_id, reason="merge_handoff",
+                                           mission=m, pr_url=pr_url)
+        await activity_payload.record_activity(
+            mgr, m.pmo_id, m.pmo_kind or "issue", m.key, "merge_handoff",
+            act=act)
 
 
 async def _deferred_merge_retry(mgr, m: Mission, pr,
@@ -308,29 +411,7 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
     # they change only through our own feed writes (which invalidate the
     # memo) or a human's comment (a changed `updated_at`, or the memo's
     # safety rescan on a vendor whose `updated_at` does not track comments)
-    memo = getattr(mgr, "feed_memo", None)
-    stamps = memo.get("merge", m) if memo is not None else None
-    if stamps is not None:
-        board.bump(mgr, "feed_scan_memo_hits")
-        retry_ts, handoff_ts, settle_ts = stamps
-    else:
-        gen = memo.generation(m.pmo_id) if memo is not None else 0
-        floor = memo.witnessed(m.pmo_id) if memo is not None else None
-        board.bump(mgr, "feed_scan_reads")
-        act = await mgr.pmo.get_activity(m.ref)
-        retry_ts = handoff_ts = settle_ts = None
-        for e in act.entries:
-            body = feed.unquoted(e.body)
-            ts = aware(e.ts)  # a naive PMO timestamp must not TypeError
-            if MERGE_RETRY_MARKER in body:
-                retry_ts = max(retry_ts, ts) if retry_ts else ts
-            if MERGE_HANDOFF_MARKER in body:
-                handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
-            if MERGE_SETTLE_MARKER in body:
-                settle_ts = max(settle_ts, ts) if settle_ts else ts
-        if memo is not None and not getattr(act, "truncated", False):
-            memo.put("merge", m, (retry_ts, handoff_ts, settle_ts), gen,
-                     feed_until=feed_memo.feed_until(act.entries), floor=floor)
+    retry_ts, handoff_ts, settle_ts = await _merge_stamps(mgr, m)
 
     # Settle is active when its marker is the newest merge-state marker.
     settle_active = bool(

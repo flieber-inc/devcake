@@ -143,6 +143,11 @@ class MissionManager:
         # marker opens a new episode. A human DELETING the hand-off comment
         # instead of swapping labels isn't noticed until restart.
         self._merge_window_closed: set[str] = set()
+        # pmo_ids whose REVIEW approve found no PR on an auto_merge-OFF repo
+        # (docs/03 §4.1 deferred window): the sweep posts one "the pull
+        # request is visible now" notice when it appears. Process-local —
+        # the deferral record already tells the person merging is theirs.
+        self._missing_pr_deferred: set[str] = set()
         # pmo_id → the parked mission's PR number (docs/04 §1): the branch→PR
         # lookup is a stable fact once the PR exists, so a cycle pays the
         # state read alone. Process-local; pruned when a mission leaves MERGE;

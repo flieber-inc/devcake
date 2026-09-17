@@ -117,9 +117,12 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
         log.error("finalize_review %s: repo %r vanished — no transition",
                   run.run_id, run.repo_ref)
         return
-    pr = await forge.get_pr_by_branch(run_branch(run))
-    pr_url = (pr.url if pr else None) or result.get("pr_url") or "?"
-    footer = forge.approval_footer(pr_url)
+    branch = run_branch(run)
+    pr = await forge.get_pr_by_branch(branch)
+    # the copy names a pull request only when one is known — never a "?"
+    # placeholder (a Dev-reported url stands in until the forge sees the PR)
+    pr_url = (pr.url if pr else None) or result.get("pr_url") or ""
+    footer = forge.approval_footer(pr_url) if pr_url else ""
     if pr and pr.url and run.pr_url != pr.url:
         # ADR-0042: the forge-verified url is the record's; saved by the
         # first checkpoint below (every path past here saves the run)
@@ -328,43 +331,87 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                     steps.REVIEW_MERGE_FAILED)
                             mgr.runs.store.save(run)
                         await _fail_path()
-        elif auto_merge_permitted(mgr.config, inst, run.repo_ref,
-                                  mgr.dev_types) \
+        elif pr is None \
                 and inst.merge_retry_window_minutes > 0 \
                 and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \
                 and steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
-            # AUD-006: auto_merge is ON but the PR wasn't visible at finalize
-            # (forge list lag / branch-naming miss). Pure human-await copy
-            # would strand app-driven merge FOREVER — the sweep silent-returns
-            # on a missing PR and opens no window without a marker. Open a
-            # deferred window instead: the sweep drives the merge the moment
-            # the PR surfaces, and the window bounds the wait before handing
-            # back. Never pure human-await when auto_merge is ON.
+            # AUD-006, every repo (docs/03 §4.1): the PR was not visible at
+            # finalize (forge list lag / branch-naming miss / never opened).
+            # Open the deferred window so the sweep can act the moment the PR
+            # surfaces — merge it when auto_merge is ON, tell the person it
+            # is theirs when OFF — and bound the wait before handing back.
+            # A pure human-await with nothing to name stranded missions at
+            # DEVCAKE-MERGE forever ("merging ? is yours").
+            driving = auto_merge_permitted(mgr.config, inst, run.repo_ref,
+                                           mgr.dev_types)
+            window = inst.merge_retry_window_minutes
+            named = pr_url or f"the pull request for branch `{branch}`"
+
             async def _defer_missing_pr():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                           remove={LABEL_REVIEW}, add={LABEL_MERGE})
-                record = (
-                    f"⏳ REVIEW approved but the PR isn't visible yet — DevCake "
-                    f"will auto-merge it once it appears, retrying for up to "
-                    f"{inst.merge_retry_window_minutes} minutes before handing "
-                    f"back to you. You can merge {pr_url} manually at any time. "
-                    f"{MERGE_RETRY_MARKER}")
-                await mgr._feed(
-                    pmo_id, "issue",
-                    feed.notice(
-                        mgr, feed.INFO,
-                        f"Approved, but the pull request is not visible yet — "
-                        f"DevCake merges it once it appears, retrying for up "
-                        f"to {inst.merge_retry_window_minutes} minutes before "
-                        f"handing back to you.",
-                        record,
-                        todo=f"Nothing to do; you can merge {pr_url} yourself "
-                             f"at any time."))
-                mgr._audit(pmo_id, "review_approve_defer_missing_pr", pr_url)
+                if driving:
+                    record = (
+                        f"⏳ REVIEW approved but the PR isn't visible yet — DevCake "
+                        f"will auto-merge it once it appears, retrying for up to "
+                        f"{window} minutes before handing back to you. You can "
+                        f"merge {named} manually at any time. {MERGE_RETRY_MARKER}")
+                    head = (f"Approved, but the pull request is not visible yet — "
+                            f"DevCake merges it once it appears, retrying for up "
+                            f"to {window} minutes before handing back to you.")
+                    todo = (f"Nothing to do; you can merge {named} yourself at "
+                            f"any time.")
+                else:
+                    record = (
+                        f"⏳ REVIEW approved but no pull request is visible on "
+                        f"branch `{branch}` yet — DevCake waits up to {window} "
+                        f"minutes for it to appear, then hands back to you. "
+                        f"Auto-merge is off for this repository: when the pull "
+                        f"request appears, merging it is yours. {MERGE_RETRY_MARKER}")
+                    head = (f"Approved, but no pull request is visible on branch "
+                            f"`{branch}` yet — DevCake waits up to {window} minutes "
+                            f"for it to appear, then hands back to you. When it "
+                            f"appears, merging it is yours (auto-merge is off for "
+                            f"this repository).")
+                    todo = ("Nothing to do yet. If the work was pushed under "
+                            "another branch name, open the pull request on the "
+                            "mission branch so DevCake can see it.")
+                    # process-local: the sweep posts one "it is visible now"
+                    # notice when the PR appears (restart-safe degradation: the
+                    # record above already says merging is theirs)
+                    mgr._missing_pr_deferred.add(pmo_id)
+                await mgr._feed(pmo_id, "issue",
+                                feed.notice(mgr, feed.INFO, head, record, todo=todo))
+                mgr._audit(pmo_id, "review_approve_defer_missing_pr",
+                           pr_url or branch)
                 mgr._merge_window_closed.discard(pmo_id)
                 run.finalized_steps.append(steps.REVIEW_MERGE_DEFERRED)
                 mgr.runs.store.save(run)
             await _defer_missing_pr()
+        elif pr is None and steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
+            # window 0: nothing to wait for — hand back at once, by name
+            async def _handback_missing_pr():
+                await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                           remove={LABEL_REVIEW}, add={LABEL_MERGE})
+                mgr.merge_handoffs[pmo_id] = (
+                    f"{run.mission_key}: no pull request on branch {branch} — "
+                    f"awaiting you")
+                await mgr._feed(
+                    pmo_id, "issue",
+                    feed.notice(
+                        mgr, feed.NEEDS_YOU,
+                        f"Approved, but no pull request exists on branch "
+                        f"`{branch}` — DevCake cannot complete this mission.",
+                        f"⚠️ REVIEW approved but no pull request exists on branch "
+                        f"`{branch}` — nothing to merge; awaiting you "
+                        f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}",
+                        todo="Open a pull request on that branch (the merge "
+                             "sweep completes the mission once it merges), or "
+                             "cancel the ticket."))
+                mgr._audit(pmo_id, "review_approve_no_pr_handoff", branch)
+                mgr._merge_window_closed.add(pmo_id)
+            await mgr._checkpoint(run, steps.REVIEW_AWAITING_MERGE,
+                                  _handback_missing_pr)
         elif steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
             async def _await_merge():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),

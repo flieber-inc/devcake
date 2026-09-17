@@ -133,7 +133,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `active_runs` | count of dispatched/running/finalizing runs |
 | `forge_protection` | default-branch protection probe per repo (cached ~5 min; `null` when unknown) — **not** part of `security_warnings`; Overview derives a **critical** dismissable alert when `protected === false` (deployment-requirement gap, `14` §8 / `13` §8a) — still not a dispatch gate |
 | `anomalies` | per-mission advisory strings (out-of-pipeline merges etc.; pruned when terminal) |
-| `merge_handoffs` | pmo_id → "awaiting human merge" strings (keys are `{instance}:{pmo_id}` when more than one PMO is configured — same prefix as `dependency_cycles`) — the live merge queue banner |
+| `merge_handoffs` | pmo_id → "awaiting human merge" strings (a parked mission whose branch carries no pull request appears here too once handed back — `03` §4.1) (keys are `{instance}:{pmo_id}` when more than one PMO is configured — same prefix as `dependency_cycles`) — the live merge queue banner |
 | `needs_human` | pmo_id → advisory string, rebuilt each cycle from the `DEVCAKE-NEEDS-HUMAN` label (clears the moment the human removes the label). Same instance-qualified keys as `merge_handoffs` when `N>1` |
 | `dependency_cycles` | detected blocked-by loops (each names the mission keys in the loop) |
 | `blocked_reasons` | pmo_id → why the scheduler is currently holding a mission back (advisory mirror of the last gate map) |

@@ -6,7 +6,9 @@ The MACHINERY contract is identical to Development — same result.json
 shapes, same branch/PR rules (deliverables are files committed to the
 mission's repo, typically the internal forge), same {var} placeholders —
 only the framing, rubric, and quality bars change. Single-braced (these are
-render_playbook templates, not str.format)."""
+render_playbook templates, not str.format). The delivery-destination contract
+(ADR-0017 addendum) is a code-owned epilogue the preset inherits unchanged:
+the default deliverable is still files committed to the repository."""
 
 CS_PLAYBOOKS: dict[str, str] = {
     "ONBOARD": """
@@ -57,7 +59,10 @@ Write EXACTLY one of:
 - High: {"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{"title": "...", "description": "<standalone — reads as an
   independent issue>", "priority": "urgent|high|medium|low",
-  "blocked_by": [<1-based indexes of EARLIER parts — omit if independent>]}, ...]}
+  "blocked_by": [<1-based indexes of EARLIER parts — omit if independent>],
+  "delivery_to": "ticket", "delivery_reason": "<one line — only for a part whose
+  deliverable is information for the ticket and changes no repository file; omit
+  both otherwise>"}, ...]}
   {decomposition_rule}
 {plan_approval_rule}
 Your final message is a concise triage summary for the customer-success feed.

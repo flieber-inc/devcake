@@ -116,7 +116,10 @@ Write EXACTLY one of:
   independent mission, no references to siblings or 'this mission'>",
   "priority": "urgent|high|medium|low",
   "blocked_by": [<1-based indexes of EARLIER parts this part must not start
-  before — omit for independent parts>]}}, ...]}}
+  before — omit for independent parts>],
+  "delivery_to": "ticket", "delivery_reason": "<one line — ONLY for a part whose
+  deliverable is information for the ticket (a measurement, a report) and
+  that should change no file in any repository; omit both otherwise>"}}, ...]}}
   Order the parts so prerequisites come first. Declare blocked_by whenever one
   part consumes another's output (e.g. implementation that must follow a
   documentation or design part); independent parts omit it so they can run in
@@ -236,6 +239,113 @@ def discoveries_epilogue(cap: int) -> str:
     return DISCOVERIES_EPILOGUE_HEAD + cap_line + DISCOVERIES_EPILOGUE_TAIL
 
 
+# ADR-0017 addendum — the delivery destination contract. Code-owned like
+# HUMAN_HANDOFF: appended AFTER render on all four playbooks, so operator
+# template overrides keep it. Single braces are literal here. Every change
+# set rides a pull request; the destination decides how REVIEW approve
+# ends. ONBOARD on a fresh mission may DECLARE; everyone else only reads it,
+# and a differing value is a proposal a person must accept.
+_DELIVERY_MEANING = {
+    "repository": "the pull request merges into the repository",
+    "ticket": ("after review, DevCake attaches the pull request's files to "
+               "the ticket and closes the pull request without merging — no "
+               "repository changes"),
+}
+
+DELIVERY_ONBOARD_FRESH = """
+### Delivery destination (result field — ONBOARD only)
+You cannot write to the ticket: DevCake is the only writer there and posts
+your transcript, your plan and your result for you. Never plan a step that
+posts, attaches or comments on the ticket. Every mission's change set rides
+a pull request on the mission branch; what you may declare is where that
+change set LANDS:
+- "repository" (the default — say nothing): the pull request merges.
+- "ticket": after review, DevCake attaches the pull request's files to the
+  ticket and closes the pull request without merging. Declare it ONLY when
+  no file in any repository should change and the deliverable is
+  information for the ticket's readers (a measurement, a report, an
+  answer). Add "delivery_to": "ticket" and a one-line "delivery_reason" to
+  result.json; the plan then describes files to write, not code to change.
+  The EXECUTE step still opens the pull request — only its ending differs.
+  A decomposition child may carry the same two fields.
+"""
+DELIVERY_UNAVAILABLE = """
+Ticket delivery is unavailable on this board (it cannot hold attachments):
+every change set merges. Do not declare "ticket".
+"""
+DELIVERY_RECORDED = """
+### Delivery destination (recorded)
+This mission's destination is recorded as **{to}**: {meaning}. Follow it.
+You cannot change the record: a different "delivery_to" (with a one-line
+"delivery_reason") in result.json is a PROPOSAL a person must accept — make
+one only when a human comment asks for it or the recorded destination is
+impossible for the brief, quote the human's words as the reason, and never
+assume it was accepted. The record is what the description says at your
+next dispatch.
+"""
+DELIVERY_EXECUTE_TICKET = """
+Your pull request will never merge: it may contain only deliverable files
+(reports, documents, data) — no code or configuration changes. The steps
+above about opening the pull request still apply; there is no other way to
+deliver.
+"""
+DELIVERY_EXECUTE_REPOSITORY = """
+A pull request is required; there is no other way to deliver. A mission that
+should change nothing ends with human_needed and says why.
+"""
+DELIVERY_PLAN = """
+### Delivery destination (recorded)
+This mission's destination is recorded as **{to}**: {meaning}. Your plan
+cannot change it. A ticket-destination plan describes the files to write
+and where they go, not code to change; a repository plan describes the
+code change. If the brief makes the recorded destination impossible, say so
+in the plan for the person who approves it.
+"""
+DELIVERY_REVIEW_TICKET = """
+### Delivery destination (recorded): this ticket
+The pull request under review will never merge — DevCake attaches its files
+to the ticket and closes it. Verify it contains only deliverable files and
+no code or configuration change, and that the brief and plan indeed needed
+no repository change. Reject, with the reason in your report, when code
+changed, when a repository change was needed, or when a human comment asks
+for a different destination. You never propose a destination — reject
+instead; the next EXECUTE proposes, or a person edits the record.
+"""
+DELIVERY_REVIEW_REPOSITORY = """
+### Delivery destination (recorded): the repository
+The pull request merges on approval. If a human comment asks for a
+different destination, or the change set is only a document the brief
+wanted on the ticket, reject and say so in your report. You never propose a
+destination — reject instead; the next EXECUTE proposes, or a person edits
+the record.
+"""
+
+
+def delivery_epilogue(mission_type: str, to: str, *, recorded: bool,
+                      ticket_available: bool) -> str:
+    """The delivery-destination contract for one step (ADR-0017 addendum).
+    `to` is the recorded destination (`markers.delivery_of`), `recorded`
+    whether any marker is on the record (the ONBOARD write/propose switch),
+    `ticket_available` whether the board's PMO can hold attachments."""
+    to = to or "repository"
+    meaning = _DELIVERY_MEANING.get(to, _DELIVERY_MEANING["repository"])
+    if mission_type == "ONBOARD":
+        if not recorded:
+            return DELIVERY_ONBOARD_FRESH + (
+                "" if ticket_available else DELIVERY_UNAVAILABLE)
+        return DELIVERY_RECORDED.format(to=to, meaning=meaning)
+    if mission_type == "PLAN":
+        return DELIVERY_PLAN.format(to=to, meaning=meaning)
+    if mission_type == "EXECUTE":
+        return DELIVERY_RECORDED.format(to=to, meaning=meaning) + (
+            DELIVERY_EXECUTE_TICKET if to == "ticket"
+            else DELIVERY_EXECUTE_REPOSITORY)
+    if mission_type == "REVIEW":
+        return (DELIVERY_REVIEW_TICKET if to == "ticket"
+                else DELIVERY_REVIEW_REPOSITORY)
+    return ""
+
+
 # Appended to all four playbooks. Provenance is sentinel-based (docs/03 §8a):
 # ACTIVITY.md marks each entry 🧑 HUMAN or 🤖 DevCake.
 HUMAN_COMMENTS_NOTE = """
@@ -305,7 +415,10 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
                    decomposition_rule: str = "",
                    plan_approval_rule: str = "",
                    discoveries_cap: int = 3,
-                   environment_note: str = "") -> str:
+                   environment_note: str = "",
+                   delivery_to: str = "repository",
+                   delivery_recorded: bool = False,
+                   ticket_delivery_available: bool = True) -> str:
     """repo_options: the multi-repo triage section (item 2 full scope) —
     dispatch builds it from the instance's repo set; empty for single-repo
     and zero-repo instances (renders to nothing, like project_note).
@@ -329,6 +442,9 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "plan_approval_rule": plan_approval_rule})
     return (identifying_prompt + "\n" + text + environment_note
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
+            + delivery_epilogue("ONBOARD", delivery_to,
+                                recorded=delivery_recorded,
+                                ticket_available=ticket_delivery_available)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
 
@@ -365,7 +481,8 @@ def plan_prompt(identifying_prompt: str, mission: Mission,
                 reference_repos: str = "",
                 blocker_repos: str = "",
                 plan_approval_rule: str = "",
-                environment_note: str = "") -> str:
+                environment_note: str = "",
+                delivery_to: str = "repository") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["PLAN"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -375,6 +492,8 @@ def plan_prompt(identifying_prompt: str, mission: Mission,
          "blocker_repos": blocker_repos,
          "plan_approval_rule": plan_approval_rule})
     return (identifying_prompt + "\n" + text + environment_note
+            + delivery_epilogue("PLAN", delivery_to, recorded=True,
+                                ticket_available=True)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE)
 
 
@@ -434,7 +553,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
                    blocker_repos: str = "",
                    plan_approval_rule: str = "",
                    discoveries_cap: int = 3,
-                   environment_note: str = "") -> str:
+                   environment_note: str = "",
+                   delivery_to: str = "repository") -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
     (docs/06) — placeholders: {key} {title} {default} {branch}. It is
     code-owned, so it keeps str.format; its rendered result becomes the
@@ -453,6 +573,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "plan_approval_rule": plan_approval_rule})
     return (identifying_prompt + "\n" + text + environment_note
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
+            + delivery_epilogue("EXECUTE", delivery_to, recorded=True,
+                                ticket_available=True)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
 
@@ -515,7 +637,8 @@ def review_prompt(identifying_prompt: str, mission: Mission,
                   reference_repos: str = "",
                   blocker_repos: str = "",
                   discoveries_cap: int = 3,
-                  environment_note: str = "") -> str:
+                  environment_note: str = "",
+                  delivery_to: str = "repository") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["REVIEW"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -526,6 +649,8 @@ def review_prompt(identifying_prompt: str, mission: Mission,
          "blocker_repos": blocker_repos})
     return (identifying_prompt + "\n" + text + environment_note
             + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
+            + delivery_epilogue("REVIEW", delivery_to, recorded=True,
+                                ticket_available=True)
             + HUMAN_COMMENTS_NOTE + UPSTREAM_ACTIVITY_NOTE + TURN_DISCIPLINE)
 
 

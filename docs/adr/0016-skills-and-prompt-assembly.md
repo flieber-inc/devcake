@@ -282,3 +282,5 @@ connection.
    fail-closed gate union (`context_sourcing_strict` governs it),
    basename flattening, `skill_repo_heads` provenance, read-only by
    construction.
+
+**Addendum (delivery destination).** The code-owned epilogues appended after render — the human-handoff exit, the discoveries contract (ADR-0033), the turn discipline — gain the delivery-destination contract (ADR-0017 addendum): ONBOARD on a mission without a recorded destination may declare one; PLAN, EXECUTE and REVIEW read the recorded one, EXECUTE may propose a change, REVIEW never does. Like its siblings it survives operator template overrides (ADR-0037) and the workflow presets inherit it unchanged.

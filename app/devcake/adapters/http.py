@@ -97,6 +97,14 @@ class PooledClient:
             await self._client.aclose()
 
 
+def network_error_text(e: BaseException) -> str:
+    """`"{Class}: {message}"`, or the class alone when the message is blank
+    — `str(httpx.PoolTimeout())` is empty, and `network: ` told the operator
+    nothing during the 2026-09 pool exhaustion."""
+    msg = str(e).strip()
+    return f"{type(e).__name__}: {msg}" if msg else type(e).__name__
+
+
 async def forge_request(client: httpx.AsyncClient, method: str, url: str, *,
                         path_label: str, headers: dict | None = None,
                         raw: bool = False, **kwargs):
@@ -112,8 +120,8 @@ async def forge_request(client: httpx.AsyncClient, method: str, url: str, *,
     try:
         resp = await client.request(method, url, headers=headers, **kwargs)
     except httpx.HTTPError as e:
-        raise ForgeError(f"{method} {path_label} → network: {e}",
-                         status=None) from e
+        raise ForgeError(f"{method} {path_label} → network: "
+                         f"{network_error_text(e)}", status=None) from e
     if resp.status_code < 200 or resp.status_code >= 300:
         raise ForgeError(f"{method} {path_label} → {resp.status_code}: "
                          f"{resp.text[:200]}", status=resp.status_code)

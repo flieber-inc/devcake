@@ -2443,3 +2443,278 @@ def test_newest_receipt_is_attached_on_every_publication(tmp_path):
     # a stray non-UTF-8 file never kills the loop
     (d / "receipt-20260911T020000Z.json").write_bytes(b"\xff\xfe{")
     assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)["nested"]["rig_ok"] is True
+
+
+# ── slow-but-alive liveness (2026-09-22 starvation episode) ──────────────────
+
+def test_classify_app_knows_a_slow_app_from_a_dead_one():
+    """A container that is running but cannot answer /health/live within
+    the probe's budget is SLOW, not down: the baker heartbeats and skips
+    its bake work; only a container that is not running is `down`."""
+    factory = _load_factory()
+    assert factory.classify_app(healthy="slow", digest="sha256:abc",
+                                checkout="sha256:abc") == "slow"
+    assert factory.classify_app(healthy="ok", digest="sha256:abc",
+                                checkout="sha256:abc") == "ready"
+    assert factory.classify_app(healthy="down", digest="sha256:abc") == "down"
+    assert factory.classify_app(healthy=True, digest="sha256:abc") == "ready"
+    assert factory.classify_app(healthy=False, digest="sha256:abc") == "down"
+    assert factory.tick_decision("slow") == "heartbeat"
+
+
+def test_container_state_reads_every_compose_ps_shape():
+    """`docker compose ps -a` prints NDJSON on newer compose, a JSON array on
+    older, plain text with no --format at all."""
+    factory = _load_factory()
+    assert factory.container_state(
+        '{"Name":"devcake-app-1","Service":"app","State":"running"}\n') == "running"
+    assert factory.container_state(
+        '[{"Service":"app","State":"exited","ExitCode":137}]') == "exited"
+    assert factory.container_state(
+        "NAME            SERVICE  STATUS\n"
+        "devcake-app-1   app      Up 3 hours (unhealthy)\n") == "running"
+    assert factory.container_state(
+        "devcake-app-1   app      Exited (137) 2 minutes ago\n") == "exited"
+    assert factory.container_state(
+        "devcake-app-1   app      Restarting (1) 5 seconds ago\n") == "restarting"
+    assert factory.container_state("") is None
+
+
+def test_app_gate_budget_is_wall_clock_and_only_a_dead_container_spends_it():
+    """The gate is the pure decision behind the baker loop: `ok` reconciles
+    and resets the clock; `slow` heartbeats at the short retry with the
+    down-clock untouched; `down` waits with backoff until the WALL-CLOCK
+    budget (probe time included) is spent, then exits."""
+    factory = _load_factory()
+    clock = factory.AppClock()
+    assert factory.app_gate("down", clock, now=0.0) == ("wait", 5.0)
+    assert factory.app_gate("down", clock, now=5.0) == ("wait", 10.0)
+    assert factory.app_gate("down", clock, now=15.0) == ("wait", 20.0)
+    assert factory.app_gate("down", clock, now=35.0) == ("wait", 30.0)
+    # a slow reading proves the container is RUNNING: the down clock resets
+    # (an hour of slow followed by one failed listing must not exit at once)
+    assert factory.app_gate("slow", clock, now=70.0) == ("heartbeat", factory.SLOW_RETRY_S)
+    assert clock.down_since is None and clock.streak == 0
+    assert factory.app_gate("down", clock, now=3700.0) == ("wait", 5.0)
+    # the wait is clipped to what is left of the budget (probe time counts)
+    assert factory.app_gate("down", clock, now=3990.0) == ("wait", 10.0)
+    assert factory.app_gate("down", clock, now=4000.0) == ("exit", 0.0)
+    # recovery resets everything
+    assert factory.app_gate("ok", clock, now=4100.0) == ("reconcile", 0.0)
+    assert clock.down_since is None and clock.streak == 0
+    assert factory.app_gate("down", clock, now=4200.0) == ("wait", 5.0)
+    # a listing that could not be read is nobody's verdict: hold, spend nothing
+    assert factory.app_gate("unknown", clock, now=4210.0) == ("hold", factory.SLOW_RETRY_S)
+    assert clock.down_since == 4200.0 and clock.streak == 1
+    # a fresh clock on a slow app: heartbeat, never exit, however long
+    slow = factory.AppClock()
+    for t in (0.0, 1000.0, 5000.0):
+        assert factory.app_gate("slow", slow, now=t) == ("heartbeat", factory.SLOW_RETRY_S)
+    assert slow.slow_since == 0.0
+
+
+def _scripted_run(script):
+    """A `subprocess.run` double keyed on the argv shape: the app probe
+    (`compose exec … python -c`) and the container listing (`compose ps`).
+    `script[key]` is a CompletedProcess or an exception to raise; every
+    other argv succeeds with empty output. Records the calls."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[:3] == ["docker", "compose", "exec"] and "python" in argv:
+            outcome = script.get("probe")
+        elif argv[:3] == ["docker", "compose", "ps"]:
+            outcome = script.get("ps")
+        else:
+            outcome = None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if outcome is None:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return outcome
+    run.calls = calls
+    return run
+
+
+def test_probe_app_live_is_tri_state(monkeypatch):
+    """A probe that times out against a RUNNING container is `slow`; a
+    failed probe against a container that is not running (or not listed)
+    is `down`; a green probe is `ok` and never lists containers."""
+    _load_factory()
+    import dev_factory.watch as watch
+    ok = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    fail = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    running = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"running"}\n')
+    exited = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"exited"}\n')
+    nothing = subprocess.CompletedProcess([], 0, stdout="")
+
+    run = _scripted_run({"probe": subprocess.TimeoutExpired(["x"], 20), "ps": running})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "slow"
+
+    run = _scripted_run({"probe": fail, "ps": exited})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "down"
+
+    run = _scripted_run({"probe": fail, "ps": nothing})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "down"
+
+    run = _scripted_run({"probe": ok, "ps": exited})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "ok"
+    assert not any(c[:3] == ["docker", "compose", "ps"] for c in run.calls)
+
+    # the daemon itself not answering (a starved host) is not a dead app
+    run = _scripted_run({"probe": fail, "ps": subprocess.TimeoutExpired(["ps"], 30)})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "unknown"
+    run = _scripted_run({"probe": fail, "ps": subprocess.CompletedProcess([], 1, stdout="", stderr="daemon busy")})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "unknown"
+
+
+def test_app_container_state_falls_back_to_the_plain_listing(monkeypatch):
+    """Older compose has no --format json: the second call reads the table."""
+    _load_factory()
+    import dev_factory.watch as watch
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(list(argv))
+        if "--format" in argv:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unknown flag")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="NAME  SERVICE  STATUS\ndevcake-app-1  app  Exited (137) 2 minutes ago\n")
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.app_container_state() == "exited"
+    assert seen[0][:3] == ["docker", "compose", "ps"] and "-a" in seen[0] and "app" in seen[0]
+    assert len(seen) == 2 and "--format" not in seen[1]
+
+
+def test_live_probe_gives_a_starved_loop_ten_seconds():
+    """The probe text the baker, `devcake up` and the compose healthcheck
+    share: a constant-returning route that takes 12–60 s on a starved
+    two-core host must not read as dead at 3 s."""
+    _load_factory()
+    import dev_factory.watch as watch
+    assert "timeout=10" in watch.LIVE_PROBE_PY
+    assert "/api/v1/health/live" in watch.LIVE_PROBE_PY
+    assert watch.LIVE_PROBE_TIMEOUT_S == 20
+
+
+class _StopLoop(Exception):
+    pass
+
+
+def _loop_rig(monkeypatch, tmp_path, script, *, stop_after_sleeps=None):
+    """Drive `watch.main()` with a scripted docker, a fake wall clock that
+    advances by each sleep, no Dockerfile read and no bake work."""
+    _load_factory()
+    import dev_factory.watch as watch
+    work = tmp_path / "work"
+    monkeypatch.setenv("DEVCAKE_FACTORY_WORK", str(work))
+    monkeypatch.setenv("DEVCAKE_FACTORY_DIR", str(tmp_path))
+    monkeypatch.setenv("DEVCAKE_FACTORY_LOG", str(tmp_path / "watch.log"))
+    monkeypatch.setenv("OO_INGEST_EMAIL", "")
+    monkeypatch.setattr(watch, "_dockerfile_text", lambda: "")
+    monkeypatch.setattr(watch, "house_from_dockerfile", lambda text: {})
+    run = _scripted_run(script)
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    clock = {"now": 0.0, "sleeps": []}
+
+    def sleep(s):
+        clock["sleeps"].append(s)
+        clock["now"] += s
+        if stop_after_sleeps is not None and len(clock["sleeps"]) >= stop_after_sleeps:
+            raise _StopLoop()
+
+    monkeypatch.setattr(watch.time, "sleep", sleep)
+    monkeypatch.setattr(watch.time, "monotonic", lambda: clock["now"])
+
+    def no_bake(**kwargs):
+        raise AssertionError("bake work must not run")
+    monkeypatch.setattr(watch, "once", no_bake)
+    return watch, work, run, clock
+
+
+def test_main_exits_only_when_the_app_container_is_not_running(monkeypatch, tmp_path):
+    """A container that is not running spends the wall-clock budget, then
+    the baker exits 1 with its dying words in the outbox."""
+    fail = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    exited = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"exited"}\n')
+    watch, work, run, clock = _loop_rig(monkeypatch, tmp_path, {"probe": fail, "ps": exited},
+                                        stop_after_sleeps=100)   # a loop that never exits fails, not hangs
+    assert watch.main() == 1
+    assert sum(clock["sleeps"]) >= watch.UNHEALTHY_BUDGET_S
+    events = [json.loads(l) for p in (work / "harness_outbox").glob("*.jsonl")
+              for l in p.read_text().splitlines()]
+    assert any(e.get("event") == "down" for e in events)
+
+
+def test_main_heartbeats_through_a_slow_app(monkeypatch, tmp_path, capsys):
+    """Container running, route unanswered: the baker stamps its heartbeat
+    (so /health never paints it dead), does no bake work, prints ONE
+    transition line, and retries at the short interval — it never exits."""
+    slow = subprocess.TimeoutExpired(["x"], 20)
+    running = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"running"}\n')
+    watch, work, run, clock = _loop_rig(
+        monkeypatch, tmp_path, {"probe": slow, "ps": running}, stop_after_sleeps=3)
+    with pytest.raises(_StopLoop):
+        watch.main()
+    assert clock["sleeps"] == [watch.SLOW_RETRY_S] * 3
+    status = json.loads((work / watch.STATUS).read_text())
+    assert status.get("heartbeat_at")
+    assert any(c[:5] == ["docker", "compose", "exec", "-T", "app"] and "tee" in c
+               and f"/data/{watch.STATUS}" in c for c in run.calls), "heartbeat shipped into the app"
+    out = capsys.readouterr().out
+    assert out.count("app is slow") == 1
+
+
+def test_main_holds_when_docker_does_not_answer(monkeypatch, tmp_path, capsys):
+    """A starved host makes the daemon slow too: a listing that cannot be
+    read spends none of the exit budget — the baker holds at the short
+    interval and says so once."""
+    fail = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    busy = subprocess.CompletedProcess([], 1, stdout="", stderr="daemon busy")
+    watch, work, run, clock = _loop_rig(
+        monkeypatch, tmp_path, {"probe": fail, "ps": busy}, stop_after_sleeps=4)
+    with pytest.raises(_StopLoop):
+        watch.main()
+    assert clock["sleeps"] == [watch.SLOW_RETRY_S] * 4
+    out = capsys.readouterr().out
+    assert out.count("docker is not answering") == 1
+    assert "exiting" not in out
+
+
+def test_slow_tick_period_stays_under_the_heartbeat_stale_threshold():
+    """A slow tick spends the probe's budget before it can stamp; the
+    retry plus that budget must stay inside the app's stale threshold
+    (an independent value from the app side)."""
+    _load_factory()
+    import dev_factory.watch as watch
+    from devcake.bake_status import HEARTBEAT_STALE_SECONDS
+    # probe budget + the heartbeat's own exec (compose_write timeout) + retry
+    assert (watch.SLOW_RETRY_S + watch.LIVE_PROBE_TIMEOUT_S
+            + watch.COMPOSE_WRITE_TIMEOUT_S) < HEARTBEAT_STALE_SECONDS
+
+
+def test_live_probe_is_one_text_in_three_places():
+    """The baker, `devcake up` and the compose healthcheck probe the same
+    route with the same budget. Three literals (the baker imports only
+    scripts/dev_factory, the PyPI CLI ships without scripts/), pinned
+    byte-equal here so none of them drifts alone."""
+    _load_factory()
+    import dev_factory.watch as watch
+    import yaml
+    compose = Path("/srv/docker-compose.yml")
+    assert compose.exists(), "bind docker-compose.yml → /srv/docker-compose.yml"
+    hc = yaml.safe_load(compose.read_text())["services"]["app"]["healthcheck"]
+    cli = next((p for p in (Path("/srv/cli"), Path(__file__).parents[2] / "cli")
+                if p.is_dir()), None)
+    assert cli is not None, "cli/devcake_cli missing — bind /srv/cli"
+    if str(cli) not in sys.path:
+        sys.path.insert(0, str(cli))
+    import devcake_cli.up as up
+    assert hc["test"][-1] == watch.LIVE_PROBE_PY == up.LIVE_PROBE_PY

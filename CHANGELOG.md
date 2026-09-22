@@ -25,6 +25,25 @@ See the living log and open candidates in
   and an Overview alert meter the leak class; a network error with no
   message names its class. Ships with `devcake-cli` 0.1.10 — upgrade the
   CLI before `devcake up`.
+- **Added — the fleet's CPU demand against the host's cores.** The app
+  computes `/health.capacity` (`global_max × cpus` against the cores it
+  sees, one core kept for the control plane); an oversubscribed host shows
+  as a dismissable Overview warning, a `devcake status` line and a `devcake
+  up` warning. Host sizing rule in docs/13.
+- **Changed — the host baker tells a slow app from a dead one.** A running
+  container that cannot answer the liveness probe keeps the baker's
+  heartbeat fresh with no bake work and never exits; a container listing
+  that cannot be read is nobody's verdict and spends nothing; only a
+  container that is not running spends the ~5-minute budget, now
+  wall-clock (probe time included). The app paints the baker dead after
+  60 s without a heartbeat (was 30 s), so one slow tick fits inside. The probe gives the route ten seconds, byte-equal in compose,
+  `devcake up` and the baker.
+- **Changed — compose gives the control plane CPU weight** (`app` 4096,
+  `dagu` and `redis` 2048; Dev containers stay at the default 1024) and the
+  app healthcheck tolerates a starved event loop (`timeout=10` on the
+  route, 15 s interval, 12 s timeout). Weight rebalances, it does not add
+  cores — the capacity warning is the remedy. Ships with `devcake-cli`
+  0.1.10.
 
 ## v0.6.8 (2026-09-17)
 

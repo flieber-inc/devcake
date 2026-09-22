@@ -260,3 +260,23 @@ check("leaked network connections are a warning, then critical near the cap", ()
   assert.equal(quiet.some((a) => a.id === "http-pool-leak"), false, "raw counts never override the app's grade");
   assert.equal(deriveAlerts({}).some((a) => a.id === "http-pool-leak"), false);
 });
+
+// Host capacity (/health.capacity): Dev containers may demand global_max × cpus,
+// and the control plane starves once that exceeds the cores minus one — a
+// dismissable warning that names the numbers and points at Limits.
+check("an oversubscribed host is a dismissable warning that names the numbers", () => {
+  const hit = deriveAlerts({
+    capacity: { host_cpus: 2, concurrency: 5, cpus_per_dev: 2, demand_cpus: 10, oversubscribed: true },
+  }).find((a) => a.id === "capacity");
+  assert.ok(hit, "capacity alert missing");
+  assert.equal(hit.severity, "warning");
+  assert.equal(hit.dismissable, true);
+  assert.match(hit.body, /10 CPUs .*on a 2-core host/);
+  assert.match(hit.body, /Limits/);
+  const fine = deriveAlerts({
+    capacity: { host_cpus: 8, concurrency: 3, cpus_per_dev: 2, demand_cpus: 6, oversubscribed: false },
+  });
+  assert.equal(fine.some((a) => a.id === "capacity"), false);
+  const unknown = deriveAlerts({ capacity: { host_cpus: null, oversubscribed: null } });
+  assert.equal(unknown.some((a) => a.id === "capacity"), false);
+});

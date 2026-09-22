@@ -188,6 +188,25 @@ def http_pool_lines(health: dict | None) -> list[str]:
     return out
 
 
+def capacity_lines(health: dict | None) -> list[str]:
+    """The fleet's CPU demand against the host's cores (/health.capacity)
+    and the remedy when the host is oversubscribed. Empty when /health
+    carries none (an older app) or the fact is unknown."""
+    cap = (health or {}).get("capacity")
+    if not isinstance(cap, dict) or cap.get("host_cpus") is None:
+        return []
+    demand = cap.get("demand_cpus")
+    if demand is None:
+        return [f"capacity: {cap['host_cpus']} cores; Dev CPUs are unlimited "
+                f"(concurrency {cap.get('concurrency')})"]
+    demand_s = f"{demand:g}"
+    line = (f"capacity: {cap['host_cpus']} cores; the fleet can demand {demand_s} CPUs "
+            f"({cap.get('concurrency')} × {cap.get('cpus_per_dev')})")
+    if cap.get("oversubscribed"):
+        line += " — OVERSUBSCRIBED, raise the host or lower Limits"
+    return [line]
+
+
 def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
     try:
         root = repo or require_checkout_root()
@@ -231,6 +250,8 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
         "bake_status": (health or {}).get("bake_status") if health else None,
         # ADR-0044: the shared HTTP pool next to the kernel's socket count
         "http_pool": (health or {}).get("http_pool") if health else None,
+        # the fleet's CPU demand against the host's cores
+        "capacity": (health or {}).get("capacity") if health else None,
     }
 
     if as_json:
@@ -257,5 +278,7 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
             for line in hl:
                 sys.stdout.write(line + "\n")
             for line in http_pool_lines(health):
+                sys.stdout.write(line + "\n")
+            for line in capacity_lines(health):
                 sys.stdout.write(line + "\n")
     return 0 if compose_ok else 4

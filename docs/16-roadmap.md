@@ -987,6 +987,21 @@ until that run exists, field evidence below stays operator-self-reported.
 
 ### Field evidence (receipted)
 
+- **A two-core host running five Dev containers at once** (2026-09-22):
+  `concurrency.global_max=5` × `container_limits.cpus=2.0` on a 2-vCPU
+  host put CPU pressure at 96 % (kernel PSI), the app's constant-returning
+  liveness route at 12–60 s, and one poll cycle at 16 minutes. The compose
+  healthcheck (3 s) flipped the container unhealthy; the host baker's probe
+  (also 3 s) failed for its whole budget — a budget that counted only its
+  sleeps, so ~20 real minutes — and it exited, was restarted by systemd,
+  and hit the same wall twice. Nothing in the repository knew the core
+  count. What exists now: a compose CPU weight for the control plane, a
+  ten-second probe shared byte-equal by compose, `devcake up` and the baker,
+  a tri-state baker liveness (*slow* heartbeats without bake work, only a
+  container that is not running spends the wall-clock budget), and one
+  capacity fact (`/health.capacity`) read by the Overview alert, `devcake
+  status` and `devcake up`. Host sizing rule in docs/13. Ships as
+  `devcake-cli` 0.1.10.
 - **Discoveries in full + the status comment's Discoveries section**
   (2026-09-10, ADR-0042 addendum): the steward's leads notice lost its
   inline ceiling — `Record` carries every finding in full (`render_entry_lines

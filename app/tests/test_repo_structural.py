@@ -301,3 +301,30 @@ def test_nested_probe_extracts_the_exact_dag_seccomp_profile():
     for sid in ("provision", "run_dev"):
         assert steps[sid]["with"]["host"]["SecurityOpt"][0] == f"seccomp={blob}", \
             f"{sid} SecurityOpt must lead with the probe's extracted profile"
+
+
+def test_control_plane_outweighs_dev_containers():
+    """2026-09 starvation episode: five Dev containers at 2 CPUs each on a
+    two-core host left the app's event loop answering its liveness route
+    in tens of seconds. Compose gives the control plane CPU weight so it
+    wins contention (weight rebalances, it does not add cores — the
+    capacity alert is the remedy); Dev containers keep the default 1024."""
+    compose = Path("/srv/docker-compose.yml")
+    assert compose.exists(), MOUNT_HINT.format(src="docker-compose.yml → /srv/docker-compose.yml")
+    services = yaml.safe_load(compose.read_text())["services"]
+    assert services["app"]["cpu_shares"] == 4096
+    assert services["dagu"]["cpu_shares"] == 2048
+    assert services["redis"]["cpu_shares"] == 2048
+
+
+def test_app_healthcheck_tolerates_a_starved_loop():
+    """The liveness route returns a constant; on a starved host it still
+    takes 12–60 s. Three seconds read that as dead and flipped the
+    container unhealthy for nothing."""
+    compose = Path("/srv/docker-compose.yml")
+    assert compose.exists(), MOUNT_HINT.format(src="docker-compose.yml → /srv/docker-compose.yml")
+    hc = yaml.safe_load(compose.read_text())["services"]["app"]["healthcheck"]
+    assert "timeout=10" in hc["test"][-1]
+    assert hc["timeout"] == "12s"
+    assert hc["interval"] == "15s"
+    assert hc["retries"] == 5

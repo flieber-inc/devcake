@@ -49,12 +49,13 @@ from .core import (
 )
 from .run import tee_run
 from .liveness import (
-    SENTINEL,
-    UNHEALTHY_BUDGET_S,
+    app_gate,
+    AppClock,
     classify_app,
+    SENTINEL,
+    SLOW_RETRY_S,
     tick_decision,
-    unhealthy_backoff_s,
-    unhealthy_verdict,
+    UNHEALTHY_BUDGET_S,
 )
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
 KEEP_SET = "harness_keep_set.json"
@@ -112,7 +113,7 @@ def compose_read(rel: str) -> str | None:
     try:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app", "cat", f"/data/{rel}"],
-            cwd=REPO, text=True, timeout=15,
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S,
             stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
@@ -123,7 +124,7 @@ def compose_ls(rel: str) -> list[str]:
     try:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app", "ls", "-1", f"/data/{rel}"],
-            cwd=REPO, text=True, timeout=15)
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
     return [line.strip() for line in out.splitlines() if line.strip()]
@@ -135,11 +136,11 @@ def compose_write(rel: str, text: str) -> None:
     subprocess.run(
         ["docker", "compose", "exec", "-T", "app",
          "mkdir", "-p", parent],
-        cwd=REPO, check=False, timeout=15)
+        cwd=REPO, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S)
     proc = subprocess.run(
         ["docker", "compose", "exec", "-T", "app",
          "tee", dest],
-        cwd=REPO, input=text, text=True, check=False, timeout=15,
+        cwd=REPO, input=text, text=True, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S,
         stdout=subprocess.DEVNULL)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot write {dest} (exit {proc.returncode})")
@@ -149,7 +150,7 @@ def compose_rm(rel: str) -> None:
     dest = f"/data/{rel}"
     subprocess.run(
         ["docker", "compose", "exec", "-T", "app", "rm", "-f", dest],
-        cwd=REPO, check=False, timeout=15)
+        cwd=REPO, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S)
 
 
 def compose_claim(rel: str) -> None:
@@ -164,7 +165,7 @@ def compose_claim(rel: str) -> None:
         ["docker", "compose", "exec", "-T", "app",
          "sh", "-c", 'if [ -f "$1" ]; then mv -f "$1" "$2"; fi',
          "claim", src, dst],
-        cwd=REPO, check=False, timeout=15)
+        cwd=REPO, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S)
 
 
 def docker_name_list(argv: list[str]) -> list[str] | None:
@@ -261,24 +262,66 @@ def compose_append(rel: str, text: str) -> None:
     dest = f"/data/{rel}"
     proc = subprocess.run(
         ["docker", "compose", "exec", "-T", "app", "tee", "-a", dest],
-        cwd=REPO, input=text, text=True, check=False, timeout=15,
+        cwd=REPO, input=text, text=True, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S,
         stdout=subprocess.DEVNULL)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot append {dest} (exit {proc.returncode})")
 
 
-def probe_app_live() -> bool:
-    """Same check as devcake up _app_live — the existing health chokepoint."""
+# The liveness probe text, byte-equal in three places: here, `devcake up`
+# (cli/devcake_cli/up.py LIVE_PROBE_PY) and the compose healthcheck
+# (docker-compose.yml, service app). A structural test pins the three
+# together; the baker only imports scripts/dev_factory and the PyPI CLI
+# ships without scripts/, so a shared constant would be a fiction. Ten
+# seconds: the route returns a constant, but on a CPU-starved host the
+# event loop answers late and the baker must not read that as dead.
+LIVE_PROBE_PY = (
+    "import urllib.request as u; "
+    "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=10)"
+)
+LIVE_PROBE_TIMEOUT_S = 20   # the outer bound: exec start-up + the route
+COMPOSE_WRITE_TIMEOUT_S = 15   # one exec into the app (heartbeat, receipts, reads)
+
+
+def app_container_state() -> str | None:
+    """The app container's compose state (`running`, `exited`, …; None when
+    the listing is fine but the container is not in it) — the second look
+    when the route does not answer. `"unknown"` when the listing itself
+    could not be read (the daemon not answering on a starved host): that
+    is nobody's verdict, never a dead app."""
+    from .liveness import container_state
+    base = ["docker", "compose", "ps", "-a"]
+    for argv in (base + ["--format", "json", "app"], base + ["app"]):
+        try:
+            proc = subprocess.run(argv, cwd=REPO, timeout=30, check=False,
+                                  capture_output=True, text=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return "unknown"
+        if proc.returncode == 0:
+            return container_state(proc.stdout)
+    return "unknown"
+
+
+def probe_app_live() -> str:
+    """`ok` when /health/live answers, `slow` when it does not but the
+    container is running (a starved event loop: heartbeat, no bake work),
+    `unknown` when the container listing could not be read (hold, spend
+    nothing), `down` when the container is not running or not listed."""
     try:
         proc = subprocess.run(
             ["docker", "compose", "exec", "-T", "app", "python", "-c",
-             "import urllib.request as u; "
-             "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)"],
-            cwd=REPO, timeout=10, check=False,
+             LIVE_PROBE_PY],
+            cwd=REPO, timeout=LIVE_PROBE_TIMEOUT_S, check=False,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        alive = proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
+        alive = False
+    if alive:
+        return "ok"
+    state = app_container_state()
+    if state == "running":
+        return "slow"
+    return "unknown" if state == "unknown" else "down"
 
 
 def _checkout_digest() -> str:
@@ -292,7 +335,7 @@ def running_app_digest() -> str | None:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "printenv", "DEVCAKE_APP_DIGEST"],
-            cwd=REPO, text=True, timeout=15).strip()
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S).strip()
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return out or None
@@ -423,7 +466,7 @@ def keep_set_mtime() -> float | None:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "stat", "-c", "%Y", f"/data/{KEEP_SET}"],
-            cwd=REPO, text=True, timeout=15,
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S,
             stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
@@ -819,8 +862,8 @@ def main(argv: list[str] | None = None) -> int:
     rotate_watch_log(watch_log)
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
-    down_streak = 0
-    down_elapsed = 0.0
+    clock = AppClock()
+    holding = False
     last_state: str | None = None
     last_trees: float | None = None
     last_keep: float | None = None
@@ -828,28 +871,53 @@ def main(argv: list[str] | None = None) -> int:
     cached_trees: float | None = None
     while True:
         rotate_watch_log(watch_log)
-        healthy = probe_app_live()
-        if not healthy:
-            down_streak += 1
-            remaining = UNHEALTHY_BUDGET_S - down_elapsed
-            if remaining <= 0 or unhealthy_verdict(elapsed_s=down_elapsed):
-                rec = emit_event(work, {
-                    "event": "down",
-                    "detail": "app /health/live failed — baker exiting",
-                })
-                ship_dying_words(rec)
-                print("dev_factory: app is not healthy — exiting "
-                      "(restart with devcake up)", flush=True)
-                return 1
-            delay = min(unhealthy_backoff_s(down_streak), remaining)
-            print(f"dev_factory: app /health/live failed "
-                  f"(streak={down_streak}, ~{remaining:.0f}s budget left; "
+        liveness = probe_app_live()
+        was_slow = clock.slow_since is not None
+        action, delay = app_gate(liveness, clock, now=time.monotonic())
+        if action == "exit":
+            rec = emit_event(work, {
+                "event": "down",
+                "detail": "app container is not running — baker exiting",
+            })
+            ship_dying_words(rec)
+            print("dev_factory: app container is not running — exiting "
+                  "(restart with devcake up)", flush=True)
+            return 1
+        if action == "hold":
+            # the daemon is not answering (a starved host): nobody's
+            # verdict — hold at the short interval, spend no budget
+            if not holding:
+                print("dev_factory: docker is not answering — holding; "
+                      "no budget spent until the container can be listed",
+                      flush=True)
+                holding = True
+            time.sleep(delay)
+            continue
+        if holding:
+            print("dev_factory: docker answers again", flush=True)
+            holding = False
+        if action == "wait":
+            remaining = UNHEALTHY_BUDGET_S - (time.monotonic() - (clock.down_since or 0.0))
+            print(f"dev_factory: app container is not running "
+                  f"(streak={clock.streak}, ~{remaining:.0f}s budget left; "
                   f"backoff {delay:.0f}s)", flush=True)
             time.sleep(delay)
-            down_elapsed += delay
             continue
-        down_streak = 0
-        down_elapsed = 0.0
+        if action == "heartbeat" and liveness == "slow":
+            # a running container whose event loop cannot answer the route
+            # (a starved host): alive, so keep the heartbeat fresh and skip
+            # the bake work; one line on the transition, not one per tick
+            if not was_slow:
+                print("dev_factory: app is slow — container running but "
+                      "/health/live took longer than its budget; heartbeat "
+                      "only, no bake work until it answers", flush=True)
+            publish_status(work, _read_local_status(work)
+                           or {"state": "ready", "jobs": []})
+            time.sleep(delay)
+            continue
+        if was_slow:
+            print("dev_factory: app answers again — resuming bake work",
+                  flush=True)
         trees = trees_mtime(REPO)
         keep_m = keep_set_mtime()
         prune_pending = compose_read(PRUNE_REQUEST) is not None

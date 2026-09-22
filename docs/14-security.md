@@ -587,7 +587,10 @@ contract:
   (headless shell idle ≈150 MB, active pages 300–800 MB), so set
   `container_limits.memory_mb` with the browser working set in mind for
   browser-using fleets, and budget host RAM as
-  `concurrency × container_limits.memory_mb`.
+  `concurrency × container_limits.memory_mb` — and host cores as
+  `concurrency × container_limits.cpus + 1` for the control plane
+  (`/health.capacity` says when the fleet outgrows the host; `13` host
+  sizing).
 - Protocol hardens: ~~credential-upload filename allowlist + size cap~~
   (`secrets.require_credential_ref` + `MAX_CREDENTIAL_FILE_BYTES` + atomic
   `write_credential_file`); ~~PMO `download_asset` host allowlist / redirect

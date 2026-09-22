@@ -22,7 +22,7 @@ BAKER_LOG_NAME = "harness_baker.jsonl"
 OUTBOX_DIR = "harness_outbox"
 PRUNE_REQUEST_NAME = "harness_prune_request.json"
 CURSOR_NAME = "state/baker_log.offset"
-HEARTBEAT_STALE_SECONDS = 30
+HEARTBEAT_STALE_SECONDS = 60   # a slow baker tick = probe budget + heartbeat exec + retry (baker guard test)
 
 IDLE: dict[str, Any] = {"state": "idle", "jobs": [], "detail": ""}
 

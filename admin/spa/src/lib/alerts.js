@@ -333,6 +333,25 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // Host capacity (/health.capacity): Dev containers may demand
+  // global_max × cpus; the control plane starves once that exceeds the
+  // cores minus one (the app's event loop then answers in tens of seconds
+  // and the baker reads it as slow). Dismissable — the operator may know.
+  const cap = health.capacity || {};
+  if (cap.oversubscribed === true) {
+    alerts.push({
+      id: "capacity",
+      severity: "warning",
+      dismissable: true,
+      title: "Host is oversubscribed for the configured fleet",
+      body:
+        `Dev containers can demand ${cap.demand_cpus} CPUs ` +
+        `(${cap.concurrency} × ${cap.cpus_per_dev}) on a ${cap.host_cpus}-core host; ` +
+        "the control plane starves under load. Raise the host, or lower " +
+        "Global max Devs / CPUs under Settings → Limits.",
+    });
+  }
+
   // The shared HTTP pool next to what the kernel holds (/health.http_pool).
   // Dead sockets beyond the pool's count are connections the pool dropped
   // without closing; once they reach the 64-connection cap every tracker

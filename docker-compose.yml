@@ -44,6 +44,13 @@ services:
       # (live-verified 2026-07-17) — same default as the gitea service below
       GITEA_ADMIN_USER: ${GITEA_ADMIN_USER:-devcakeadmin}
     restart: unless-stopped
+    # CPU weight under contention (not a cap, not a reservation): Dev
+    # containers run at the default weight of 1024 each, so with five of
+    # them on a two-core host the app's single event loop answered its
+    # liveness route in tens of seconds (2026-09 starvation episode). The
+    # control plane now wins the contest; it still cannot make cores —
+    # /health.capacity and its alert say when the fleet outgrows the host.
+    cpu_shares: 4096
     # the container default (1,024 open files, soft) starved every boot
     # fan-out into "too many open files" once the forge pools sat near it
     # (2026-09 field incident); the hard cap is far higher, this is free.
@@ -72,14 +79,18 @@ services:
       dagu:        { condition: service_healthy }
     networks: [control]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)"]
-      interval: 10s
-      timeout: 5s
+      # the same probe text as devcake up and the host baker (a structural
+      # test pins the three); ten seconds because a starved event loop
+      # answers this constant-returning route late, and late is not dead
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health/live', timeout=10)"]
+      interval: 15s
+      timeout: 12s
       retries: 5
       start_period: 15s
 
   dagu:
     image: ghcr.io/dagucloud/dagu:2.16.3@sha256:60a0994314785e25a9190905cffea21b828d51d054308526ff3f49ca5b30bee5  # docs/13 §4 (ADR-0024 §7 rider)
+    cpu_shares: 2048                     # control-plane weight under contention (see app)
     restart: unless-stopped
     ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open
@@ -155,6 +166,7 @@ services:
 
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    cpu_shares: 2048                     # control-plane weight under contention (see app)
     restart: unless-stopped
     # 2026-08 evaluation hardening:
     # - maxmemory 1gb + noeviction: the flood backstop. The app XACK+XDELs

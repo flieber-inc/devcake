@@ -13,6 +13,11 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+## v0.6.9 (2026-09-22)
+
+Patch release in the v0.6 "Kentucky Butter" line. Ships with `devcake-cli` 0.1.10 — upgrade the CLI before `devcake up --release v0.6.9`. No profile change. The Dev-side clone change re-bakes every harness image at the re-pin, and compose recreates `app`, `dagu` and `redis` for their new CPU weight; a host under a resize keeps its concurrency — `/health.capacity` says whether the fleet still outgrows the cores.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.9).
+
 - **Fixed — deadlines never cancel a socket holder (ADR-0044).** A wait
   that cancelled an outbound call mid TLS handshake leaked the socket; on a
   starved host the leak reached the shared pool's cap and every tracker and

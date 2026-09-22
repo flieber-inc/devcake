@@ -49,12 +49,13 @@ from .core import (
 )
 from .run import tee_run
 from .liveness import (
-    SENTINEL,
-    UNHEALTHY_BUDGET_S,
+    app_gate,
+    AppClock,
     classify_app,
+    SENTINEL,
+    SLOW_RETRY_S,
     tick_decision,
-    unhealthy_backoff_s,
-    unhealthy_verdict,
+    UNHEALTHY_BUDGET_S,
 )
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
 KEEP_SET = "harness_keep_set.json"
@@ -853,8 +854,7 @@ def main(argv: list[str] | None = None) -> int:
     rotate_watch_log(watch_log)
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
-    down_streak = 0
-    down_elapsed = 0.0
+    clock = AppClock()
     last_state: str | None = None
     last_trees: float | None = None
     last_keep: float | None = None
@@ -862,28 +862,40 @@ def main(argv: list[str] | None = None) -> int:
     cached_trees: float | None = None
     while True:
         rotate_watch_log(watch_log)
-        healthy = probe_app_live()
-        if not healthy:
-            down_streak += 1
-            remaining = UNHEALTHY_BUDGET_S - down_elapsed
-            if remaining <= 0 or unhealthy_verdict(elapsed_s=down_elapsed):
-                rec = emit_event(work, {
-                    "event": "down",
-                    "detail": "app /health/live failed — baker exiting",
-                })
-                ship_dying_words(rec)
-                print("dev_factory: app is not healthy — exiting "
-                      "(restart with devcake up)", flush=True)
-                return 1
-            delay = min(unhealthy_backoff_s(down_streak), remaining)
-            print(f"dev_factory: app /health/live failed "
-                  f"(streak={down_streak}, ~{remaining:.0f}s budget left; "
+        liveness = probe_app_live()
+        was_slow = clock.slow_since is not None
+        action, delay = app_gate(liveness, clock, now=time.monotonic())
+        if action == "exit":
+            rec = emit_event(work, {
+                "event": "down",
+                "detail": "app container is not running — baker exiting",
+            })
+            ship_dying_words(rec)
+            print("dev_factory: app container is not running — exiting "
+                  "(restart with devcake up)", flush=True)
+            return 1
+        if action == "wait":
+            remaining = UNHEALTHY_BUDGET_S - (time.monotonic() - (clock.down_since or 0.0))
+            print(f"dev_factory: app container is not running "
+                  f"(streak={clock.streak}, ~{remaining:.0f}s budget left; "
                   f"backoff {delay:.0f}s)", flush=True)
             time.sleep(delay)
-            down_elapsed += delay
             continue
-        down_streak = 0
-        down_elapsed = 0.0
+        if action == "heartbeat" and liveness == "slow":
+            # a running container whose event loop cannot answer the route
+            # (a starved host): alive, so keep the heartbeat fresh and skip
+            # the bake work; one line on the transition, not one per tick
+            if not was_slow:
+                print("dev_factory: app is slow — container running but "
+                      "/health/live took longer than its budget; heartbeat "
+                      "only, no bake work until it answers", flush=True)
+            publish_status(work, _read_local_status(work)
+                           or {"state": "ready", "jobs": []})
+            time.sleep(delay)
+            continue
+        if was_slow:
+            print("dev_factory: app answers again — resuming bake work",
+                  flush=True)
         trees = trees_mtime(REPO)
         keep_m = keep_set_mtime()
         prune_pending = compose_read(PRUNE_REQUEST) is not None

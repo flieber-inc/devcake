@@ -2589,3 +2589,81 @@ def test_live_probe_gives_a_starved_loop_ten_seconds():
     assert "timeout=10" in watch.LIVE_PROBE_PY
     assert "/api/v1/health/live" in watch.LIVE_PROBE_PY
     assert watch.LIVE_PROBE_TIMEOUT_S == 20
+
+
+class _StopLoop(Exception):
+    pass
+
+
+def _loop_rig(monkeypatch, tmp_path, script, *, stop_after_sleeps=None):
+    """Drive `watch.main()` with a scripted docker, a fake wall clock that
+    advances by each sleep, no Dockerfile read and no bake work."""
+    _load_factory()
+    import dev_factory.watch as watch
+    work = tmp_path / "work"
+    monkeypatch.setenv("DEVCAKE_FACTORY_WORK", str(work))
+    monkeypatch.setenv("DEVCAKE_FACTORY_DIR", str(tmp_path))
+    monkeypatch.setenv("DEVCAKE_FACTORY_LOG", str(tmp_path / "watch.log"))
+    monkeypatch.setenv("OO_INGEST_EMAIL", "")
+    monkeypatch.setattr(watch, "_dockerfile_text", lambda: "")
+    monkeypatch.setattr(watch, "house_from_dockerfile", lambda text: {})
+    run = _scripted_run(script)
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    clock = {"now": 0.0, "sleeps": []}
+
+    def sleep(s):
+        clock["sleeps"].append(s)
+        clock["now"] += s
+        if stop_after_sleeps is not None and len(clock["sleeps"]) >= stop_after_sleeps:
+            raise _StopLoop()
+
+    monkeypatch.setattr(watch.time, "sleep", sleep)
+    monkeypatch.setattr(watch.time, "monotonic", lambda: clock["now"])
+
+    def no_bake(**kwargs):
+        raise AssertionError("bake work must not run")
+    monkeypatch.setattr(watch, "once", no_bake)
+    return watch, work, run, clock
+
+
+def test_main_exits_only_when_the_app_container_is_not_running(monkeypatch, tmp_path):
+    """A container that is not running spends the wall-clock budget, then
+    the baker exits 1 with its dying words in the outbox."""
+    fail = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    exited = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"exited"}\n')
+    watch, work, run, clock = _loop_rig(monkeypatch, tmp_path, {"probe": fail, "ps": exited},
+                                        stop_after_sleeps=100)   # a loop that never exits fails, not hangs
+    assert watch.main() == 1
+    assert sum(clock["sleeps"]) >= watch.UNHEALTHY_BUDGET_S
+    events = [json.loads(l) for p in (work / "harness_outbox").glob("*.jsonl")
+              for l in p.read_text().splitlines()]
+    assert any(e.get("event") == "down" for e in events)
+
+
+def test_main_heartbeats_through_a_slow_app(monkeypatch, tmp_path, capsys):
+    """Container running, route unanswered: the baker stamps its heartbeat
+    (so /health never paints it dead), does no bake work, prints ONE
+    transition line, and retries at the short interval — it never exits."""
+    slow = subprocess.TimeoutExpired(["x"], 20)
+    running = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"running"}\n')
+    watch, work, run, clock = _loop_rig(
+        monkeypatch, tmp_path, {"probe": slow, "ps": running}, stop_after_sleeps=3)
+    with pytest.raises(_StopLoop):
+        watch.main()
+    assert clock["sleeps"] == [watch.SLOW_RETRY_S] * 3
+    status = json.loads((work / watch.STATUS).read_text())
+    assert status.get("heartbeat_at")
+    assert any(c[:5] == ["docker", "compose", "exec", "-T", "app"] and "tee" in c
+               and f"/data/{watch.STATUS}" in c for c in run.calls), "heartbeat shipped into the app"
+    out = capsys.readouterr().out
+    assert out.count("app is slow") == 1
+
+
+def test_slow_tick_period_stays_under_the_heartbeat_stale_threshold():
+    """A slow tick spends the probe's budget before it can stamp; the
+    retry plus that budget must stay inside the app's stale threshold
+    (an independent value from the app side)."""
+    _load_factory()
+    import dev_factory.watch as watch
+    from devcake.bake_status import HEARTBEAT_STALE_SECONDS
+    assert watch.SLOW_RETRY_S + watch.LIVE_PROBE_TIMEOUT_S < HEARTBEAT_STALE_SECONDS

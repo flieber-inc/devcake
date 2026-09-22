@@ -967,6 +967,24 @@ until that run exists, field evidence below stays operator-self-reported.
   `attach_merged_changeset_to_pmo` toggle and its Policies card. Runs API /
   CSV gain `delivery_to`. Docs 02–06, 08, 10, 11, 14; ADR-0016/0020/0034.
 
+- **Deadlines never cancel a socket holder** (ADR-0044, 2026-09-22): a
+  cancel that lands during a TLS handshake leaks the socket (httpcore cleans
+  up on `Exception` only); on a starved host the health builder's per-probe
+  cancels filled the shared pool with dead connections and every tracker and
+  forge call failed for 40 minutes. `devcake.deadline.bounded` is now the
+  one way to bound a wait — shielded, the work finishes in the background,
+  its late outcome logged. The branch-protection walk is a background
+  single-flight refresh, the tracker probe writes a `probe pending` row, the
+  forge sweep is one in-flight task the next cycle waits on, a slow peer
+  read is a miss for that resolution only. A structure guard bans
+  `asyncio.timeout` / `wait_for` around HTTP (four allowlisted non-holders).
+  `/health.http_pool` meters the pool against the kernel's sockets; `devcake
+  status` prints it; Overview alerts as the pile grows. A network error with
+  no message names its class. Docs 11, 13, 15 §7a. Ships as `devcake-cli`
+  0.1.10. Follow-up: six more adapters still format `network: {e}` (the
+  issue trackers, the Dagu executor, Gitea provisioning) — same one-line
+  helper, not done here.
+
 ### Field evidence (receipted)
 
 - **Discoveries in full + the status comment's Discoveries section**

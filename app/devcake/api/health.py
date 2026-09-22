@@ -71,7 +71,7 @@ _protection_cache: dict = {"ts": 0.0, "value": {}, "refreshing": False}
 # vendor needs at most one look a minute, not one per SPA poll. Keyed by
 # (instance, team_key) so a team repoint reprobes immediately.
 _PMO_PROBE_TTL = 60
-_PMO_PROBE_TIMEOUT = 5   # one sick PMO must not stall /health (audit F3)
+_PMO_PROBE_TIMEOUT = 5   # one sick PMO must not stall /health (audit F3); the probe itself runs on (ADR-0044)
 _pmo_probe_cache: dict = {}
 
 

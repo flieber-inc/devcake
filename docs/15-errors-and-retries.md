@@ -388,3 +388,38 @@ a **scheduled-task fire failure** is recorded as `failed` in the
 `state/cron_outcomes.json` ledger — three consecutive automatic
 failures set `cron_degraded` (`/health` + SPA alert) and pause only the
 schedule; Run-now keeps working and one success re-arms.
+
+## 7a. Deadline policy (ADR-0044)
+
+A deadline on a coroutine that may hold a network socket **waits, it never
+cancels**. Cancelling mid TLS handshake leaks the socket (httpcore cleans
+up on `Exception` only), and on a starved host the leaked sockets reached
+the shared pool's cap and every tracker and forge call failed for 40
+minutes.
+
+- **Outbound HTTP is bounded by httpx's own timeouts** (connect / read /
+  write / pool, per adapter). Those raise ordinary exceptions and close
+  their connection; the *probe* and *loop guard* contracts above handle
+  them as before.
+- **A caller-side wait goes through `devcake.deadline.bounded(aw, timeout)`**:
+  the work runs as a strongly referenced background task, the caller
+  waits on a shielded view of it, and on expiry receives `pending` while
+  the task finishes; its late outcome is logged by the module. A task
+  handed back in is reused, so a caller that missed its deadline waits on
+  the same work next time. `spawn(aw)` is the same without a wait.
+- **Vocabulary for the caller's surface:** `probe pending` (a tracker probe
+  still running: `ok: null`, not red), an empty `forge_protection` map
+  until the first background walk lands, a forge sweep "exceeded its
+  budget — the next cycle waits on the same sweep", a slow peer read that
+  counts as a miss for this resolution only.
+- **Enforced** by `test_deadlines_never_cancel_a_socket_holder`
+  (`app/tests/test_structure_guards.py`): no `asyncio.timeout` /
+  `asyncio.wait_for` anywhere in `app/devcake` except an allowlist of
+  non-holders with one reason each — the git subprocess runner (a cancel
+  kills the process group), the in-process SSE queue, the shutdown drain
+  in `api/main.py` (the pool closes next), and `deadline.py` itself.
+- **Visibility:** `/health.http_pool` — the pool's connections next to the
+  kernel's `:443` sockets by state, the excess as `leaked_estimate`, and
+  the number of background waits still running; `devcake status` prints
+  it; the admin Overview alerts as the pile grows and near the cap.
+

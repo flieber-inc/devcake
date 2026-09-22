@@ -78,3 +78,41 @@ def test_close_adapters_on_rebuild_leaves_the_pool_alive():
         await asyncio.sleep(0)
     run(scenario())
     assert not client.is_closed
+
+
+# ── pool meter (ADR-0044 visibility) ─────────────────────────────────────────
+# One /proc/net/tcp line: "sl local rem st ..." — rem port 01BB = 443.
+_TCP_HDR = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+
+
+def _tcp_line(idx, state):
+    return (f"   {idx}: 0100007F:9C40 4EFB41AC:01BB {state} 00000000:00000000 "
+            "00:00000000 00000000  1000        0 12345 1 0000000000000000 "
+            "100 0 0 10 0\n")
+
+
+def test_pool_report_counts_connections_and_sockets(tmp_path):
+    """Sockets to :443 by state come from the process's /proc/net/tcp;
+    `leaked_estimate` is what the kernel holds beyond what the pool knows."""
+    from devcake import deadline
+    from devcake.adapters.http import pool_report
+    (tmp_path / "tcp").write_text(
+        _TCP_HDR + "".join(_tcp_line(i, "01") for i in range(3))
+        + "".join(_tcp_line(i, "08") for i in range(3, 5)))
+    (tmp_path / "tcp6").write_text(_TCP_HDR)
+    shared_client(20)                                # one client, no connections yet
+    rep = pool_report(proc_net=tmp_path)
+    assert rep["clients"] == 1
+    assert rep["connections"] == 0
+    assert rep["max_connections"] == 64
+    assert rep["sockets"] == {"established": 3, "close_wait": 2}
+    assert rep["leaked_estimate"] == 5
+    assert rep["background"] == deadline.pending() == 0
+
+
+def test_pool_report_without_proc_is_honest(tmp_path):
+    from devcake.adapters.http import pool_report
+    rep = pool_report(proc_net=tmp_path / "missing")
+    assert rep["sockets"] is None
+    assert rep["leaked_estimate"] is None
+    assert rep["max_connections"] == 64

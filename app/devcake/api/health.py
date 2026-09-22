@@ -23,6 +23,7 @@ from ..bake_status import annotate_liveness, read_bake_status
 from ..staffing import app_digest, receipt_summary
 from ..domain.claims import claims_depth, claims_queue_capped
 from .. import deadline
+from ..adapters.http import pool_report
 from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..ports.pmo import PMOBudgetExceeded
 from ..prompts import templates as prompt_templates
@@ -540,6 +541,10 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
             "leaked": workspaces.leaked_count(store) if workspaces else 0,
             "disk": workspaces.disk_stats() if workspaces else None,
         },
+        # ADR-0044: the shared HTTP pool next to what the kernel holds —
+        # dead sockets beyond the pool's count are the leak class that once
+        # starved every tracker and forge call for 40 minutes
+        "http_pool": pool_report(),
         "harness_pins": _harness_pins(dev_types, receipt_store, bake),
         "bake_status": bake,
     }

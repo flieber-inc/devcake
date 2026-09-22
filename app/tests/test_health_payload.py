@@ -874,3 +874,14 @@ def test_health_payload_carries_the_discovery_drain(monkeypatch):
     assert got["discovery_drain_warnings"] == {"eng": msg}
     assert got["steward_degraded"] is None
 
+
+
+def test_health_payload_carries_the_http_pool_meter(monkeypatch):
+    """/health.http_pool is the pool meter verbatim (ADR-0044 visibility):
+    the SPA alert, `devcake status` and the operator read one source."""
+    meter = {"clients": 1, "connections": 2, "max_connections": 64,
+             "sockets": {"established": 2, "close_wait": 9},
+             "leaked_estimate": 9, "background": 0}
+    monkeypatch.setattr(health_mod, "pool_report", lambda: meter)
+    payload = _payload(_forge_runtime(), monkeypatch)
+    assert payload["http_pool"] == meter

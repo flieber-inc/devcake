@@ -613,3 +613,46 @@ def test_compose_project_name_comes_from_the_env_then_the_file(monkeypatch, tmp_
     assert up_mod._compose_project(tmp_path) == "devcake"
     monkeypatch.setenv("COMPOSE_PROJECT_NAME", "other")
     assert up_mod._compose_project(tmp_path) == "other"
+
+
+def test_status_reports_the_http_pool_meter(monkeypatch, tmp_path, capsys):
+    """The pool meter (ADR-0044): one line, and the remedy once dead
+    sockets pile up; `--json` carries the block verbatim."""
+    _ensure_cli_importable()
+    import json as _json
+    import devcake_cli.main as cli_main
+    import devcake_cli.status as status_mod
+    _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def _fake_run(argv, **kwargs):
+        if argv[:3] == ["docker", "compose", "ps"]:
+            return subprocess.CompletedProcess(argv, 0, stdout='{"Name":"app"}\n')
+        return subprocess.CompletedProcess(argv, 1, stderr="no")
+    health = {"http_pool": {
+        "clients": 1, "connections": 3, "max_connections": 64,
+        "sockets": {"established": 3, "close_wait": 0},
+        "leaked_estimate": 0, "background": 1}}
+    monkeypatch.setattr(status_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(status_mod, "_fetch_health",
+                        lambda root, **kw: (health, None))
+    assert cli_main.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert ("http_pool: 3/64 connections; :443 sockets 3 established, "
+            "0 close_wait; leaked_estimate 0; background tasks 1") in out
+    assert "restart the app" not in out
+
+    health["http_pool"].update({"sockets": {"established": 3, "close_wait": 20},
+                                "leaked_estimate": 20})
+    cli_main.main(["status"])
+    out = capsys.readouterr().out
+    assert "    ! leaked network connections are piling up" in out
+    assert "restart the app" in out
+
+    cli_main.main(["status", "--json"])
+    body = _json.loads(capsys.readouterr().out)
+    assert body["http_pool"] == health["http_pool"]
+
+    del health["http_pool"]                      # an older app: no line
+    cli_main.main(["status"])
+    assert "http_pool" not in capsys.readouterr().out

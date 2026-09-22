@@ -233,3 +233,29 @@ if (failed) {
   process.exit(1);
 }
 console.log("alerts.mjs: all checks passed");
+
+// ADR-0044: dead network connections beyond what the pool knows about. A
+// warning as they pile up, critical near the 64-connection cap (every tracker
+// and repository call fails once it is reached); the remedy is a restart.
+check("leaked network connections are a warning, then critical near the cap", () => {
+  const warn = deriveAlerts({
+    http_pool: { connections: 2, max_connections: 64,
+                 sockets: { established: 2, close_wait: 8 }, leaked_estimate: 8 },
+  }).find((a) => a.id === "http-pool-leak");
+  assert.ok(warn, "http-pool-leak warning missing");
+  assert.equal(warn.severity, "warning");
+  assert.match(warn.body, /8/);
+  assert.match(warn.body, /64/);
+  assert.match(warn.body, /restart the app/i);
+  const crit = deriveAlerts({
+    http_pool: { connections: 2, max_connections: 64,
+                 sockets: { established: 50, close_wait: 10 }, leaked_estimate: 58 },
+  }).find((a) => a.id === "http-pool-leak");
+  assert.equal(crit.severity, "critical");
+  const quiet = deriveAlerts({
+    http_pool: { connections: 5, max_connections: 64,
+                 sockets: { established: 5, close_wait: 2 }, leaked_estimate: 2 },
+  });
+  assert.equal(quiet.some((a) => a.id === "http-pool-leak"), false);
+  assert.equal(deriveAlerts({}).some((a) => a.id === "http-pool-leak"), false);
+});

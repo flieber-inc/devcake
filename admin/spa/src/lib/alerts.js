@@ -333,6 +333,30 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // The shared HTTP pool next to what the kernel holds (/health.http_pool).
+  // Dead sockets beyond the pool's count are connections the pool dropped
+  // without closing; once they reach the 64-connection cap every tracker
+  // and repository call fails. Warning as they pile up, critical near the
+  // cap; the remedy is a restart. Thresholds match devcake status.
+  const pool = health.http_pool || {};
+  const poolSockets = pool.sockets || {};
+  const closeWait = poolSockets.close_wait || 0;
+  const leaked = pool.leaked_estimate || 0;
+  if (closeWait >= 8 || leaked >= 16) {
+    const cap = pool.max_connections || 64;
+    const near = leaked >= 48;
+    alerts.push({
+      id: "http-pool-leak",
+      severity: near ? "critical" : "warning",
+      title: "Leaked network connections are piling up",
+      body:
+        `${leaked} socket(s) beyond the ${pool.connections || 0} the pool ` +
+        `knows about (${closeWait} already closed by the far end), against a ` +
+        `cap of ${cap} connections. Every tracker and repository call fails ` +
+        "once the cap is reached. Restart the app if the number keeps climbing.",
+    });
+  }
+
   // Host baker is a process started by devcake up, not a container. If its
   // heartbeat on /data is missing or stale, pins will not compile — same
   // honesty class as a tripped breaker: critical, not dismissable.

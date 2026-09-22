@@ -2506,3 +2506,86 @@ def test_app_gate_budget_is_wall_clock_and_only_a_dead_container_spends_it():
     for t in (0.0, 1000.0, 5000.0):
         assert factory.app_gate("slow", slow, now=t) == ("heartbeat", factory.SLOW_RETRY_S)
     assert slow.slow_since == 0.0
+
+
+def _scripted_run(script):
+    """A `subprocess.run` double keyed on the argv shape: the app probe
+    (`compose exec … python -c`) and the container listing (`compose ps`).
+    `script[key]` is a CompletedProcess or an exception to raise; every
+    other argv succeeds with empty output. Records the calls."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[:3] == ["docker", "compose", "exec"] and "python" in argv:
+            outcome = script.get("probe")
+        elif argv[:3] == ["docker", "compose", "ps"]:
+            outcome = script.get("ps")
+        else:
+            outcome = None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if outcome is None:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return outcome
+    run.calls = calls
+    return run
+
+
+def test_probe_app_live_is_tri_state(monkeypatch):
+    """A probe that times out against a RUNNING container is `slow`; a
+    failed probe against a container that is not running (or not listed)
+    is `down`; a green probe is `ok` and never lists containers."""
+    _load_factory()
+    import dev_factory.watch as watch
+    ok = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    fail = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    running = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"running"}\n')
+    exited = subprocess.CompletedProcess([], 0, stdout='{"Service":"app","State":"exited"}\n')
+    nothing = subprocess.CompletedProcess([], 0, stdout="")
+
+    run = _scripted_run({"probe": subprocess.TimeoutExpired(["x"], 20), "ps": running})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "slow"
+
+    run = _scripted_run({"probe": fail, "ps": exited})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "down"
+
+    run = _scripted_run({"probe": fail, "ps": nothing})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "down"
+
+    run = _scripted_run({"probe": ok, "ps": exited})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "ok"
+    assert not any(c[:3] == ["docker", "compose", "ps"] for c in run.calls)
+
+
+def test_app_container_state_falls_back_to_the_plain_listing(monkeypatch):
+    """Older compose has no --format json: the second call reads the table."""
+    _load_factory()
+    import dev_factory.watch as watch
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(list(argv))
+        if "--format" in argv:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unknown flag")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="NAME  SERVICE  STATUS\ndevcake-app-1  app  Exited (137) 2 minutes ago\n")
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.app_container_state() == "exited"
+    assert seen[0][:3] == ["docker", "compose", "ps"] and "-a" in seen[0] and "app" in seen[0]
+    assert len(seen) == 2 and "--format" not in seen[1]
+
+
+def test_live_probe_gives_a_starved_loop_ten_seconds():
+    """The probe text the baker, `devcake up` and the compose healthcheck
+    share: a constant-returning route that takes 12–60 s on a starved
+    two-core host must not read as dead at 3 s."""
+    _load_factory()
+    import dev_factory.watch as watch
+    assert "timeout=10" in watch.LIVE_PROBE_PY
+    assert "/api/v1/health/live" in watch.LIVE_PROBE_PY
+    assert watch.LIVE_PROBE_TIMEOUT_S == 20

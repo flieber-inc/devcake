@@ -267,18 +267,52 @@ def compose_append(rel: str, text: str) -> None:
         raise RuntimeError(f"cannot append {dest} (exit {proc.returncode})")
 
 
-def probe_app_live() -> bool:
-    """Same check as devcake up _app_live — the existing health chokepoint."""
+# The liveness probe text, byte-equal in three places: here, `devcake up`
+# (cli/devcake_cli/up.py LIVE_PROBE_PY) and the compose healthcheck
+# (docker-compose.yml, service app). A structural test pins the three
+# together; the baker only imports scripts/dev_factory and the PyPI CLI
+# ships without scripts/, so a shared constant would be a fiction. Ten
+# seconds: the route returns a constant, but on a CPU-starved host the
+# event loop answers late and the baker must not read that as dead.
+LIVE_PROBE_PY = (
+    "import urllib.request as u; "
+    "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=10)"
+)
+LIVE_PROBE_TIMEOUT_S = 20   # the outer bound: exec start-up + the route
+
+
+def app_container_state() -> str | None:
+    """The app container's compose state (`running`, `exited`, …; None when
+    not listed) — the second look when the route does not answer."""
+    from .liveness import container_state
+    base = ["docker", "compose", "ps", "-a"]
+    for argv in (base + ["--format", "json", "app"], base + ["app"]):
+        try:
+            proc = subprocess.run(argv, cwd=REPO, timeout=30, check=False,
+                                  capture_output=True, text=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode == 0:
+            return container_state(proc.stdout)
+    return None
+
+
+def probe_app_live() -> str:
+    """`ok` when /health/live answers, `slow` when it does not but the
+    container is running (a starved event loop: heartbeat, no bake work),
+    `down` when the container is not running or not listed."""
     try:
         proc = subprocess.run(
             ["docker", "compose", "exec", "-T", "app", "python", "-c",
-             "import urllib.request as u; "
-             "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)"],
-            cwd=REPO, timeout=10, check=False,
+             LIVE_PROBE_PY],
+            cwd=REPO, timeout=LIVE_PROBE_TIMEOUT_S, check=False,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        alive = proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
+        alive = False
+    if alive:
+        return "ok"
+    return "slow" if app_container_state() == "running" else "down"
 
 
 def _checkout_digest() -> str:

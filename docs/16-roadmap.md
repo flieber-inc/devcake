@@ -985,6 +985,18 @@ until that run exists, field evidence below stays operator-self-reported.
   issue trackers, the Dagu executor, Gitea provisioning) — same one-line
   helper, not done here.
 
+- **GitLab hygiene from a contributor's audit** (2026-09-22): the merge
+  request file listing walks the paginated `/diffs` endpoint (the
+  `/changes` endpoint is deprecated since GitLab 15.7 and leaves in API v5;
+  its `access_raw_diffs` retry read whole diffs from Gitaly with no size
+  cap) — same fields, `paginate_rest`'s ceiling flag, `too_large` entries
+  keep their path. Every git child on the app side (mirror fetch,
+  `ls-remote`, LFS, claims push) and every clone over the network on the
+  Dev side carry git's low-speed abort (under 1 kB/s for 60 s) through one
+  env chokepoint each, pinned equal by a test; the 900 s budget stays as
+  the outer bound. Neither caused the 2026-09 incidents (zero `/changes`
+  calls in 40 h on the host) — hygiene. Docs 06, 07.
+
 ### Field evidence (receipted)
 
 - **A two-core host running five Dev containers at once** (2026-09-22):

@@ -89,7 +89,7 @@ hand-run container — rollback compat is not a pre-v1 concern).
 
 There is **no** `/workspace/out/transcript/` directory. The entrypoint assembles the session transcript **in memory** (`assemble_transcript`) and ships it as `transcript_md` on the `run.artifacts` payload; the app posts it as `{seq}_{TYPE}.md` on the PMO feed.
 
-The workspace is prepared entirely by the container **entrypoint** (not the app): stage-1 env from Dagu, stage-2 (secrets, repo, prompt, …) via Redis `runspec.get` (§3), then the entrypoint materializes the activity folder **clone-first** — a full-history `git clone` of the mission's `activity-*` repo (ADR-0014 D4; `git log -p ACTIVITY.md` works in-container) with the Redis request/reply channel (`activity.get`, `09-messaging.md` §3) as the degraded fallback — clones the repo using injected credentials, runs the Dev Type's MCP setup commands, and only then launches the harness.
+The workspace is prepared entirely by the container **entrypoint** (not the app): stage-1 env from Dagu, stage-2 (secrets, repo, prompt, …) via Redis `runspec.get` (§3), then the entrypoint materializes the activity folder **clone-first** — a full-history `git clone` of the mission's `activity-*` repo (ADR-0014 D4; `git log -p ACTIVITY.md` works in-container) with the Redis request/reply channel (`activity.get`, `09-messaging.md` §3) as the degraded fallback — clones the repo using injected credentials (a clone over the network aborts once its transfer stays under 1 kB/s for 60 s — git's low-speed abort, carried in the clone's environment; the file:// mirror clone needs none), runs the Dev Type's MCP setup commands, and only then launches the harness.
 
 ## 2. `ACTIVITY.md` format
 

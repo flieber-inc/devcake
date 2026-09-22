@@ -57,7 +57,7 @@ def clone_memory_repos(mounts, memory_dir, runner=None, failures=None):
 def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
                     runner=None, failures=None):
     """Shared mirror/askpass/LFS clone for extra and memory siblings."""
-    from .provision import mirror_clone_argv, mirror_clone_env
+    from .provision import mirror_clone_argv, mirror_clone_env, network_git_env
     runner = runner or subprocess.run
     notes = []
     for x in entries:
@@ -75,7 +75,7 @@ def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
                        env=mirror_clone_env(os.environ))
         else:
             r = runner(["git", "clone", "--depth", "1", clone_url, dest],
-                       capture_output=True, text=True, env=env)
+                       capture_output=True, text=True, env=network_git_env(env))
         if r.returncode != 0:
             notes.append(f"{label} {x.get('name', dest_name)}: clone failed "
                          f"({(r.stderr or '')[-200:]})")

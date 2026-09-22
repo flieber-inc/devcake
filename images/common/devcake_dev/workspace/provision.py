@@ -74,6 +74,29 @@ def mirror_clone_env(environ) -> dict:
     return env
 
 
+# git's low-speed abort for the clones that go over the network (a direct
+# forge clone, sibling/extra/memory repositories): under 1 kB/s for 60 s
+# aborts instead of hanging with no timeout at all. The same pair the app's
+# own git children carry (app/devcake/adapters/git.py, GIT_LOW_SPEED_*);
+# a structural test pins the two.
+GIT_LOW_SPEED_LIMIT_BPS = 1000
+GIT_LOW_SPEED_TIME_S = 60
+
+
+def network_git_env(environ) -> dict:
+    """The env for a clone over the network: the caller's env (credential
+    included — a network clone needs it) plus git's low-speed abort via
+    GIT_CONFIG_COUNT/KEY_n/VALUE_n, no prompt. Returns a copy."""
+    env = dict(environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_CONFIG_COUNT"] = "2"
+    env["GIT_CONFIG_KEY_0"] = "http.lowSpeedLimit"
+    env["GIT_CONFIG_VALUE_0"] = str(GIT_LOW_SPEED_LIMIT_BPS)
+    env["GIT_CONFIG_KEY_1"] = "http.lowSpeedTime"
+    env["GIT_CONFIG_VALUE_1"] = str(GIT_LOW_SPEED_TIME_S)
+    return env
+
+
 def mirror_clone_argv(mirror_path: str, dest: str,
                       *, depth: int | None = None) -> list:
     """`-c lfs.url=` pins the LFS endpoint to the clone's OWN mirror:

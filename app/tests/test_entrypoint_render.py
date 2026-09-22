@@ -633,6 +633,27 @@ def test_mirror_clone_env_strips_credentials():
     assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
+def test_network_git_env_carries_the_low_speed_abort():
+    """Direct forge clones and sibling clones go over HTTPS with no
+    timeout at all; the env they get carries git's low-speed abort (the
+    same pair the app's own git children use) and keeps the credential —
+    a network clone needs it. The file:// mirror clone env is untouched."""
+    from devcake.adapters.git import GIT_LOW_SPEED_LIMIT_BPS, GIT_LOW_SPEED_TIME_S
+    env = ep.network_git_env({"PATH": "/usr/bin", "DEVCAKE_FORGE_TOKEN": "tok",
+                              "GIT_ASKPASS": "/ws/.devcake/askpass.sh"})
+    assert env["PATH"] == "/usr/bin"
+    assert env["DEVCAKE_FORGE_TOKEN"] == "tok"
+    assert env["GIT_ASKPASS"] == "/ws/.devcake/askpass.sh"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_CONFIG_COUNT"] == "2"
+    assert env["GIT_CONFIG_KEY_0"] == "http.lowSpeedLimit"
+    assert env["GIT_CONFIG_VALUE_0"] == str(GIT_LOW_SPEED_LIMIT_BPS) == "1000"
+    assert env["GIT_CONFIG_KEY_1"] == "http.lowSpeedTime"
+    assert env["GIT_CONFIG_VALUE_1"] == str(GIT_LOW_SPEED_TIME_S) == "60"
+    mirror = ep.mirror_clone_env({"PATH": "/usr/bin"})
+    assert "GIT_CONFIG_COUNT" not in mirror
+
+
 def test_set_origin_cmd_shape():
     assert ep.set_origin_cmd("/ws/repo/r", "https://oauth2@gitlab.com/o/r.git") \
         == ["git", "-C", "/ws/repo/r", "remote", "set-url", "origin",

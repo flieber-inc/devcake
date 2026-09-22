@@ -19,13 +19,28 @@ log = logging.getLogger("devcake.git")
 
 GIT_TIMEOUT_SECONDS = 900   # bounds a wedged fetch; also the cold-clone budget
 
+# A network transfer that crawls (a stalled fetch, a far end that stopped
+# sending) aborts once it stays under LOW_SPEED_LIMIT bytes/s for
+# LOW_SPEED_TIME seconds, instead of sitting under the 900 s outer budget.
+# The same pair rides the Dev-side clones (images/common/devcake_dev/
+# workspace/provision.py network_git_env); a structural test pins the two.
+GIT_LOW_SPEED_LIMIT_BPS = 1000
+GIT_LOW_SPEED_TIME_S = 60
+
 # The child sees ONLY this plus the caller's overlay. PATH is required for
-# git to find its own helpers (git-remote-https, git-lfs).
+# git to find its own helpers (git-remote-https, git-lfs). GIT_CONFIG_* is
+# git's environment-carried config (count + key/value pairs): every child
+# gets the low-speed abort without an argv change.
 _BASE_ENV = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",
     "HOME": "/home/app",
     "GIT_TERMINAL_PROMPT": "0",
     "LANG": "C.UTF-8",
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "http.lowSpeedLimit",
+    "GIT_CONFIG_VALUE_0": str(GIT_LOW_SPEED_LIMIT_BPS),
+    "GIT_CONFIG_KEY_1": "http.lowSpeedTime",
+    "GIT_CONFIG_VALUE_1": str(GIT_LOW_SPEED_TIME_S),
 }
 
 

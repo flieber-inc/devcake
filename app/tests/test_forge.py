@@ -707,65 +707,76 @@ def test_gitlab_file_content_percent_encodes_ref():
     assert "ref=feature%2Fx%20y%23z" in seen["path"]
 
 
-def test_gitlab_pr_files_sets_truncated_when_overflow():
-    """GitLab /changes overflow=true withholds paths — pr_files must surface
-    truncated=True so delivery never silently over-claims completeness."""
-    from devcake.ports.forge import PRFilesResult
+def test_gitlab_pr_files_concatenates_across_pages():
+    """GitLab's `/changes` is deprecated (15.7, removal in API v5); the
+    listing walks the paginated `/diffs` endpoint, 100 per page, and must
+    return every path."""
+    from devcake.ports.forge import PRFile
 
+    page1 = [{"new_path": f"f{i}.py", "old_path": f"f{i}.py",
+              "new_file": False, "deleted_file": False, "renamed_file": False}
+             for i in range(100)]
+    page2 = [{"new_path": "tail.py", "old_path": "tail.py", "new_file": True,
+              "deleted_file": False, "renamed_file": False}]
+    pages = {1: page1, 2: page2}
     forge = gl()
-    calls: list[str] = []
 
     async def _req(method, path, **kw):
-        calls.append(path)
-        return {
-            "overflow": True,
-            "changes": [
-                {"new_path": "kept.py", "new_file": True},
-                {"new_path": "also.py", "deleted_file": False,
-                 "new_file": False, "renamed_file": False},
-            ],
-        }
-
-    forge._req = _req
-    result = run_coro(forge.pr_files(42))
-    assert isinstance(result, PRFilesResult)
-    assert result.truncated is True
-    assert [f.path for f in result.files] == ["kept.py", "also.py"]
-    # overflow remains after the access_raw_diffs retry
-    assert any("access_raw_diffs=true" in p for p in calls)
-
-
-def test_gitlab_pr_files_clears_truncated_via_access_raw_diffs():
-    """When /changes reports overflow, retry once with access_raw_diffs=true;
-    a clear response means truncated=False and the fuller path set."""
-    from devcake.ports.forge import PRFilesResult
-
-    forge = gl()
-    calls: list[str] = []
-
-    async def _req(method, path, **kw):
-        calls.append(path)
-        if "access_raw_diffs=true" in path:
-            return {
-                "overflow": False,
-                "changes": [
-                    {"new_path": "a.py", "new_file": True},
-                    {"new_path": "b.py", "new_file": True},
-                    {"new_path": "c.py", "new_file": True},
-                ],
-            }
-        return {
-            "overflow": True,
-            "changes": [{"new_path": "a.py", "new_file": True}],
-        }
+        assert "/merge_requests/7/diffs" in path
+        assert "per_page=100" in path
+        page = int(path.split("page=")[-1].split("&")[0])
+        return pages.get(page, [])
 
     forge._req = _req
     result = run_coro(forge.pr_files(7))
-    assert isinstance(result, PRFilesResult)
     assert result.truncated is False
-    assert [f.path for f in result.files] == ["a.py", "b.py", "c.py"]
-    assert calls[0].endswith("/merge_requests/7/changes")
-    assert "access_raw_diffs=true" in calls[1]
+    assert len(result.files) == 101
+    assert result.files[0] == PRFile(path="f0.py", status="modified")
+    assert result.files[-1] == PRFile(path="tail.py", status="added")
+
+
+def test_gitlab_pr_files_maps_status_and_keeps_too_large_paths():
+    """`too_large` / `collapsed` withhold a file's DIFF TEXT, never its
+    path — the listing stays complete, so `truncated` stays False."""
+    forge = gl()
+
+    async def _req(method, path, **kw):
+        if "page=1" not in path:
+            return []
+        return [
+            {"new_path": "a.py", "old_path": "a.py", "new_file": True},
+            {"new_path": "b.py", "old_path": "b.py", "deleted_file": True},
+            {"new_path": "c2.py", "old_path": "c.py", "renamed_file": True},
+            {"new_path": "d.py", "old_path": "d.py"},
+            {"new_path": "big.bin", "old_path": "big.bin", "too_large": True,
+             "collapsed": True},
+        ]
+
+    forge._req = _req
+    result = run_coro(forge.pr_files(3))
+    assert [(f.path, f.status) for f in result.files] == [
+        ("a.py", "added"), ("b.py", "removed"), ("c2.py", "renamed"),
+        ("d.py", "modified"), ("big.bin", "modified")]
+    assert result.truncated is False
+
+
+def test_gitlab_pr_files_flags_the_page_ceiling():
+    """Forty full pages is the declared ceiling: the listing is disclosed
+    as truncated and no forty-first page is asked for."""
+    forge = gl()
+    asked: list[int] = []
+
+    async def _req(method, path, **kw):
+        page = int(path.split("page=")[-1].split("&")[0])
+        asked.append(page)
+        return [{"new_path": f"p{page}-{i}.py", "old_path": f"p{page}-{i}.py"}
+                for i in range(100)]
+
+    forge._req = _req
+    result = run_coro(forge.pr_files(5))
+    assert result.truncated is True
+    assert len(result.files) == 4000
+    assert max(asked) == 40
 
 
 # ── close_pr: close without merging (ticket delivery) ────────────────────────

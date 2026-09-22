@@ -168,6 +168,7 @@ from devcake_dev.workspace.provision import (  # noqa: E402
     marker_error,
     mirror_clone_argv,
     mirror_clone_env,
+    network_git_env,
     phase_of,
     sentinel_error,
 )
@@ -509,7 +510,7 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
     else:
         clone = subprocess.run(
             ["git", "clone", clone_url, str(repo_dir / repo_name)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=network_git_env(os.environ))
     if clone.returncode != 0:
         detail = clone.stderr[-2000:]
         if mirror_path:

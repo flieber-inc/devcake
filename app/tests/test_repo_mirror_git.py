@@ -471,3 +471,24 @@ def test_blank_card_on_an_empty_remote_bootstraps_main(tmp_path):
     # the bootstrapped name is what a Dev's first commit creates: served
     assert cache.resolved_branch("alpha") == BOOTSTRAP_BRANCH
     assert not cache.has_last_good("alpha")             # nothing to serve stale
+
+
+def test_run_git_children_carry_the_low_speed_abort(tmp_path):
+    """Every app-side git child (mirror fetch, ls-remote, lfs, claims
+    push) inherits a low-speed abort through the one env chokepoint: a
+    transfer under 1 kB/s for 60 s aborts instead of sitting under the
+    900 s outer budget. Git reads GIT_CONFIG_COUNT/KEY_n/VALUE_n, so a
+    `config --get` inside a throwaway repo is the receipt."""
+    from devcake.adapters.git import run_git
+    sh("git", "init", "-q", str(tmp_path / "r"))
+    repo = tmp_path / "r"
+
+    async def get(key, env=None):
+        r = await run_git(["config", "--get", key], cwd=repo, env=env)
+        assert r.returncode == 0, (key, r.stdout)
+        return r.stdout.strip()
+
+    assert run_coro(get("http.lowSpeedLimit")) == "1000"
+    assert run_coro(get("http.lowSpeedTime")) == "60"
+    # a caller's overlay never drops them
+    assert run_coro(get("http.lowSpeedTime", env={"X_CALLER": "1"})) == "60"

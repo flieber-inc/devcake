@@ -374,20 +374,20 @@ class GitLabForge:
         )
 
     async def pr_files(self, pr_number: int) -> PRFilesResult:
-        """MR changed-file list. GitLab's /changes may set ``overflow`` when
-        size limits withhold paths; retry once with access_raw_diffs=true
-        (Gitaly-backed) and surface residual truncation on the DTO."""
-        path = f"/merge_requests/{pr_number}/changes"
-        data = await self._req("GET", path) or {}
-        if data.get("overflow"):
-            data = await self._req("GET", f"{path}?access_raw_diffs=true") or {}
-        truncated = bool(data.get("overflow"))
-        if truncated:
-            log.warning(
-                "gitlab pr_files #%s: overflow remains after access_raw_diffs "
-                "retry — changed-file list incomplete", pr_number)
+        """MR changed-file list over the paginated `/diffs` endpoint (the
+        `/changes` endpoint is deprecated since GitLab 15.7 and leaves in
+        API v5; its `access_raw_diffs` retry read whole diffs from Gitaly
+        with no size cap). A `too_large`/`collapsed` entry withholds the
+        diff TEXT only — the path is still listed — so the listing is
+        complete unless the page ceiling is hit, which `truncated` says."""
+        from .._toolkit import paginate_rest
+        raw, truncated = await paginate_rest(
+            lambda page: self._req(
+                "GET", f"/merge_requests/{pr_number}/diffs?per_page=100&page={page}"),
+            page_size=100, max_pages=40,
+            what=f"gitlab pr_files #{pr_number}", on_ceiling="warn")
         out: list[PRFile] = []
-        for ch in (data.get("changes") or []):
+        for ch in raw:
             status = ("added" if ch.get("new_file") else
                       "removed" if ch.get("deleted_file") else
                       "renamed" if ch.get("renamed_file") else "modified")

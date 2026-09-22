@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from .. import deadline
 from ..activity import IN_FLIGHT
 from ..security import redact
 from ..adapters.files.owner_store import OwnerStore
@@ -113,6 +114,10 @@ class PollRuntime:
         # (concurrent list_all + missions_cache mutation would race).
         self.lock: asyncio.Lock = asyncio.Lock()
         self.cycle_counter: int = 0
+        # THE in-flight forge sweep (ADR-0044): a sweep that misses a cycle's
+        # budget is never cancelled — the next cycle waits on this same task
+        # with a fresh budget. Replaced only once it has finished.
+        self._sweep: asyncio.Task | None = None
         # poll-cycle snapshot served by /api/v1/missions (advisory — INV-1)
         self.missions_cache: list[dict] = []
         # Host baker heartbeat (None = not observed yet). Transition spans
@@ -265,6 +270,13 @@ class PollRuntime:
         return (len(missions), sum(1 for _, d in derived if d.schedulable),
                 dispatched, fetched_ids)
 
+    def _sweep_task(self) -> asyncio.Task:
+        """The running forge sweep, or a new one when none is in flight."""
+        if self._sweep is None or self._sweep.done():
+            self._sweep = deadline.spawn(self.refresh_forge_health(),
+                                         name="forge_sweep")
+        return self._sweep
+
     async def run_cycle(self, cycle: int) -> None:
         """One poll cycle (docs/04 §1): per configured instance — fetch + dedupe
         + derive + gate + dispatch + sweeps — then the merged cache. A failing
@@ -290,14 +302,16 @@ class PollRuntime:
                     # cycle under the poll lock — and a partial first sweep
                     # leaves last_full_probe_at unset, so this fires unbounded
                     # forever, serializing force-poll / clear-runs behind a
-                    # multi-minute sweep. A timeout leaves it "pending" and the
-                    # next cycle retries — never a stuck lock.
-                    try:
-                        async with asyncio.timeout(FORGE_SWEEP_BUDGET_S):
-                            await self.refresh_forge_health()
-                    except TimeoutError:
+                    # multi-minute sweep. The budget bounds the WAIT, never the
+                    # sweep (ADR-0044): on expiry the sweep keeps running in the
+                    # background and the next cycle waits on the same one —
+                    # never a stuck lock, never a cancelled handshake.
+                    res = await deadline.bounded(self._sweep_task(),
+                                                 FORGE_SWEEP_BUDGET_S)
+                    if not res.done:
                         log.warning("in-cycle forge sweep exceeded its %ds "
-                                    "budget — %d/%d probed; retrying next cycle",
+                                    "budget — %d/%d probed; the next cycle "
+                                    "waits on the same sweep",
                                     FORGE_SWEEP_BUDGET_S,
                                     len(self.forge_runtime.health),
                                     len(self.forge_runtime.forges))
@@ -479,15 +493,15 @@ class PollRuntime:
         Budget is 60s because a manual poll queued on this lock must resolve
         inside the admin proxy's 60s window; on expiry the probes that did
         land already updated health incrementally, last_full_probe_at stays
-        unset, and run_cycle retries the sweep next tick."""
+        unset, and run_cycle waits on the same still-running sweep next
+        tick (never cancelled — ADR-0044)."""
         async with self.lock:
-            try:
-                async with asyncio.timeout(FORGE_SWEEP_BUDGET_S):
-                    await self.refresh_forge_health()
-            except TimeoutError:
+            res = await deadline.bounded(self._sweep_task(),
+                                         FORGE_SWEEP_BUDGET_S)
+            if not res.done:
                 log.warning(
                     "initial forge sweep exceeded its 60s budget — "
-                    "%d/%d repos probed; retrying on the next poll cycle",
+                    "%d/%d repos probed; the first poll cycle waits on it",
                     len(self.forge_runtime.health),
                     len(self.forge_runtime.forges))
         # ADR-0024: mirror warm-up — background, UNBOUNDED, never under the

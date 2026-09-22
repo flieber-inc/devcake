@@ -708,3 +708,85 @@ def test_description_appends_only_through_feed_append_note():
         "description appends must go through feed.append_note (with "
         "feed.marked_note for model text) — ADR-0034 chokepoint: "
         + "; ".join(offenders))
+
+
+# ── ADR-0044: deadlines never cancel a socket holder ─────────────────────────
+PKG = Path(__file__).parents[1] / "devcake"
+# Files where asyncio.timeout / wait_for may still appear — each wraps
+# something that is NOT an outbound HTTP call:
+DEADLINE_ALLOWLIST_REL = {
+    "api/main.py",              # shutdown drain: the process exits, the pool closes next
+    "adapters/git.py",          # subprocess wait; a cancel kills the process group
+    "adapters/files/runlog.py", # in-process queue (SSE heartbeat)
+    "deadline.py",              # the one sanctioned implementation (shielded wait)
+}
+
+
+_DEADLINE_NAMES = {"timeout", "timeout_at", "wait_for"}
+
+
+def _deadline_offenders(source: str) -> list[int]:
+    """Line numbers of every `asyncio.timeout/timeout_at/wait_for` call and
+    every `from asyncio import <one of them>` in `source`."""
+    tree = ast.parse(source)
+    imported: set[str] = set()
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "asyncio":
+            hits = [a for a in node.names if a.name in _DEADLINE_NAMES]
+            if hits:
+                imported |= {a.asname or a.name for a in hits}
+                lines.append(node.lineno)
+        elif isinstance(node, ast.Call):
+            f = node.func
+            if (isinstance(f, ast.Attribute) and f.attr in _DEADLINE_NAMES
+                    and isinstance(f.value, ast.Name) and f.value.id == "asyncio"):
+                lines.append(node.lineno)
+            elif isinstance(f, ast.Name) and f.id in imported:
+                lines.append(node.lineno)
+    return sorted(set(lines))
+
+
+def test_deadline_detector_sees_both_call_shapes():
+    """Self-test: the detector must catch `asyncio.timeout(...)`,
+    `asyncio.wait_for(...)`, `asyncio.timeout_at(...)` and the
+    `from asyncio import timeout` spelling — and ignore unrelated names."""
+    src = (
+        "import asyncio\n"
+        "from asyncio import wait_for, Event\n"
+        "async def f(c):\n"
+        "    async with asyncio.timeout(5):\n"
+        "        await c\n"
+        "    await asyncio.wait_for(c, 1)\n"
+        "    async with asyncio.timeout_at(9):\n"
+        "        pass\n"
+        "    await wait_for(c, 2)\n"
+        "    e = Event(); await e.wait()\n"
+    )
+    assert _deadline_offenders(src) == [2, 4, 6, 7, 9]
+    assert _deadline_offenders("import asyncio\nasync def f(): pass\n") == []
+
+
+def test_deadlines_never_cancel_a_socket_holder():
+    """ADR-0044. An external cancellation that lands during a TLS handshake
+    leaks the socket (httpcore's start_tls cleans up on Exception only); on
+    a starved host the health builder cancelled dozens of forge probes that
+    way and the shared pool filled with dead connections. Nothing in the
+    package may cancel a coroutine that can hold a socket: bound a wait
+    with `devcake.deadline.bounded` (shielded; the work finishes in the
+    background) or with httpx's own timeouts. The allowlist names the
+    non-holders, one reason each."""
+    offenders = []
+    for p in sorted(PKG.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        rel = str(p.relative_to(PKG))
+        if rel in DEADLINE_ALLOWLIST_REL:
+            continue
+        lines = _deadline_offenders(p.read_text())
+        if lines:
+            offenders.append(f"{rel}:{lines}")
+    assert not offenders, (
+        "asyncio.timeout / wait_for around code that may hold a socket "
+        "(ADR-0044 — use devcake.deadline.bounded, or add the file to "
+        "DEADLINE_ALLOWLIST_REL with a reason): " + "; ".join(offenders))

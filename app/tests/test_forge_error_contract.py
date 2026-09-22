@@ -212,3 +212,19 @@ def test_forge_request_maps_non_json_2xx_to_forge_error():
         pytest.fail("non-JSON 2xx must raise ForgeError, not JSONDecodeError")
     finally:
         run(client.aclose())
+
+
+@pytest.mark.parametrize("cls,url", FORGES)
+def test_network_failure_names_the_exception_class_when_it_has_no_message(cls, url):
+    """`str(httpx.PoolTimeout())` is empty, so the operator read
+    `→ network: ` and nothing else during the 2026-09 pool exhaustion. The
+    text must name the class when the message is blank."""
+    def handler(req):
+        raise httpx.PoolTimeout("", request=req)
+
+    forge = _forge(cls, url, handler)
+    with pytest.raises(ForgeError) as exc:
+        run(forge.pr_state(1))
+    text = str(exc.value)
+    assert "network: PoolTimeout" in text
+    assert not text.rstrip().endswith(":")

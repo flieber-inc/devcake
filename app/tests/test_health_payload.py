@@ -9,12 +9,25 @@ import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from devcake import deadline
 from devcake.api import health as health_mod
 from devcake.config import AppConfig
 
 
 def run_coro(c):
     return asyncio.new_event_loop().run_until_complete(c)
+
+
+async def _refreshed(fr, **kw):
+    """Drive one background branch-protection refresh to completion and
+    return the value it landed (the request-side call returns cached)."""
+    health_mod.reset_health_caches()
+    try:
+        await health_mod._branch_protection(fr, **kw)
+        await deadline.drain()
+        return await health_mod._branch_protection(fr, **kw)
+    finally:
+        health_mod.reset_health_caches()
 
 
 def _forge_runtime(*, last_full_probe_at=None, health=None, forges=None):
@@ -39,14 +52,20 @@ def _payload(fr, monkeypatch, repo_cache=None, workspaces=None, stewards=None):
     monkeypatch.setattr(health_mod, "_check_http", _true)
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
     health_mod.reset_health_caches()
-    return run_coro(health_mod.build_health_payload(
-        config=AppConfig(), dev_types={}, managers={},
-        stewards=stewards or {},
-        forge_runtime=fr, shared_breakers={},
-        store=SimpleNamespace(active=lambda: []),
-        internal_forge=None,
-        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={}),
-        repo_cache=repo_cache, workspaces=workspaces))
+
+    async def _drive():
+        payload = await health_mod.build_health_payload(
+            config=AppConfig(), dev_types={}, managers={},
+            stewards=stewards or {},
+            forge_runtime=fr, shared_breakers={},
+            store=SimpleNamespace(active=lambda: []),
+            internal_forge=None,
+            poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={}),
+            repo_cache=repo_cache, workspaces=workspaces)
+        await deadline.drain()        # background refreshes finish here
+        return payload
+
+    return run_coro(_drive())
 
 
 def test_health_payload_carries_harness_pins(monkeypatch):
@@ -202,9 +221,15 @@ def test_unused_repo_names_and_payload_block(monkeypatch):
         "count": 2, "names": ["orphan1", "orphan2"], "configured": 5}
 
 
-def test_branch_protection_probes_concurrently(monkeypatch):
+def test_branch_protection_fills_in_the_background():
+    """The refresh never rides a request: the first call returns the cached
+    value (empty until one refresh lands) and starts ONE background refresh;
+    probes still run bounded-parallel (the rendezvous only completes when
+    all three are in flight) and none of them is ever cancelled — a cancel
+    mid TLS handshake is what leaked the pool's sockets (ADR-0044)."""
     started = {"n": 0}
     all_started = asyncio.Event()
+    seen = {}
 
     class _Prot:
         def model_dump(self):
@@ -215,18 +240,69 @@ def test_branch_protection_probes_concurrently(monkeypatch):
             started["n"] += 1
             if started["n"] == 3:
                 all_started.set()
-            # sequential execution times out here → the except path stores
-            # None; only genuine parallelism lets all three return _Prot
-            await asyncio.wait_for(all_started.wait(), timeout=2)
+            try:
+                await all_started.wait()
+            except asyncio.CancelledError:
+                seen["cancelled"] = True
+                raise
             return _Prot()
 
     inst = SimpleNamespace(reference_only=False, default_branch="main")
     fr = SimpleNamespace(forges={f"r{i}": _Forge() for i in range(3)},
                          instance=lambda name: inst, internal=set())
-    health_mod.reset_health_caches()
-    out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
-    assert out == {f"r{i}": {"rendezvous": True} for i in range(3)}
-    health_mod.reset_health_caches()   # don't leak the fake into others
+
+    async def drive():
+        health_mod.reset_health_caches()
+        first = await health_mod._branch_protection(fr)
+        await deadline.drain()
+        second = await health_mod._branch_protection(fr)
+        health_mod.reset_health_caches()   # don't leak the fake into others
+        return first, second
+
+    first, second = run_coro(drive())
+    assert first == {}
+    assert second == {f"r{i}": {"rendezvous": True} for i in range(3)}
+    assert seen == {}
+
+
+def test_branch_protection_refresh_is_single_flight():
+    """Two callers during one refresh share it: each repo is probed once."""
+    from collections import Counter
+    calls = Counter()
+    gate = asyncio.Event()
+
+    class _Prot:
+        def model_dump(self):
+            return {"protected": True}
+
+    class _Forge:
+        def __init__(self, name):
+            self.name = name
+
+        async def default_branch_protection(self, branch):
+            calls[self.name] += 1
+            await gate.wait()
+            return _Prot()
+
+    inst = SimpleNamespace(reference_only=False, default_branch="main")
+    fr = SimpleNamespace(forges={n: _Forge(n) for n in ("a", "b")},
+                         instance=lambda name: inst, internal=set())
+
+    async def drive():
+        health_mod.reset_health_caches()
+        a = await health_mod._branch_protection(fr)
+        await asyncio.sleep(0)             # let the refresh start its probes
+        b = await health_mod._branch_protection(fr)
+        gate.set()
+        await deadline.drain()
+        c = await health_mod._branch_protection(fr)
+        health_mod.reset_health_caches()
+        return a, b, c
+
+    a, b, c = run_coro(drive())
+    assert a == {} and b == {}
+    assert dict(calls) == {"a": 1, "b": 1}
+    assert c == {"a": {"protected": True}, "b": {"protected": True}}
 
 
 def test_repo_mirror_block_shape(monkeypatch):
@@ -312,12 +388,19 @@ def _pmo_payload(cfg, managers, monkeypatch, *, reset=True):
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
     if reset:
         health_mod.reset_health_caches()
-    return run_coro(health_mod.build_health_payload(
+    return run_coro(_pmo_payload_async(cfg, managers))
+
+
+async def _pmo_payload_async(cfg, managers, *, drain=True):
+    payload = await health_mod.build_health_payload(
         config=cfg, dev_types={}, managers=managers, stewards={},
         forge_runtime=_forge_runtime(), shared_breakers={},
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,
-        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={}))
+    if drain:
+        await deadline.drain()
+    return payload
 
 
 def test_pmo_probe_is_cached_between_health_calls(tmp_path, monkeypatch):
@@ -358,12 +441,21 @@ def test_pmo_health_exposes_probe_detail_and_capability_flags(tmp_path, monkeypa
 
 
 def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
-    """Per-probe 5 s timeout + concurrent gather: a sick PMO reports
-    ok:False; /health returns without waiting out a 30 s client timeout."""
+    """A sick PMO must not stall /health — but it must not be CANCELLED
+    either (ADR-0044: a cancel mid TLS handshake leaks the socket). The
+    probe keeps running in the background; /health serves a `probe pending`
+    row now and the real result once it lands."""
     from devcake.config import PMOInstance
+    release = asyncio.Event()
+    seen = {}
 
     async def hang(team):
-        await asyncio.sleep(3600)
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+        return SimpleNamespace(ok=True)
 
     async def fine(team):
         return SimpleNamespace(ok=True)
@@ -382,10 +474,50 @@ def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
 
     managers = {"sick": _mgr(hang), "fine": _mgr(fine)}
     monkeypatch.setattr(health_mod, "_PMO_PROBE_TIMEOUT", 0.05)
-    payload = _pmo_payload(cfg, managers, monkeypatch)
-    assert payload["pmo_instances"]["sick"]["ok"] is False, (
-        "the timeout must convert a hang into ok:False")
-    assert payload["pmo_instances"]["fine"]["ok"] is True
+
+    async def drive():
+        health_mod.reset_health_caches()
+        first = await _pmo_payload_async(cfg, managers, drain=False)
+        release.set()
+        await deadline.drain()
+        second = await _pmo_payload_async(cfg, managers)
+        return first, second
+
+    first, second = run_coro(drive())
+    sick = first["pmo_instances"]["sick"]
+    assert sick["ok"] is None, "a probe still running is unknown, not red"
+    assert sick["detail"] == "probe pending"
+    assert first["pmo_instances"]["fine"]["ok"] is True
+    assert second["pmo_instances"]["sick"]["ok"] is True, (
+        "the finished probe lands in the cache for the next /health")
+    assert "detail" not in second["pmo_instances"]["sick"]
+    assert seen == {}
+
+
+def test_pending_pmo_probe_is_single_flight_within_the_ttl(tmp_path, monkeypatch):
+    """Two /health calls while a probe is pending start ONE probe."""
+    gate = asyncio.Event()
+    calls = []
+
+    async def slow(team):
+        calls.append(team)
+        await gate.wait()
+        return SimpleNamespace(ok=True)
+
+    cfg, managers = _pmo_world(slow, tmp_path, monkeypatch)
+    monkeypatch.setattr(health_mod, "_PMO_PROBE_TIMEOUT", 0.05)
+
+    async def drive():
+        health_mod.reset_health_caches()
+        await _pmo_payload_async(cfg, managers, drain=False)
+        await _pmo_payload_async(cfg, managers, drain=False)
+        gate.set()
+        await deadline.drain()
+        return await _pmo_payload_async(cfg, managers)
+
+    payload = run_coro(drive())
+    assert calls == ["ENG"]
+    assert payload["pmo_instances"]["linear"]["ok"] is True
 
 
 def test_pmo_probe_transport_failure_carries_detail(tmp_path, monkeypatch):
@@ -468,11 +600,7 @@ def test_branch_protection_skips_internal_repos():
     insts = {internal_name: internal, "work": work}
     fr = SimpleNamespace(forges={"work": _Forge(), internal_name: _Forge()},
                          instance=insts.get, internal={internal_name})
-    health_mod.reset_health_caches()
-    try:
-        out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
-    finally:
-        health_mod.reset_health_caches()
+    out = run_coro(_refreshed(fr))
     assert out == {"work": {"protected": False}}
 
 
@@ -494,11 +622,7 @@ def test_branch_protection_maps_row_lookup_errors_to_none():
 
     fr = SimpleNamespace(forges={"bad": _Forge()}, instance=lambda n: _Inst(),
                          internal=set())
-    health_mod.reset_health_caches()
-    try:
-        out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
-    finally:
-        health_mod.reset_health_caches()
+    out = run_coro(_refreshed(fr))
     assert out == {"bad": None}
 
 
@@ -724,13 +848,7 @@ def test_branch_protection_probes_work_repos_only_with_the_resolved_branch():
                                       reference_repos=["ref"])],
                     repos=list(insts.values()))
     cache = NS(resolved_branch=lambda n: {"work": "trunk"}.get(n, ""))
-    health_mod.reset_health_caches()
-    try:
-        out = run_coro(asyncio.wait_for(
-            health_mod._branch_protection(fr, config=cfg, repo_cache=cache),
-            timeout=5))
-    finally:
-        health_mod.reset_health_caches()
+    out = run_coro(_refreshed(fr, config=cfg, repo_cache=cache))
     assert out == {"work": {"protected": True},
                    "pinned": {"protected": True}, "blank": None}
     assert asked == {"work": "trunk", "pinned": "release"}
@@ -756,3 +874,86 @@ def test_health_payload_carries_the_discovery_drain(monkeypatch):
     assert got["discovery_drain_warnings"] == {"eng": msg}
     assert got["steward_degraded"] is None
 
+
+
+def test_health_payload_carries_the_http_pool_meter(monkeypatch):
+    """/health.http_pool is the pool meter verbatim (ADR-0044 visibility):
+    the SPA alert, `devcake status` and the operator read one source."""
+    meter = {"clients": 1, "connections": 2, "max_connections": 64,
+             "sockets": {"established": 2, "close_wait": 9},
+             "leaked_estimate": 9, "background": 0}
+    monkeypatch.setattr(health_mod, "pool_report", lambda: meter)
+    payload = _payload(_forge_runtime(), monkeypatch)
+    assert payload["http_pool"] == meter
+
+
+def test_pending_probe_does_not_paint_the_pmo_aggregate_red(tmp_path, monkeypatch):
+    """`pmo` (the SPA's health dot) is every configured instance ok; a
+    probe still running is unknown, and unknown is not red."""
+    from devcake.config import PMOInstance
+    from devcake import secrets as secrets_store
+    gate = asyncio.Event()
+
+    async def slow(team):
+        await gate.wait()
+        return SimpleNamespace(ok=True)
+
+    async def fine(team):
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    secrets_store.write_connection_secret("pmo", "slowone", "api_key", "k1")
+    secrets_store.write_connection_secret("pmo", "fine", "api_key", "k2")
+    cfg = AppConfig(pmos=[PMOInstance(name="slowone", team_key="A"),
+                          PMOInstance(name="fine", team_key="B")])
+
+    def _mgr(probe):
+        return SimpleNamespace(pmo=SimpleNamespace(health_probe=probe),
+                               anomalies={}, blocked_reasons={},
+                               needs_human={}, merge_handoffs={}, cycles=[])
+    managers = {"slowone": _mgr(slow), "fine": _mgr(fine)}
+    monkeypatch.setattr(health_mod, "_PMO_PROBE_TIMEOUT", 0.05)
+
+    async def drive():
+        health_mod.reset_health_caches()
+        first = await _pmo_payload_async(cfg, managers, drain=False)
+        gate.set()
+        await deadline.drain()
+        return first
+
+    payload = run_coro(drive())
+    assert payload["pmo_instances"]["slowone"]["ok"] is None
+    assert payload["pmo"] is True
+
+
+def test_config_reload_during_a_refresh_discards_its_rows():
+    """A reload forgets the protection map; a refresh that started before
+    the reload must not land rows for the OLD card set afterwards."""
+    gate = asyncio.Event()
+
+    class _Prot:
+        def model_dump(self):
+            return {"protected": False}
+
+    class _Forge:
+        async def default_branch_protection(self, branch):
+            await gate.wait()
+            return _Prot()
+
+    inst = SimpleNamespace(reference_only=False, default_branch="main")
+    fr = SimpleNamespace(forges={"old-card": _Forge()}, instance=lambda n: inst,
+                         internal=set())
+
+    async def drive():
+        health_mod.reset_health_caches()
+        await health_mod._branch_protection(fr)      # refresh #1 starts
+        await asyncio.sleep(0)
+        health_mod.reset_health_caches()             # the reload
+        gate.set()
+        await deadline.drain()                       # refresh #1 finishes late
+        after = await health_mod._branch_protection(fr)   # must start refresh #2, serve {}
+        await deadline.drain()
+        health_mod.reset_health_caches()
+        return after
+
+    assert run_coro(drive()) == {}

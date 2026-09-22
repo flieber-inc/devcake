@@ -4,8 +4,12 @@ Ordering is pinned with orderBy: createdAt (verified live: newest-first); the
 10-page/1,000-comment safety ceiling logs a truncation WARNING, never silent."""
 import asyncio
 
+import httpx
+import pytest
+
 from devcake.adapters.linear.adapter import MAX_COMMENT_PAGES, LinearAdapter
 from devcake.domain.model import MissionRef
+from devcake.ports.pmo import PMOTransient
 
 
 def run_coro(c):
@@ -460,3 +464,18 @@ def test_get_activity_walks_relations_past_a_full_page():
         MissionRef("i1", "issue")))
     assert act.mission.blocked_by == [f"blk{i}" for i in range(150)]
     assert [q[1].get("after") for q in queries] == [None, "r1", "r2"]
+
+
+def test_network_failure_names_the_exception_class_when_it_has_no_message():
+    """A pool timeout has an empty message; `PMOTransient: network: ` told
+    the operator nothing during the 2026-09 pool exhaustion."""
+    def handler(req):
+        raise httpx.PoolTimeout("", request=req)
+
+    ad = LinearAdapter("key", transport=httpx.MockTransport(handler))
+    with pytest.raises(PMOTransient) as exc:
+        asyncio.new_event_loop().run_until_complete(
+            ad.get(MissionRef("issue-1", "issue")))
+    text = str(exc.value)
+    assert "network: PoolTimeout" in text
+    assert not text.rstrip().endswith(":")

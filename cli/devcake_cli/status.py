@@ -160,6 +160,34 @@ def _compose_ps(repo: Path) -> tuple[bool, str]:
     return True, (proc.stdout or "").strip()
 
 
+def http_pool_lines(health: dict | None) -> list[str]:
+    """The shared HTTP pool next to what the kernel holds (ADR-0044) and,
+    once dead sockets pile up, the remedy. Empty when /health carries none
+    (an older app)."""
+    pool = (health or {}).get("http_pool")
+    if not isinstance(pool, dict):
+        return []
+    cap = pool.get("max_connections")
+    sockets = pool.get("sockets") or {}
+    leaked = pool.get("leaked_estimate")
+    close_wait = sockets.get("close_wait", 0) or 0
+    line = f"http_pool: {pool.get('connections', 0)}/{cap} connections"
+    if sockets:
+        line += (f"; :443 sockets {sockets.get('established', 0)} established, "
+                 f"{close_wait} close_wait; leaked_estimate {leaked}")
+    line += f"; background tasks {pool.get('background', 0)}"
+    out = [line]
+    # the grade is the app's (`level`) — never re-derived from the counts here
+    level = pool.get("level")
+    if level in ("warning", "critical"):
+        near = level == "critical"
+        out.append("    ! leaked network connections are piling up"
+                   + (f" — near the {cap}-connection cap, every tracker and "
+                      f"repository call fails once it is reached" if near else "")
+                   + "; restart the app if the number keeps climbing")
+    return out
+
+
 def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
     try:
         root = repo or require_checkout_root()
@@ -201,6 +229,8 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
         "harness_pins": ((health or {}).get("harness_pins") or {}).get("templates")
         if health else None,
         "bake_status": (health or {}).get("bake_status") if health else None,
+        # ADR-0044: the shared HTTP pool next to the kernel's socket count
+        "http_pool": (health or {}).get("http_pool") if health else None,
     }
 
     if as_json:
@@ -225,5 +255,7 @@ def run_status(*, as_json: bool = False, repo: Path | None = None) -> int:
             hl = harness_lines(health)
             sys.stdout.write("harness:" + ("" if hl else " (no Dev Types configured)") + "\n")
             for line in hl:
+                sys.stdout.write(line + "\n")
+            for line in http_pool_lines(health):
                 sys.stdout.write(line + "\n")
     return 0 if compose_ok else 4

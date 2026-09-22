@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 import httpx
 
+from ..http import network_error_text
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              FeedChange, FeedDelta, Mission, MissionDocument,
                              MissionRef, NormalizedStatus, Priority,
@@ -197,7 +198,7 @@ class LinearAdapter:
                                               json=payload),
                 rate_signal, instance=self._instance)
         except httpx.HTTPError as e:
-            raise PMOTransient(f"network: {e}") from e
+            raise PMOTransient(f"network: {network_error_text(e)}") from e
         if resp.status_code == 429 or resp.status_code >= 500:
             raise PMOTransient(f"http {resp.status_code}")
         try:
@@ -1204,7 +1205,7 @@ class LinearAdapter:
                 resp = await client.put(uf["uploadUrl"], content=data,
                                         headers=headers)
         except httpx.HTTPError as e:
-            raise PMOTransient(f"linear upload network: {e}") from e
+            raise PMOTransient(f"linear upload network: {network_error_text(e)}") from e
         # Status map mirrors download_asset: only 429/5xx are retryable.
         # Do not wrap raise_for_status() in HTTPError → PMOTransient —
         # HTTPStatusError ⊆ HTTPError and permanent 4xx would be retried.
@@ -1249,7 +1250,7 @@ class LinearAdapter:
                 raise RuntimeError(
                     f"linear download redirect refused: {e}") from e
             except httpx.HTTPError as e:
-                raise PMOTransient(f"linear download network: {e}") from e
+                raise PMOTransient(f"linear download network: {network_error_text(e)}") from e
             except RuntimeError:
                 raise RuntimeError("linear download: too many redirects")
             if resp.status_code in (429, 500, 502, 503, 504):

@@ -13,6 +13,19 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+- **Fixed — deadlines never cancel a socket holder (ADR-0044).** A wait
+  that cancelled an outbound call mid TLS handshake leaked the socket; on a
+  starved host the leak reached the shared pool's cap and every tracker and
+  repository call failed until a restart. Waits now go through
+  `devcake.deadline` (shielded; the work finishes in the background), the
+  tracker probe reports `probe pending` instead of red while it runs, the
+  branch-protection walk refreshes in the background, the forge sweep is one
+  in-flight task, and a structure guard keeps `asyncio.timeout` /
+  `wait_for` away from HTTP. `/health.http_pool`, a `devcake status` line
+  and an Overview alert meter the leak class; a network error with no
+  message names its class. Ships with `devcake-cli` 0.1.10 — upgrade the
+  CLI before `devcake up`.
+
 ## v0.6.8 (2026-09-17)
 
 Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.9. No profile change: `devcake up --release v0.6.8` is the whole upgrade. A stored config that still carries `attach_merged_changeset_to_pmo` logs the usual unknown-key warning on load and runs without it — nothing to migrate.

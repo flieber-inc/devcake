@@ -209,9 +209,14 @@ def test_slow_peer_counts_as_miss(monkeypatch):
     """Peer gets run inside the LOCAL instance's poll segment — a hanging
     peer adapter burns at most PEER_GET_TIMEOUT_S, then falls through (here:
     to the local adapter, which resolves). Latency must never couple a sick
-    peer's client timeout into every local cycle."""
+    peer's client timeout into every local cycle — and the slow get is NOT
+    cancelled (ADR-0044: a cancel mid TLS handshake leaks the socket); it
+    finishes in the background and its answer is simply dropped."""
+    from devcake import deadline
     from devcake.domain import blocker_locator as bl
     monkeypatch.setattr(bl, "PEER_GET_TIMEOUT_S", 0.05)
+    release = asyncio.Event()
+    seen = {}
 
     class SlowPMO:
         def __init__(self):
@@ -223,7 +228,12 @@ def test_slow_peer_counts_as_miss(monkeypatch):
 
         async def get(self, ref):
             self.gets.append(ref.pmo_id)
-            await asyncio.sleep(5)
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                seen["cancelled"] = True
+                raise
+            return None
 
     a = _mission("a", "OPS-1", instance="ops")
     eng = _mgr("eng")                                # local cannot read it
@@ -232,9 +242,63 @@ def test_slow_peer_counts_as_miss(monkeypatch):
         instance=SimpleNamespace(name="cs", system="linear"),
         instance_name="cs", pmo=SlowPMO())
     loc = _locator({"cs": cs, "eng": eng, "ops": ops}, owner={"a": "cs"})
-    r = run_coro(loc.resolve("a", local_mgr=eng, memo={}))
+
+    async def drive():
+        r = await loc.resolve("a", local_mgr=eng, memo={})
+        release.set()
+        await deadline.drain()
+        return r
+
+    r = run_coro(drive())
     assert r.mission is a          # fell through to the next peer
     assert cs.pmo.gets == ["a"]    # peer tried once, timed out, moved on
+    assert seen == {}
+
+
+def test_slow_peer_batch_counts_as_miss_without_cancel(monkeypatch):
+    """The batched twin (capabilities.batch_get): a hanging peer get_many
+    falls through within the deadline and is never cancelled."""
+    from devcake import deadline
+    from devcake.domain import blocker_locator as bl
+    monkeypatch.setattr(bl, "PEER_GET_TIMEOUT_S", 0.05)
+    release = asyncio.Event()
+    seen = {}
+
+    class SlowBatchPMO:
+        def __init__(self):
+            self.batches = []
+
+        def capabilities(self):
+            from fakes import fake_pmo_capabilities
+            return fake_pmo_capabilities(global_ids=True, batch_get=True)
+
+        async def get_many(self, refs):
+            self.batches.append([r.pmo_id for r in refs])
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                seen["cancelled"] = True
+                raise
+            return {}
+
+    a = _mission("a", "OPS-1", instance="ops")
+    eng = _mgr("eng")
+    ops = _mgr("ops", missions={"a": a})
+    cs = SimpleNamespace(
+        instance=SimpleNamespace(name="cs", system="linear"),
+        instance_name="cs", pmo=SlowBatchPMO())
+    loc = _locator({"cs": cs, "eng": eng, "ops": ops}, owner={"a": "cs"})
+
+    async def drive():
+        r = await loc.resolve("a", local_mgr=eng, memo={})
+        release.set()
+        await deadline.drain()
+        return r
+
+    r = run_coro(drive())
+    assert r.mission is a
+    assert cs.pmo.batches == [["a"]]
+    assert seen == {}
 
 
 def test_peer_attribution_includes_legacy_pmo_refs():

@@ -233,3 +233,30 @@ if (failed) {
   process.exit(1);
 }
 console.log("alerts.mjs: all checks passed");
+
+// ADR-0044: dead network connections beyond what the pool knows about. A
+// warning as they pile up, critical near the 64-connection cap (every tracker
+// and repository call fails once it is reached); the remedy is a restart.
+check("leaked network connections are a warning, then critical near the cap", () => {
+  // the grade is the app's (/health.http_pool.level) — the alert never re-derives it
+  const warn = deriveAlerts({
+    http_pool: { connections: 2, max_connections: 64, level: "warning",
+                 sockets: { established: 2, close_wait: 8 }, leaked_estimate: 8 },
+  }).find((a) => a.id === "http-pool-leak");
+  assert.ok(warn, "http-pool-leak warning missing");
+  assert.equal(warn.severity, "warning");
+  assert.match(warn.body, /8/);
+  assert.match(warn.body, /64/);
+  assert.match(warn.body, /restart the app/i);
+  const crit = deriveAlerts({
+    http_pool: { connections: 2, max_connections: 64, level: "critical",
+                 sockets: { established: 50, close_wait: 10 }, leaked_estimate: 58 },
+  }).find((a) => a.id === "http-pool-leak");
+  assert.equal(crit.severity, "critical");
+  const quiet = deriveAlerts({
+    http_pool: { connections: 5, max_connections: 64, level: "ok",
+                 sockets: { established: 5, close_wait: 20 }, leaked_estimate: 20 },
+  });
+  assert.equal(quiet.some((a) => a.id === "http-pool-leak"), false, "raw counts never override the app's grade");
+  assert.equal(deriveAlerts({}).some((a) => a.id === "http-pool-leak"), false);
+});

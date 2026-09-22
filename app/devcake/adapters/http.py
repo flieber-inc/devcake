@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 import httpx
 
@@ -97,6 +98,95 @@ class PooledClient:
             await self._client.aclose()
 
 
+# /proc/net/tcp state column (hex) → the two states the meter reports
+_TCP_ESTABLISHED, _TCP_CLOSE_WAIT = "01", "08"
+
+
+def _sockets_to_443(proc_net: Path) -> dict | None:
+    """Sockets whose remote port is 443, by state, from this process's
+    network namespace (Linux only; None elsewhere). Counts every socket in
+    the namespace — git-over-https children during a mirror sync too — so
+    the estimate built on it is a heuristic, not a ledger."""
+    counts = {"established": 0, "close_wait": 0}
+    seen = False
+    for name in ("tcp", "tcp6"):
+        path = proc_net / name
+        try:
+            lines = path.read_text().splitlines()[1:]
+        except OSError:
+            continue
+        seen = True
+        for line in lines:
+            cols = line.split()
+            if len(cols) < 4:
+                continue
+            try:
+                port = int(cols[2].rsplit(":", 1)[1], 16)
+            except (IndexError, ValueError):
+                continue
+            if port != 443:
+                continue
+            if cols[3] == _TCP_ESTABLISHED:
+                counts["established"] += 1
+            elif cols[3] == _TCP_CLOSE_WAIT:
+                counts["close_wait"] += 1
+    return counts if seen else None
+
+
+# The leak grade, computed here and read by `devcake status` and the admin
+# alert (never re-derived from the counts): dead sockets piling up is a
+# warning; an estimate near the pool's cap is critical — every tracker and
+# forge call fails once the cap is reached.
+LEAK_WARN_CLOSE_WAIT = 8
+LEAK_WARN_ESTIMATE = 16
+LEAK_CRITICAL_ESTIMATE = 48
+
+
+def leak_level(sockets: dict | None, leaked: int | None) -> str:
+    if sockets is None or leaked is None:
+        return "unknown"
+    if leaked >= LEAK_CRITICAL_ESTIMATE:
+        return "critical"
+    if leaked >= LEAK_WARN_ESTIMATE or sockets.get("close_wait", 0) >= LEAK_WARN_CLOSE_WAIT:
+        return "warning"
+    return "ok"
+
+
+def pool_report(*, proc_net: Path = Path("/proc/self/net")) -> dict:
+    """The shared pool's occupancy next to what the kernel holds (ADR-0044
+    visibility). `connections` is what httpcore knows; `sockets` is every
+    :443 socket in the namespace; `leaked_estimate` is the excess — dead
+    connections the pool dropped without closing pile up there (CLOSE_WAIT
+    once the far end gives up). `background` counts deadline tasks still
+    running past their caller's wait."""
+    from .. import deadline
+    clients = [c for c in _SHARED.values() if not getattr(c, "is_closed", False)]
+    connections = 0
+    for client in clients:
+        pool = getattr(getattr(client, "_transport", None), "_pool", None)
+        connections += len(getattr(pool, "connections", None) or [])
+    sockets = _sockets_to_443(proc_net)
+    leaked = (None if sockets is None
+              else max(0, sockets["established"] + sockets["close_wait"] - connections))
+    return {
+        "clients": len(clients),
+        "connections": connections,
+        "max_connections": SHARED_LIMITS.max_connections,
+        "sockets": sockets,
+        "leaked_estimate": leaked,
+        "level": leak_level(sockets, leaked),
+        "background": deadline.pending(),
+    }
+
+
+def network_error_text(e: BaseException) -> str:
+    """`"{Class}: {message}"`, or the class alone when the message is blank
+    — `str(httpx.PoolTimeout())` is empty, and `network: ` told the operator
+    nothing during the 2026-09 pool exhaustion."""
+    msg = str(e).strip()
+    return f"{type(e).__name__}: {msg}" if msg else type(e).__name__
+
+
 async def forge_request(client: httpx.AsyncClient, method: str, url: str, *,
                         path_label: str, headers: dict | None = None,
                         raw: bool = False, **kwargs):
@@ -112,8 +202,8 @@ async def forge_request(client: httpx.AsyncClient, method: str, url: str, *,
     try:
         resp = await client.request(method, url, headers=headers, **kwargs)
     except httpx.HTTPError as e:
-        raise ForgeError(f"{method} {path_label} → network: {e}",
-                         status=None) from e
+        raise ForgeError(f"{method} {path_label} → network: "
+                         f"{network_error_text(e)}", status=None) from e
     if resp.status_code < 200 or resp.status_code >= 300:
         raise ForgeError(f"{method} {path_label} → {resp.status_code}: "
                          f"{resp.text[:200]}", status=resp.status_code)

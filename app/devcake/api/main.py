@@ -252,6 +252,14 @@ async def lifespan(app: FastAPI):
     for t in tasks:
         with contextlib.suppress(asyncio.CancelledError):
             await t
+    # ADR-0044: background waits (health probes, the forge sweep) finish or
+    # are cancelled HERE — the one sanctioned cancel, since the pool closes
+    # next and a leaked socket dies with the process
+    try:
+        from .. import deadline
+        await deadline.drain(5)
+    except Exception:  # noqa: BLE001 — shutdown must proceed
+        log.exception("draining background waits on shutdown")
     # the process-wide HTTP pool (adapters/http): adapters never close it
     try:
         from ..adapters.http import aclose_shared

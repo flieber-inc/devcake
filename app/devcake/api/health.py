@@ -22,6 +22,7 @@ from ..adapters.dagu import DAGU_URL
 from ..bake_status import annotate_liveness, read_bake_status
 from ..staffing import app_digest, receipt_summary
 from ..domain.claims import claims_depth, claims_queue_capped
+from .. import deadline
 from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..ports.pmo import PMOBudgetExceeded
 from ..prompts import templates as prompt_templates
@@ -52,14 +53,18 @@ async def _check_redis() -> bool:
 # branch-protection probe (A2, docs/14): cached — /health is polled every 10 s
 # by the SPA, the forge API needs at most one look every few minutes.
 # `refreshing` is a single-flight guard (2026-08-12 review): stamping `ts`
-# AFTER the probe gives self-healing (a cancelled/failed refresh retries
-# next call), but WITHOUT this flag every concurrent /health caller during
-# the slow O(N repos) probe launched its OWN gather — the exact forge storm
-# of the 2026-08-01 boot incident this cache exists to prevent. The flag
-# check+set is synchronous (no await between), so only the first caller
-# refreshes; the rest serve the last value immediately (no added latency).
+# AFTER the probe gives self-healing (a failed refresh retries next call),
+# but WITHOUT this flag every concurrent /health caller during the slow
+# O(N repos) probe launched its OWN gather — the exact forge storm of the
+# 2026-08-01 boot incident this cache exists to prevent. The flag check+set
+# is synchronous (no await between), so only the first caller starts a
+# refresh; everyone (that caller included) serves the last value at once.
+# The refresh runs as a background task (ADR-0044): no request waits on it
+# and no probe is ever cancelled — each is bounded by the adapter's own
+# httpx timeout. A per-probe `asyncio.timeout` used to cancel probes mid
+# TLS handshake on a starved host, and every cancelled handshake leaked its
+# socket into the shared pool's CLOSE_WAIT pile.
 _protection_cache: dict = {"ts": 0.0, "value": {}, "refreshing": False}
-_PROTECTION_PROBE_TIMEOUT = 5   # a hung forge must not stall the refresh
 
 # per-instance PMO probe cache (2026-08-12 audit F3): same rationale — the
 # vendor needs at most one look a minute, not one per SPA poll. Keyed by
@@ -73,7 +78,11 @@ def reset_health_caches() -> None:
     """THE config-reload hook (one reset path, ADR-0034): connections or
     repos may have changed — every cached probe reprobes on the next
     /health. The admin 'Test' endpoint stays live and uncached."""
+    # the protection map is forgotten, not just marked stale: after a
+    # reload its rows may name cards that no longer exist, and a fresh walk
+    # lands within seconds
     _protection_cache["ts"] = 0.0
+    _protection_cache["value"] = {}
     _pmo_probe_cache.clear()
 
 
@@ -91,11 +100,20 @@ async def _branch_protection(forge_runtime, *, config=None,
     defect class as the 2026-08-01 boot incident)."""
     stale = (_protection_cache["ts"] == 0
              or time.monotonic() - _protection_cache["ts"] > 300)
-    # fresh, or another caller is already refreshing → serve the last value
-    # (single-flight; the check+set below is await-free, so only one refreshes)
-    if not stale or _protection_cache["refreshing"]:
-        return _protection_cache["value"]
-    _protection_cache["refreshing"] = True
+    # fresh, or a refresh is already running → serve the last value
+    # (single-flight; the check+set below is await-free, so only one starts)
+    if stale and not _protection_cache["refreshing"]:
+        _protection_cache["refreshing"] = True
+        deadline.spawn(_refresh_branch_protection(
+            forge_runtime, config=config, repo_cache=repo_cache),
+            name="branch_protection_refresh")
+    return _protection_cache["value"]
+
+
+async def _refresh_branch_protection(forge_runtime, *, config=None,
+                                     repo_cache=None) -> None:
+    """One full walk, in the background; lands `value` + `ts` on success
+    and always clears the single-flight flag."""
     try:
         sem = asyncio.Semaphore(PROBE_CONCURRENCY)
         out: dict = {}
@@ -125,8 +143,7 @@ async def _branch_protection(forge_runtime, *, config=None,
                     out[name] = None      # unknown until the first sync
                     return
                 async with sem:
-                    async with asyncio.timeout(_PROTECTION_PROBE_TIMEOUT):
-                        prot = await f.default_branch_protection(branch)
+                    prot = await f.default_branch_protection(branch)
                     out[name] = prot.model_dump() if prot else None
             except Exception:  # noqa: BLE001 — probe contract: any per-repo failure (row lookup, timeout, forge) → None (advisory omitted); /health must never 500
                 out[name] = None
@@ -134,12 +151,11 @@ async def _branch_protection(forge_runtime, *, config=None,
         await asyncio.gather(*(_probe(n, f)
                                for n, f in list(forge_runtime.forges.items())))
         _protection_cache["value"] = out
-        _protection_cache["ts"] = time.monotonic()   # ts-after: a cancelled refresh retries next call
+        _protection_cache["ts"] = time.monotonic()   # ts-after: a failed refresh retries next call
     finally:
-        # cleared even on cancellation, so a killed refresh never latches the
-        # single-flight guard shut
+        # cleared even on failure (or the shutdown drain's cancel), so a
+        # killed refresh never latches the single-flight guard shut
         _protection_cache["refreshing"] = False
-    return _protection_cache["value"]
 
 
 async def _check_http(url: str) -> bool:

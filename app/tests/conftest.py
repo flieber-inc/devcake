@@ -66,3 +66,16 @@ def _fresh_shared_http_pool():
     from devcake.adapters import http as http_mod
     http_mod._SHARED.clear()
 
+
+
+@pytest.fixture(autouse=True)
+def _no_orphaned_deadline_tasks():
+    """devcake.deadline keeps background tasks strongly referenced. A test
+    that starts one (a /health refresh, a poll sweep) must drain it inside
+    its own loop — an orphan on a closed loop never completes and would
+    pollute every later test's `pending()` reading."""
+    yield
+    from devcake import deadline
+    left = deadline.pending()
+    deadline.reset()
+    assert left == 0, f"{left} deadline task(s) left pending — drain them in the test"

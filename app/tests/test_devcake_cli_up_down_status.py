@@ -660,3 +660,68 @@ def test_status_reports_the_http_pool_meter(monkeypatch, tmp_path, capsys):
     del health["http_pool"]                      # an older app: no line
     cli_main.main(["status"])
     assert "http_pool" not in capsys.readouterr().out
+
+
+def test_status_reports_the_host_capacity(monkeypatch, tmp_path, capsys):
+    """One line from /health.capacity: the cores, what the fleet can demand,
+    and the remedy when the host is oversubscribed."""
+    _ensure_cli_importable()
+    import json as _json
+    import devcake_cli.main as cli_main
+    import devcake_cli.status as status_mod
+    _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def _fake_run(argv, **kwargs):
+        if argv[:3] == ["docker", "compose", "ps"]:
+            return subprocess.CompletedProcess(argv, 0, stdout='{"Name":"app"}\n')
+        return subprocess.CompletedProcess(argv, 1, stderr="no")
+    health = {"capacity": {"host_cpus": 2, "concurrency": 5, "cpus_per_dev": 2.0,
+                           "demand_cpus": 10.0, "oversubscribed": True}}
+    monkeypatch.setattr(status_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(status_mod, "_fetch_health",
+                        lambda root, **kw: (health, None))
+    assert cli_main.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert ("capacity: 2 cores; the fleet can demand 10 CPUs (5 × 2.0) — "
+            "OVERSUBSCRIBED, raise the host or lower Limits") in out
+
+    health["capacity"] = {"host_cpus": 8, "concurrency": 3, "cpus_per_dev": 2.0,
+                          "demand_cpus": 6.0, "oversubscribed": False}
+    cli_main.main(["status"])
+    assert "capacity: 8 cores; the fleet can demand 6 CPUs (3 × 2.0)\n" in capsys.readouterr().out
+
+    cli_main.main(["status", "--json"])
+    assert _json.loads(capsys.readouterr().out)["capacity"] == health["capacity"]
+
+    del health["capacity"]                       # an older app: no line
+    cli_main.main(["status"])
+    assert "capacity:" not in capsys.readouterr().out
+
+
+def test_up_health_gate_warns_when_the_host_is_oversubscribed(monkeypatch, tmp_path, capsys):
+    """`devcake up` reads /health inside the container once the app is live;
+    the capacity fact rides that read and prints the same sentence as
+    `devcake status` — one derivation, three surfaces."""
+    _ensure_cli_importable()
+    import devcake_cli.up as up_mod
+    _fake_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cap = {"host_cpus": 2, "concurrency": 5, "cpus_per_dev": 2.0,
+           "demand_cpus": 10.0, "oversubscribed": True}
+
+    def _fake_run(argv, **kwargs):
+        script = argv[-1] if argv and argv[:3] == ["docker", "compose", "exec"] else ""
+        if "api/v1/health\"" in script or "ADMIN_USER" in script:
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(cap) + "\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    monkeypatch.setattr(up_mod.subprocess, "run", _fake_run)
+    plan = up_mod.UpPlan(docker_gid="4242", ws_host=str(tmp_path / "ws"), tag="t",
+                         sock="/var/run/docker.sock", bake=False, bake_targets=[],
+                         compose_services=[], foreground_baker=False,
+                         no_hello_smoke=True, env_seeded=True, env_generated=[])
+    up_mod._health_gate(tmp_path, plan, as_json=False)
+    out = capsys.readouterr().out
+    assert "── WARNING: host capacity — " in out
+    assert ("capacity: 2 cores; the fleet can demand 10 CPUs (5 × 2.0) — "
+            "OVERSUBSCRIBED, raise the host or lower Limits") in out

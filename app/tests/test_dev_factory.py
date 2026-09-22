@@ -2667,3 +2667,23 @@ def test_slow_tick_period_stays_under_the_heartbeat_stale_threshold():
     import dev_factory.watch as watch
     from devcake.bake_status import HEARTBEAT_STALE_SECONDS
     assert watch.SLOW_RETRY_S + watch.LIVE_PROBE_TIMEOUT_S < HEARTBEAT_STALE_SECONDS
+
+
+def test_live_probe_is_one_text_in_three_places():
+    """The baker, `devcake up` and the compose healthcheck probe the same
+    route with the same budget. Three literals (the baker imports only
+    scripts/dev_factory, the PyPI CLI ships without scripts/), pinned
+    byte-equal here so none of them drifts alone."""
+    _load_factory()
+    import dev_factory.watch as watch
+    import yaml
+    compose = Path("/srv/docker-compose.yml")
+    assert compose.exists(), "bind docker-compose.yml → /srv/docker-compose.yml"
+    hc = yaml.safe_load(compose.read_text())["services"]["app"]["healthcheck"]
+    cli = next((p for p in (Path("/srv/cli"), Path(__file__).parents[2] / "cli")
+                if p.is_dir()), None)
+    assert cli is not None, "cli/devcake_cli missing — bind /srv/cli"
+    if str(cli) not in sys.path:
+        sys.path.insert(0, str(cli))
+    import devcake_cli.up as up
+    assert hc["test"][-1] == watch.LIVE_PROBE_PY == up.LIVE_PROBE_PY

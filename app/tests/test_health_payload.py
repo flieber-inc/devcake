@@ -957,3 +957,31 @@ def test_config_reload_during_a_refresh_discards_its_rows():
         return after
 
     assert run_coro(drive()) == {}
+
+# ── host capacity (2026-09-22 starvation episode) ────────────────────────────
+
+def test_host_capacity_is_the_fleet_demand_against_the_cores():
+    """Dev containers may demand global_max × cpus; the control plane needs
+    one core of its own. The fact is computed once here and derived by the
+    SPA alert, `devcake status` and `devcake up`."""
+    from devcake.config import AppConfig
+    cap = health_mod.host_capacity(AppConfig(), cpu_count=2)
+    assert cap == {"host_cpus": 2, "concurrency": 3, "cpus_per_dev": 2.0,
+                   "demand_cpus": 6.0, "oversubscribed": True}
+    assert health_mod.host_capacity(AppConfig(), cpu_count=8)["oversubscribed"] is False
+    assert health_mod.host_capacity(AppConfig(), cpu_count=7)["oversubscribed"] is False
+    cfg = AppConfig.model_validate({"concurrency": {"global_max": 4}})
+    assert health_mod.host_capacity(cfg, cpu_count=7)["oversubscribed"] is True
+    # unlimited Dev CPUs or an unknown core count: no claim either way
+    cfg = AppConfig.model_validate({"container_limits": {"cpus": 0}})
+    cap = health_mod.host_capacity(cfg, cpu_count=2)
+    assert cap["demand_cpus"] is None and cap["oversubscribed"] is None
+    cap = health_mod.host_capacity(AppConfig(), cpu_count=None)
+    assert cap["host_cpus"] is None and cap["oversubscribed"] is None
+
+
+def test_health_payload_carries_the_capacity_fact(monkeypatch):
+    monkeypatch.setattr(health_mod.os, "cpu_count", lambda: 2)
+    payload = _payload(_forge_runtime(), monkeypatch)
+    assert payload["capacity"]["host_cpus"] == 2
+    assert payload["capacity"]["oversubscribed"] is True

@@ -8,6 +8,7 @@ False/None/ok:False — /health must never 500.
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import math
 from datetime import datetime, timezone
@@ -319,6 +320,27 @@ def _budget_warnings(budgets: dict, poll_interval_seconds: int) -> dict[str, str
     return out
 
 
+_HOST_CPUS = object()   # default: ask the OS; None means "unknown"
+
+
+def host_capacity(config, *, cpu_count=_HOST_CPUS) -> dict:
+    """The fleet's CPU demand against the host's cores (2026-09 starvation
+    episode): Dev containers may demand `concurrency.global_max ×
+    container_limits.cpus`; the control plane needs one core of its own,
+    so `oversubscribed` is demand > cores − 1. No claim when the Dev limit
+    is unbounded (0) or the core count is unknown. Computed ONCE here; the
+    Overview alert, `devcake status` and `devcake up` derive from it."""
+    cores = os.cpu_count() if cpu_count is _HOST_CPUS else cpu_count
+    concurrency = int(getattr(getattr(config, "concurrency", None), "global_max", 0) or 0)
+    cpus = float(getattr(getattr(config, "container_limits", None), "cpus", 0) or 0)
+    demand = round(concurrency * cpus, 3) if cpus > 0 else None
+    over = (None if demand is None or cores is None
+            else demand > cores - 1)
+    return {"host_cpus": cores, "concurrency": concurrency,
+            "cpus_per_dev": cpus, "demand_cpus": demand,
+            "oversubscribed": over}
+
+
 async def _probe_and_store(key, mgr, inst, cached, now) -> dict:
     """One PMO probe → one cache row (written here, so a late finish still
     lands for the next /health). Probe contract (docs/15 §7): any failure
@@ -556,6 +578,9 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         # dead sockets beyond the pool's count are the leak class that once
         # starved every tracker and forge call for 40 minutes
         "http_pool": pool_report(),
+        # the fleet's CPU demand against the host's cores — one fact, three
+        # readers (Overview alert, devcake status, devcake up)
+        "capacity": host_capacity(config),
         "harness_pins": _harness_pins(dev_types, receipt_store, bake),
         "bake_status": bake,
     }

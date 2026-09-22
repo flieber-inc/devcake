@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from . import envfile
+from .status import capacity_lines
 from .doctor import (APPARMOR_PROFILE_NAME, DOCKER_DEFAULT_PROFILE,
                      apparmor_facts, apparmor_install_commands)
 from .paths import read_version_pin, require_checkout_root
@@ -481,13 +482,21 @@ def _compose_up(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
         raise SystemExit(4)
 
 
+# The liveness probe text, byte-equal in three places: here, the host baker
+# (scripts/dev_factory/watch.py LIVE_PROBE_PY) and the compose healthcheck
+# (docker-compose.yml, service app); a structural test pins the three. Ten
+# seconds: on a CPU-starved host the constant-returning route answers late,
+# and late must not read as dead.
+LIVE_PROBE_PY = (
+    "import urllib.request as u; "
+    "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=10)"
+)
+
+
 def _health_gate(repo: Path, plan: UpPlan, *, as_json: bool) -> None:
     env = _compose_env(plan)
     _log("── waiting for the app to report healthy…", as_json=as_json)
-    live_py = (
-        "import urllib.request as u; "
-        "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)"
-    )
+    live_py = LIVE_PROBE_PY
     ok = False
     for _ in range(30):
         proc = subprocess.run(
@@ -510,6 +519,7 @@ req = urllib.request.Request(
     "http://localhost:8000/api/v1/health",
     headers={"Authorization": f"Basic {tok}"})
 body = json.loads(urllib.request.urlopen(req, timeout=10).read())
+print(json.dumps(body.get("capacity")))
 bad = [k for k in ("redis", "dagu") if body.get(k) is False]
 raise SystemExit(1 if bad else 0)
 """
@@ -518,7 +528,17 @@ raise SystemExit(1 if bad else 0)
             cwd=str(repo),
             env=env,
             capture_output=True,
+            text=True,
         )
+        # the fleet's CPU demand against the host's cores — the app computes
+        # it once (/health.capacity); this is the same line devcake status prints
+        try:
+            capacity = json.loads((deps.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            capacity = None
+        for line in capacity_lines({"capacity": capacity}):
+            if "OVERSUBSCRIBED" in line:
+                _log(f"── WARNING: host capacity — {line}", as_json=as_json)
         if deps.returncode == 0:
             _log("── app redis+dagu probes ok ✓", as_json=as_json)
         else:

@@ -83,15 +83,20 @@ and a cancellation discipline the code never stated.
 
 - The first `/health` after boot or a config reload carries an empty
   `forge_protection` map; the unprotected-branch advisory appears one
-  refresh later (seconds on a healthy host). A config reload during a
-  running refresh is honoured on the next stale check, at most 300 s
-  later — unchanged, now stated.
+  refresh later (seconds on a healthy host). A refresh that started
+  before a config reload finishes late with rows for the old card set;
+  it discards them (a reload generation counter) and the next call
+  starts a fresh walk.
 - Background work is bounded by the adapter timeouts it carries (20 s
   per request): at most one refresh walk, one tracker probe per instance
   per minute, one sweep, and one peer read per resolution can be running
   past their callers. `/health.http_pool.background` shows the count.
 - A slow tracker no longer paints red while it is merely slow: `ok: null`
-  with `probe pending` is the honest state; a failure still paints red.
+  with `probe pending` is the honest state, per instance and in the
+  `pmo` aggregate the health dot reads; a failure still paints red.
+- `drain()` cancels what is left at shutdown and waits a short grace; a
+  task that swallows its cancellation is logged and left behind, never
+  allowed to hold the process.
 - `leaked_estimate` counts every `:443` socket in the container's
   namespace, git-over-https children during a mirror sync included — a
   heuristic that spikes briefly during syncs, not a ledger.

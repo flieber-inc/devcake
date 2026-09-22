@@ -632,7 +632,7 @@ def test_status_reports_the_http_pool_meter(monkeypatch, tmp_path, capsys):
     health = {"http_pool": {
         "clients": 1, "connections": 3, "max_connections": 64,
         "sockets": {"established": 3, "close_wait": 0},
-        "leaked_estimate": 0, "background": 1}}
+        "leaked_estimate": 0, "background": 1, "level": "ok"}}
     monkeypatch.setattr(status_mod.subprocess, "run", _fake_run)
     monkeypatch.setattr(status_mod, "_fetch_health",
                         lambda root, **kw: (health, None))
@@ -643,11 +643,15 @@ def test_status_reports_the_http_pool_meter(monkeypatch, tmp_path, capsys):
     assert "restart the app" not in out
 
     health["http_pool"].update({"sockets": {"established": 3, "close_wait": 20},
-                                "leaked_estimate": 20})
+                                "leaked_estimate": 20, "level": "warning"})
     cli_main.main(["status"])
     out = capsys.readouterr().out
     assert "    ! leaked network connections are piling up" in out
     assert "restart the app" in out
+    # the grade comes from the app, never re-derived from the counts here
+    health["http_pool"].update({"level": "ok"})
+    cli_main.main(["status"])
+    assert "piling up" not in capsys.readouterr().out
 
     cli_main.main(["status", "--json"])
     body = _json.loads(capsys.readouterr().out)

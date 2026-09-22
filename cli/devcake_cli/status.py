@@ -160,13 +160,6 @@ def _compose_ps(repo: Path) -> tuple[bool, str]:
     return True, (proc.stdout or "").strip()
 
 
-# Thresholds shared with the admin alert (admin/spa/src/lib/alerts.js):
-# dead sockets pile up → warning; near the pool cap → the remedy.
-HTTP_POOL_WARN_CLOSE_WAIT = 8
-HTTP_POOL_WARN_LEAKED = 16
-HTTP_POOL_CRITICAL_LEAKED = 48
-
-
 def http_pool_lines(health: dict | None) -> list[str]:
     """The shared HTTP pool next to what the kernel holds (ADR-0044) and,
     once dead sockets pile up, the remedy. Empty when /health carries none
@@ -184,8 +177,10 @@ def http_pool_lines(health: dict | None) -> list[str]:
                  f"{close_wait} close_wait; leaked_estimate {leaked}")
     line += f"; background tasks {pool.get('background', 0)}"
     out = [line]
-    if (leaked or 0) >= HTTP_POOL_WARN_LEAKED or close_wait >= HTTP_POOL_WARN_CLOSE_WAIT:
-        near = (leaked or 0) >= HTTP_POOL_CRITICAL_LEAKED
+    # the grade is the app's (`level`) — never re-derived from the counts here
+    level = pool.get("level")
+    if level in ("warning", "critical"):
+        near = level == "critical"
         out.append("    ! leaked network connections are piling up"
                    + (f" — near the {cap}-connection cap, every tracker and "
                       f"repository call fails once it is reached" if near else "")

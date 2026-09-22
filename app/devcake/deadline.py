@@ -35,6 +35,12 @@ log = logging.getLogger("devcake.deadline")
 # reference could be garbage-collected mid-flight (same idiom as the shared
 # pool's close tasks and security's alarm tasks)
 _TASKS: set[asyncio.Task] = set()
+# tasks a `bounded()` caller is waiting on right now: their failure reaches
+# that caller, so the done callback must not report it a second time
+_WAITED: set[asyncio.Task] = set()
+# grace after the shutdown cancel: a task that swallows its cancellation
+# must not hold the process; it is logged and left behind
+DRAIN_GRACE_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -56,8 +62,8 @@ def _retire(task: asyncio.Task) -> None:
     if task.cancelled():
         log.info("%s cancelled at shutdown", _name_of(task))
         return
-    exc = task.exception()
-    if exc is not None:
+    exc = task.exception()          # retrieved either way: never "never retrieved"
+    if exc is not None and task not in _WAITED:
         log.warning("%s failed after its deadline: %s: %s",
                     _name_of(task), type(exc).__name__, exc)
 
@@ -83,9 +89,11 @@ async def bounded(aw: Coroutine[Any, Any, Any] | asyncio.Task,
     task = aw if isinstance(aw, asyncio.Task) else spawn(aw, name=name or "bounded")
     if task.done():
         return Bounded(True, task.result(), task)
+    _WAITED.add(task)               # a failure inside the deadline is ours to raise
     try:
         value = await asyncio.wait_for(asyncio.shield(task), timeout)
     except TimeoutError:
+        _WAITED.discard(task)       # from here on a failure is nobody's: logged
         return Bounded(False, None, task)
     return Bounded(True, value, task)
 
@@ -93,6 +101,7 @@ async def bounded(aw: Coroutine[Any, Any, Any] | asyncio.Task,
 def reset() -> None:
     """Forget every task (tests only: a test's loop is gone by teardown)."""
     _TASKS.clear()
+    _WAITED.clear()
 
 
 def pending() -> int:
@@ -111,5 +120,8 @@ async def drain(timeout: float | None = None) -> int:
     for t in left:
         t.cancel()
     if left:
-        await asyncio.wait(left)
+        _done, stuck = await asyncio.wait(left, timeout=DRAIN_GRACE_S)
+        for t in stuck:
+            log.warning("%s still running after its cancel — left behind",
+                        _name_of(t))
     return len(left)

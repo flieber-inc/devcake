@@ -133,6 +133,25 @@ def _sockets_to_443(proc_net: Path) -> dict | None:
     return counts if seen else None
 
 
+# The leak grade, computed here and read by `devcake status` and the admin
+# alert (never re-derived from the counts): dead sockets piling up is a
+# warning; an estimate near the pool's cap is critical — every tracker and
+# forge call fails once the cap is reached.
+LEAK_WARN_CLOSE_WAIT = 8
+LEAK_WARN_ESTIMATE = 16
+LEAK_CRITICAL_ESTIMATE = 48
+
+
+def leak_level(sockets: dict | None, leaked: int | None) -> str:
+    if sockets is None or leaked is None:
+        return "unknown"
+    if leaked >= LEAK_CRITICAL_ESTIMATE:
+        return "critical"
+    if leaked >= LEAK_WARN_ESTIMATE or sockets.get("close_wait", 0) >= LEAK_WARN_CLOSE_WAIT:
+        return "warning"
+    return "ok"
+
+
 def pool_report(*, proc_net: Path = Path("/proc/self/net")) -> dict:
     """The shared pool's occupancy next to what the kernel holds (ADR-0044
     visibility). `connections` is what httpcore knows; `sockets` is every
@@ -155,6 +174,7 @@ def pool_report(*, proc_net: Path = Path("/proc/self/net")) -> dict:
         "max_connections": SHARED_LIMITS.max_connections,
         "sockets": sockets,
         "leaked_estimate": leaked,
+        "level": leak_level(sockets, leaked),
         "background": deadline.pending(),
     }
 

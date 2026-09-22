@@ -419,7 +419,8 @@ minutes.
   kills the process group), the in-process SSE queue, the shutdown drain
   in `api/main.py` (the pool closes next), and `deadline.py` itself.
 - **Visibility:** `/health.http_pool` — the pool's connections next to the
-  kernel's `:443` sockets by state, the excess as `leaked_estimate`, and
-  the number of background waits still running; `devcake status` prints
-  it; the admin Overview alerts as the pile grows and near the cap.
+  kernel's `:443` sockets by state, the excess as `leaked_estimate`, the
+  number of background waits still running, and the app's grade `level`
+  (`ok` / `warning` / `critical` / `unknown`); `devcake status` and the
+  admin Overview read the grade, never re-derive it from the counts.
 

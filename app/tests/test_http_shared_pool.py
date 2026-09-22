@@ -116,3 +116,22 @@ def test_pool_report_without_proc_is_honest(tmp_path):
     assert rep["sockets"] is None
     assert rep["leaked_estimate"] is None
     assert rep["max_connections"] == 64
+
+
+def test_pool_report_grades_the_leak_at_one_place(tmp_path):
+    """The warning/critical grade is computed HERE and read by the status
+    verb and the admin alert — never re-derived from raw counts."""
+    from devcake.adapters.http import pool_report
+    (tmp_path / "tcp6").write_text(_TCP_HDR)
+
+    def grade(established, close_wait):
+        (tmp_path / "tcp").write_text(
+            _TCP_HDR + "".join(_tcp_line(i, "01") for i in range(established))
+            + "".join(_tcp_line(100 + i, "08") for i in range(close_wait)))
+        return pool_report(proc_net=tmp_path)["level"]
+
+    assert grade(2, 0) == "ok"
+    assert grade(0, 8) == "warning"          # dead sockets piling up
+    assert grade(16, 0) == "warning"         # leaked beyond the pool
+    assert grade(40, 10) == "critical"       # near the 64 cap
+    assert pool_report(proc_net=tmp_path / "missing")["level"] == "unknown"

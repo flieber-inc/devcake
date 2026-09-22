@@ -337,17 +337,17 @@ export default function deriveAlerts(health) {
   // Dead sockets beyond the pool's count are connections the pool dropped
   // without closing; once they reach the 64-connection cap every tracker
   // and repository call fails. Warning as they pile up, critical near the
-  // cap; the remedy is a restart. Thresholds match devcake status.
+  // cap; the remedy is a restart.
+  // The grade (`level`) is the app's — this alert never re-derives it.
   const pool = health.http_pool || {};
   const poolSockets = pool.sockets || {};
   const closeWait = poolSockets.close_wait || 0;
   const leaked = pool.leaked_estimate || 0;
-  if (closeWait >= 8 || leaked >= 16) {
+  if (pool.level === "warning" || pool.level === "critical") {
     const cap = pool.max_connections || 64;
-    const near = leaked >= 48;
     alerts.push({
       id: "http-pool-leak",
-      severity: near ? "critical" : "warning",
+      severity: pool.level,
       title: "Leaked network connections are piling up",
       body:
         `${leaked} socket(s) beyond the ${pool.connections || 0} the pool ` +

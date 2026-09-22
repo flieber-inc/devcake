@@ -65,7 +65,9 @@ async def _check_redis() -> bool:
 # httpx timeout. A per-probe `asyncio.timeout` used to cancel probes mid
 # TLS handshake on a starved host, and every cancelled handshake leaked its
 # socket into the shared pool's CLOSE_WAIT pile.
-_protection_cache: dict = {"ts": 0.0, "value": {}, "refreshing": False}
+# `gen` counts reloads: a refresh that started before a reload finishes
+# late with rows for the OLD card set and must not land them
+_protection_cache: dict = {"ts": 0.0, "value": {}, "refreshing": False, "gen": 0}
 
 # per-instance PMO probe cache (2026-08-12 audit F3): same rationale — the
 # vendor needs at most one look a minute, not one per SPA poll. Keyed by
@@ -84,6 +86,7 @@ def reset_health_caches() -> None:
     # lands within seconds
     _protection_cache["ts"] = 0.0
     _protection_cache["value"] = {}
+    _protection_cache["gen"] += 1
     _pmo_probe_cache.clear()
 
 
@@ -106,15 +109,18 @@ async def _branch_protection(forge_runtime, *, config=None,
     if stale and not _protection_cache["refreshing"]:
         _protection_cache["refreshing"] = True
         deadline.spawn(_refresh_branch_protection(
-            forge_runtime, config=config, repo_cache=repo_cache),
+            forge_runtime, config=config, repo_cache=repo_cache,
+            gen=_protection_cache["gen"]),
             name="branch_protection_refresh")
     return _protection_cache["value"]
 
 
 async def _refresh_branch_protection(forge_runtime, *, config=None,
-                                     repo_cache=None) -> None:
-    """One full walk, in the background; lands `value` + `ts` on success
-    and always clears the single-flight flag."""
+                                     repo_cache=None, gen: int = 0) -> None:
+    """One full walk, in the background; lands `value` + `ts` on success —
+    unless a reload happened meanwhile (`gen` moved): then its rows name
+    the old card set and are dropped, and the next call starts afresh.
+    Always clears the single-flight flag."""
     try:
         sem = asyncio.Semaphore(PROBE_CONCURRENCY)
         out: dict = {}
@@ -151,6 +157,9 @@ async def _refresh_branch_protection(forge_runtime, *, config=None,
 
         await asyncio.gather(*(_probe(n, f)
                                for n, f in list(forge_runtime.forges.items())))
+        if _protection_cache["gen"] != gen:
+            log.info("branch-protection refresh discarded: connections reloaded meanwhile")
+            return
         _protection_cache["value"] = out
         _protection_cache["ts"] = time.monotonic()   # ts-after: a failed refresh retries next call
     finally:
@@ -402,7 +411,9 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
     pmo_instances: dict[str, dict] = dict(
         await asyncio.gather(*(_probe_one(i) for i in config.pmos)))
     budgets = pmo_budget.snapshot_all()
+    # a probe still running is unknown (ok: None), and unknown is not red
     configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
+    pmo_green = bool(configured_ok) and all(ok is not False for ok in configured_ok)
     prefixed = len(managers) > 1   # advisory text carries the instance when N>1
 
     def _stalled() -> list[dict]:
@@ -433,7 +444,7 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         "dagu": dagu_ok,
         "openobserve": oo_ok,
         "oo_ingest": await _oo_ingest_check(),
-        "pmo": bool(configured_ok) and all(configured_ok),
+        "pmo": pmo_green,
         "pmo_instances": pmo_instances,
         "forge": forge_runtime.health,
         # the initial full sweep now rides the poll task (2026-08-01) — this

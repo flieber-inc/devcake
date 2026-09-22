@@ -139,3 +139,50 @@ def test_drain_cancels_only_past_its_budget():
 
     assert run_coro(drive()) == 1
     assert deadline.pending() == 0
+
+
+def test_drain_gives_up_on_a_task_that_swallows_cancellation(caplog):
+    """Shutdown must not hang on a task that catches its cancel and keeps
+    going: drain waits its budget, cancels, waits a short grace, then
+    returns and logs what it left behind."""
+    import time
+    never = asyncio.Event()
+
+    async def stubborn():
+        while True:
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                continue            # swallows the cancel — keeps running
+
+    async def drive():
+        deadline.spawn(stubborn(), name="stubborn")
+        t0 = time.monotonic()
+        cancelled = await deadline.drain(0.01)
+        return cancelled, time.monotonic() - t0
+
+    with caplog.at_level(logging.WARNING, logger="devcake.deadline"):
+        cancelled, took = run_coro(drive())
+    assert cancelled == 1
+    assert took < 5.0, "drain must give up, not wait forever"
+    assert any("stubborn" in r.getMessage() and "still running" in r.getMessage()
+               for r in caplog.records)
+    deadline.reset()
+
+
+def test_an_exception_raised_to_the_caller_is_not_logged_as_late(caplog):
+    """A failure inside the deadline reaches the caller; logging it again
+    as 'after its deadline' would double-report every ordinary error."""
+    async def boom():
+        raise ValueError("seen by the caller")
+
+    async def drive():
+        try:
+            await deadline.bounded(boom(), 1.0, name="boom")
+        except ValueError:
+            pass
+        await deadline.drain()
+
+    with caplog.at_level(logging.WARNING, logger="devcake.deadline"):
+        run_coro(drive())
+    assert not any("after its deadline" in r.getMessage() for r in caplog.records)

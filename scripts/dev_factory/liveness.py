@@ -25,18 +25,20 @@ UNHEALTHY_BUDGET_S = 300
 UNHEALTHY_BACKOFF_START_S = 5
 UNHEALTHY_BACKOFF_CAP_S = 30
 # A slow app is re-probed at the tick interval, not the down backoff: the
-# app paints the baker dead once its heartbeat is 30 s old
-# (bake_status.HEARTBEAT_STALE_SECONDS), and a slow tick already spends
-# the probe's own budget before it can stamp.
+# app paints the baker dead once its heartbeat is HEARTBEAT_STALE_SECONDS
+# old (bake_status), and a slow tick already spends the probe's own budget
+# and the heartbeat exec before it can stamp — a guard test keeps
+# retry + probe budget + exec timeout under that threshold.
 SLOW_RETRY_S = 5.0
 
 
 def classify_app(*, healthy: bool | str, digest: str | None,
                  checkout: str | None = None) -> str:
-    """`healthy` is the probe's verdict: True/"ok", False/"down", or
-    "slow" (container running, route unanswered) — a distinct kind."""
-    if healthy == "slow":
-        return "slow"
+    """`healthy` is the probe's verdict: True/"ok", False/"down", "slow"
+    (container running, route unanswered) or "unknown" (the listing could
+    not be read) — the last two are distinct kinds."""
+    if healthy in ("slow", "unknown"):
+        return healthy
     if not healthy or healthy == "down":
         return "down"
     if not digest or digest == SENTINEL:
@@ -51,6 +53,8 @@ def tick_decision(kind: str) -> str:
         return "exit"
     if kind in ("sentinel", "mismatch", "slow"):
         return "heartbeat"
+    if kind == "unknown":
+        return "hold"
     return "reconcile"
 
 
@@ -107,9 +111,12 @@ def app_gate(liveness: str, clock: AppClock, *, now: float,
              budget_s: float = UNHEALTHY_BUDGET_S) -> tuple[str, float]:
     """The pure decision behind the loop: (action, delay_s) for one probe
     verdict at wall-clock `now`. `ok` → ("reconcile", 0) and the clock
-    resets; `slow` → ("heartbeat", SLOW_RETRY_S), the down clock untouched;
-    `down` → ("wait", backoff clipped to the budget left) until the budget
-    is spent since the container was first seen not running, then
+    resets; `slow` → ("heartbeat", SLOW_RETRY_S) — the container is
+    running, so the down clock resets too; `unknown` (the listing itself
+    could not be read: the daemon is not answering) → ("hold",
+    SLOW_RETRY_S) with every clock untouched — nobody's verdict spends the
+    budget; `down` → ("wait", backoff clipped to the budget left) until the
+    budget is spent since the container was first seen not running, then
     ("exit", 0). Probe time counts: the clock is wall time, not sleep."""
     if liveness == "ok":
         clock.down_since = None
@@ -117,9 +124,13 @@ def app_gate(liveness: str, clock: AppClock, *, now: float,
         clock.slow_since = None
         return "reconcile", 0.0
     if liveness == "slow":
+        clock.down_since = None
+        clock.streak = 0
         if clock.slow_since is None:
             clock.slow_since = now
         return "heartbeat", SLOW_RETRY_S
+    if liveness == "unknown":
+        return "hold", SLOW_RETRY_S
     clock.slow_since = None
     if clock.down_since is None:
         clock.down_since = now

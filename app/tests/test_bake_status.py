@@ -34,8 +34,8 @@ def test_fresh_heartbeat_is_alive_even_while_baking():
 def test_stale_heartbeat_is_dead():
     from devcake.bake_status import HEARTBEAT_STALE_SECONDS, baker_liveness
 
-    assert HEARTBEAT_STALE_SECONDS == 30
-    ts = (NOW - timedelta(seconds=31)).isoformat()
+    assert HEARTBEAT_STALE_SECONDS == 60   # one slow baker tick fits inside
+    ts = (NOW - timedelta(seconds=61)).isoformat()
     live = baker_liveness(
         {"state": "ready", "heartbeat_at": ts}, now=NOW)
     assert live["alive"] is False

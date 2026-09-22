@@ -32,9 +32,11 @@ See the living log and open candidates in
   up` warning. Host sizing rule in docs/13.
 - **Changed — the host baker tells a slow app from a dead one.** A running
   container that cannot answer the liveness probe keeps the baker's
-  heartbeat fresh with no bake work and never exits; only a container that
-  is not running spends the ~5-minute budget, now wall-clock (probe time
-  included). The probe gives the route ten seconds, byte-equal in compose,
+  heartbeat fresh with no bake work and never exits; a container listing
+  that cannot be read is nobody's verdict and spends nothing; only a
+  container that is not running spends the ~5-minute budget, now
+  wall-clock (probe time included). The app paints the baker dead after
+  60 s without a heartbeat (was 30 s), so one slow tick fits inside. The probe gives the route ten seconds, byte-equal in compose,
   `devcake up` and the baker.
 - **Changed — compose gives the control plane CPU weight** (`app` 4096,
   `dagu` and `redis` 2048; Dev containers stay at the default 1024) and the

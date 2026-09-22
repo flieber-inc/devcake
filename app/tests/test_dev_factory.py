@@ -2491,16 +2491,21 @@ def test_app_gate_budget_is_wall_clock_and_only_a_dead_container_spends_it():
     assert factory.app_gate("down", clock, now=5.0) == ("wait", 10.0)
     assert factory.app_gate("down", clock, now=15.0) == ("wait", 20.0)
     assert factory.app_gate("down", clock, now=35.0) == ("wait", 30.0)
-    # a slow reading in the middle leaves the down clock alone
+    # a slow reading proves the container is RUNNING: the down clock resets
+    # (an hour of slow followed by one failed listing must not exit at once)
     assert factory.app_gate("slow", clock, now=70.0) == ("heartbeat", factory.SLOW_RETRY_S)
-    assert clock.down_since == 0.0
-    # the wait is clipped to what is left of the budget (probe time counts)
-    assert factory.app_gate("down", clock, now=290.0) == ("wait", 10.0)
-    assert factory.app_gate("down", clock, now=300.0) == ("exit", 0.0)
-    # recovery resets everything
-    assert factory.app_gate("ok", clock, now=400.0) == ("reconcile", 0.0)
     assert clock.down_since is None and clock.streak == 0
-    assert factory.app_gate("down", clock, now=500.0) == ("wait", 5.0)
+    assert factory.app_gate("down", clock, now=3700.0) == ("wait", 5.0)
+    # the wait is clipped to what is left of the budget (probe time counts)
+    assert factory.app_gate("down", clock, now=3990.0) == ("wait", 10.0)
+    assert factory.app_gate("down", clock, now=4000.0) == ("exit", 0.0)
+    # recovery resets everything
+    assert factory.app_gate("ok", clock, now=4100.0) == ("reconcile", 0.0)
+    assert clock.down_since is None and clock.streak == 0
+    assert factory.app_gate("down", clock, now=4200.0) == ("wait", 5.0)
+    # a listing that could not be read is nobody's verdict: hold, spend nothing
+    assert factory.app_gate("unknown", clock, now=4210.0) == ("hold", factory.SLOW_RETRY_S)
+    assert clock.down_since == 4200.0 and clock.streak == 1
     # a fresh clock on a slow app: heartbeat, never exit, however long
     slow = factory.AppClock()
     for t in (0.0, 1000.0, 5000.0):
@@ -2560,6 +2565,14 @@ def test_probe_app_live_is_tri_state(monkeypatch):
     monkeypatch.setattr(watch.subprocess, "run", run)
     assert watch.probe_app_live() == "ok"
     assert not any(c[:3] == ["docker", "compose", "ps"] for c in run.calls)
+
+    # the daemon itself not answering (a starved host) is not a dead app
+    run = _scripted_run({"probe": fail, "ps": subprocess.TimeoutExpired(["ps"], 30)})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "unknown"
+    run = _scripted_run({"probe": fail, "ps": subprocess.CompletedProcess([], 1, stdout="", stderr="daemon busy")})
+    monkeypatch.setattr(watch.subprocess, "run", run)
+    assert watch.probe_app_live() == "unknown"
 
 
 def test_app_container_state_falls_back_to_the_plain_listing(monkeypatch):
@@ -2659,6 +2672,22 @@ def test_main_heartbeats_through_a_slow_app(monkeypatch, tmp_path, capsys):
     assert out.count("app is slow") == 1
 
 
+def test_main_holds_when_docker_does_not_answer(monkeypatch, tmp_path, capsys):
+    """A starved host makes the daemon slow too: a listing that cannot be
+    read spends none of the exit budget — the baker holds at the short
+    interval and says so once."""
+    fail = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    busy = subprocess.CompletedProcess([], 1, stdout="", stderr="daemon busy")
+    watch, work, run, clock = _loop_rig(
+        monkeypatch, tmp_path, {"probe": fail, "ps": busy}, stop_after_sleeps=4)
+    with pytest.raises(_StopLoop):
+        watch.main()
+    assert clock["sleeps"] == [watch.SLOW_RETRY_S] * 4
+    out = capsys.readouterr().out
+    assert out.count("docker is not answering") == 1
+    assert "exiting" not in out
+
+
 def test_slow_tick_period_stays_under_the_heartbeat_stale_threshold():
     """A slow tick spends the probe's budget before it can stamp; the
     retry plus that budget must stay inside the app's stale threshold
@@ -2666,7 +2695,9 @@ def test_slow_tick_period_stays_under_the_heartbeat_stale_threshold():
     _load_factory()
     import dev_factory.watch as watch
     from devcake.bake_status import HEARTBEAT_STALE_SECONDS
-    assert watch.SLOW_RETRY_S + watch.LIVE_PROBE_TIMEOUT_S < HEARTBEAT_STALE_SECONDS
+    # probe budget + the heartbeat's own exec (compose_write timeout) + retry
+    assert (watch.SLOW_RETRY_S + watch.LIVE_PROBE_TIMEOUT_S
+            + watch.COMPOSE_WRITE_TIMEOUT_S) < HEARTBEAT_STALE_SECONDS
 
 
 def test_live_probe_is_one_text_in_three_places():

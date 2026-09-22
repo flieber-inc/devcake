@@ -113,7 +113,7 @@ def compose_read(rel: str) -> str | None:
     try:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app", "cat", f"/data/{rel}"],
-            cwd=REPO, text=True, timeout=15,
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S,
             stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
@@ -124,7 +124,7 @@ def compose_ls(rel: str) -> list[str]:
     try:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app", "ls", "-1", f"/data/{rel}"],
-            cwd=REPO, text=True, timeout=15)
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
     return [line.strip() for line in out.splitlines() if line.strip()]
@@ -136,11 +136,11 @@ def compose_write(rel: str, text: str) -> None:
     subprocess.run(
         ["docker", "compose", "exec", "-T", "app",
          "mkdir", "-p", parent],
-        cwd=REPO, check=False, timeout=15)
+        cwd=REPO, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S)
     proc = subprocess.run(
         ["docker", "compose", "exec", "-T", "app",
          "tee", dest],
-        cwd=REPO, input=text, text=True, check=False, timeout=15,
+        cwd=REPO, input=text, text=True, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S,
         stdout=subprocess.DEVNULL)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot write {dest} (exit {proc.returncode})")
@@ -150,7 +150,7 @@ def compose_rm(rel: str) -> None:
     dest = f"/data/{rel}"
     subprocess.run(
         ["docker", "compose", "exec", "-T", "app", "rm", "-f", dest],
-        cwd=REPO, check=False, timeout=15)
+        cwd=REPO, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S)
 
 
 def compose_claim(rel: str) -> None:
@@ -165,7 +165,7 @@ def compose_claim(rel: str) -> None:
         ["docker", "compose", "exec", "-T", "app",
          "sh", "-c", 'if [ -f "$1" ]; then mv -f "$1" "$2"; fi',
          "claim", src, dst],
-        cwd=REPO, check=False, timeout=15)
+        cwd=REPO, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S)
 
 
 def docker_name_list(argv: list[str]) -> list[str] | None:
@@ -262,7 +262,7 @@ def compose_append(rel: str, text: str) -> None:
     dest = f"/data/{rel}"
     proc = subprocess.run(
         ["docker", "compose", "exec", "-T", "app", "tee", "-a", dest],
-        cwd=REPO, input=text, text=True, check=False, timeout=15,
+        cwd=REPO, input=text, text=True, check=False, timeout=COMPOSE_WRITE_TIMEOUT_S,
         stdout=subprocess.DEVNULL)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot append {dest} (exit {proc.returncode})")
@@ -280,11 +280,15 @@ LIVE_PROBE_PY = (
     "u.urlopen('http://localhost:8000/api/v1/health/live', timeout=10)"
 )
 LIVE_PROBE_TIMEOUT_S = 20   # the outer bound: exec start-up + the route
+COMPOSE_WRITE_TIMEOUT_S = 15   # one exec into the app (heartbeat, receipts, reads)
 
 
 def app_container_state() -> str | None:
     """The app container's compose state (`running`, `exited`, …; None when
-    not listed) — the second look when the route does not answer."""
+    the listing is fine but the container is not in it) — the second look
+    when the route does not answer. `"unknown"` when the listing itself
+    could not be read (the daemon not answering on a starved host): that
+    is nobody's verdict, never a dead app."""
     from .liveness import container_state
     base = ["docker", "compose", "ps", "-a"]
     for argv in (base + ["--format", "json", "app"], base + ["app"]):
@@ -292,16 +296,17 @@ def app_container_state() -> str | None:
             proc = subprocess.run(argv, cwd=REPO, timeout=30, check=False,
                                   capture_output=True, text=True)
         except (OSError, subprocess.TimeoutExpired):
-            return None
+            return "unknown"
         if proc.returncode == 0:
             return container_state(proc.stdout)
-    return None
+    return "unknown"
 
 
 def probe_app_live() -> str:
     """`ok` when /health/live answers, `slow` when it does not but the
     container is running (a starved event loop: heartbeat, no bake work),
-    `down` when the container is not running or not listed."""
+    `unknown` when the container listing could not be read (hold, spend
+    nothing), `down` when the container is not running or not listed."""
     try:
         proc = subprocess.run(
             ["docker", "compose", "exec", "-T", "app", "python", "-c",
@@ -313,7 +318,10 @@ def probe_app_live() -> str:
         alive = False
     if alive:
         return "ok"
-    return "slow" if app_container_state() == "running" else "down"
+    state = app_container_state()
+    if state == "running":
+        return "slow"
+    return "unknown" if state == "unknown" else "down"
 
 
 def _checkout_digest() -> str:
@@ -327,7 +335,7 @@ def running_app_digest() -> str | None:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "printenv", "DEVCAKE_APP_DIGEST"],
-            cwd=REPO, text=True, timeout=15).strip()
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S).strip()
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return out or None
@@ -458,7 +466,7 @@ def keep_set_mtime() -> float | None:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "stat", "-c", "%Y", f"/data/{KEEP_SET}"],
-            cwd=REPO, text=True, timeout=15,
+            cwd=REPO, text=True, timeout=COMPOSE_WRITE_TIMEOUT_S,
             stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
@@ -855,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
     clock = AppClock()
+    holding = False
     last_state: str | None = None
     last_trees: float | None = None
     last_keep: float | None = None
@@ -874,6 +883,19 @@ def main(argv: list[str] | None = None) -> int:
             print("dev_factory: app container is not running — exiting "
                   "(restart with devcake up)", flush=True)
             return 1
+        if action == "hold":
+            # the daemon is not answering (a starved host): nobody's
+            # verdict — hold at the short interval, spend no budget
+            if not holding:
+                print("dev_factory: docker is not answering — holding; "
+                      "no budget spent until the container can be listed",
+                      flush=True)
+                holding = True
+            time.sleep(delay)
+            continue
+        if holding:
+            print("dev_factory: docker answers again", flush=True)
+            holding = False
         if action == "wait":
             remaining = UNHEALTHY_BUDGET_S - (time.monotonic() - (clock.down_since or 0.0))
             print(f"dev_factory: app container is not running "

@@ -2443,3 +2443,66 @@ def test_newest_receipt_is_attached_on_every_publication(tmp_path):
     # a stray non-UTF-8 file never kills the loop
     (d / "receipt-20260911T020000Z.json").write_bytes(b"\xff\xfe{")
     assert factory.attach_newest_nested({"state": "ready"}, tmp_path, prev)["nested"]["rig_ok"] is True
+
+
+# ── slow-but-alive liveness (2026-09-22 starvation episode) ──────────────────
+
+def test_classify_app_knows_a_slow_app_from_a_dead_one():
+    """A container that is running but cannot answer /health/live within
+    the probe's budget is SLOW, not down: the baker heartbeats and skips
+    its bake work; only a container that is not running is `down`."""
+    factory = _load_factory()
+    assert factory.classify_app(healthy="slow", digest="sha256:abc",
+                                checkout="sha256:abc") == "slow"
+    assert factory.classify_app(healthy="ok", digest="sha256:abc",
+                                checkout="sha256:abc") == "ready"
+    assert factory.classify_app(healthy="down", digest="sha256:abc") == "down"
+    assert factory.classify_app(healthy=True, digest="sha256:abc") == "ready"
+    assert factory.classify_app(healthy=False, digest="sha256:abc") == "down"
+    assert factory.tick_decision("slow") == "heartbeat"
+
+
+def test_container_state_reads_every_compose_ps_shape():
+    """`docker compose ps -a` prints NDJSON on newer compose, a JSON array on
+    older, plain text with no --format at all."""
+    factory = _load_factory()
+    assert factory.container_state(
+        '{"Name":"devcake-app-1","Service":"app","State":"running"}\n') == "running"
+    assert factory.container_state(
+        '[{"Service":"app","State":"exited","ExitCode":137}]') == "exited"
+    assert factory.container_state(
+        "NAME            SERVICE  STATUS\n"
+        "devcake-app-1   app      Up 3 hours (unhealthy)\n") == "running"
+    assert factory.container_state(
+        "devcake-app-1   app      Exited (137) 2 minutes ago\n") == "exited"
+    assert factory.container_state(
+        "devcake-app-1   app      Restarting (1) 5 seconds ago\n") == "restarting"
+    assert factory.container_state("") is None
+
+
+def test_app_gate_budget_is_wall_clock_and_only_a_dead_container_spends_it():
+    """The gate is the pure decision behind the baker loop: `ok` reconciles
+    and resets the clock; `slow` heartbeats at the short retry with the
+    down-clock untouched; `down` waits with backoff until the WALL-CLOCK
+    budget (probe time included) is spent, then exits."""
+    factory = _load_factory()
+    clock = factory.AppClock()
+    assert factory.app_gate("down", clock, now=0.0) == ("wait", 5.0)
+    assert factory.app_gate("down", clock, now=5.0) == ("wait", 10.0)
+    assert factory.app_gate("down", clock, now=15.0) == ("wait", 20.0)
+    assert factory.app_gate("down", clock, now=35.0) == ("wait", 30.0)
+    # a slow reading in the middle leaves the down clock alone
+    assert factory.app_gate("slow", clock, now=70.0) == ("heartbeat", factory.SLOW_RETRY_S)
+    assert clock.down_since == 0.0
+    # the wait is clipped to what is left of the budget (probe time counts)
+    assert factory.app_gate("down", clock, now=290.0) == ("wait", 10.0)
+    assert factory.app_gate("down", clock, now=300.0) == ("exit", 0.0)
+    # recovery resets everything
+    assert factory.app_gate("ok", clock, now=400.0) == ("reconcile", 0.0)
+    assert clock.down_since is None and clock.streak == 0
+    assert factory.app_gate("down", clock, now=500.0) == ("wait", 5.0)
+    # a fresh clock on a slow app: heartbeat, never exit, however long
+    slow = factory.AppClock()
+    for t in (0.0, 1000.0, 5000.0):
+        assert factory.app_gate("slow", slow, now=t) == ("heartbeat", factory.SLOW_RETRY_S)
+    assert slow.slow_since == 0.0

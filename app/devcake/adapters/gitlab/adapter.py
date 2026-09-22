@@ -378,14 +378,29 @@ class GitLabForge:
         `/changes` endpoint is deprecated since GitLab 15.7 and leaves in
         API v5; its `access_raw_diffs` retry read whole diffs from Gitaly
         with no size cap). A `too_large`/`collapsed` entry withholds the
-        diff TEXT only — the path is still listed — so the listing is
-        complete unless the page ceiling is hit, which `truncated` says."""
+        diff TEXT only — the path is still listed. Two things make the
+        listing incomplete, and `truncated` says both: the page ceiling,
+        and the vendor's own cap — GitLab stops storing a merge request's
+        diff past its limits and reports `changes_count: "1000+"` on the
+        merge request itself, which a page walk ending on a short page
+        cannot see."""
         from .._toolkit import paginate_rest
         raw, truncated = await paginate_rest(
             lambda page: self._req(
                 "GET", f"/merge_requests/{pr_number}/diffs?per_page=100&page={page}"),
             page_size=100, max_pages=40,
             what=f"gitlab pr_files #{pr_number}", on_ceiling="warn")
+        try:
+            mr = await self._req("GET", f"/merge_requests/{pr_number}") or {}
+        except ForgeError as e:
+            log.warning("gitlab pr_files #%s: merge request row unreadable "
+                        "(%s) — vendor overflow signal unknown", pr_number, e)
+            mr = {}
+        if str(mr.get("changes_count") or "").endswith("+"):
+            log.warning("gitlab pr_files #%s: the vendor capped this merge "
+                        "request's diff (changes_count %s) — changed-file "
+                        "list incomplete", pr_number, mr.get("changes_count"))
+            truncated = True
         out: list[PRFile] = []
         for ch in raw:
             status = ("added" if ch.get("new_file") else

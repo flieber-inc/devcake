@@ -46,7 +46,10 @@ See the living log and open candidates in
   0.1.10.
 - **Changed — GitLab merge request file listing walks the paginated
   `/diffs` endpoint** (the `/changes` endpoint is deprecated and leaves in
-  API v5; the raw-diffs retry that read whole diffs from Gitaly is gone).
+  API v5; the raw-diffs retry that read whole diffs from Gitaly is gone)
+  and reads the merge request's own overflow signal (`changes_count`
+  `1000+`), so a capped diff is disclosed as truncated, never attached as
+  complete.
   Git transfers over the network — the app's mirror fetches and the Dev
   containers' clones — now abort once they crawl under 1 kB/s for 60 s
   instead of sitting under the 900 s budget. Dev images re-bake at the

@@ -991,10 +991,11 @@ until that run exists, field evidence below stays operator-self-reported.
   its `access_raw_diffs` retry read whole diffs from Gitaly with no size
   cap) — same fields, `paginate_rest`'s ceiling flag, `too_large` entries
   keep their path. Every git child on the app side (mirror fetch,
-  `ls-remote`, LFS, claims push) and every clone over the network on the
-  Dev side carry git's low-speed abort (under 1 kB/s for 60 s) through one
-  env chokepoint each, pinned equal by a test; the 900 s budget stays as
-  the outer bound. Neither caused the 2026-09 incidents (zero `/changes`
+  `ls-remote`, claims push) and every clone over the network on the Dev
+  side carry git's low-speed abort (under 1 kB/s for 60 s) through one env
+  chokepoint each, pinned equal by a test; the 900 s budget stays as the
+  outer bound. git-lfs transfers use their own client and its own activity
+  timeout — not covered here, never unbounded either. Neither caused the 2026-09 incidents (zero `/changes`
   calls in 40 h on the host) — hygiene. Docs 06, 07.
 
 ### Field evidence (receipted)

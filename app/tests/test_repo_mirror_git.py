@@ -474,8 +474,9 @@ def test_blank_card_on_an_empty_remote_bootstraps_main(tmp_path):
 
 
 def test_run_git_children_carry_the_low_speed_abort(tmp_path):
-    """Every app-side git child (mirror fetch, ls-remote, lfs, claims
-    push) inherits a low-speed abort through the one env chokepoint: a
+    """Every app-side git child (mirror fetch, ls-remote, claims push)
+    inherits a low-speed abort through the one env chokepoint — git-lfs
+    transfers use their own client and its own activity timeout: a
     transfer under 1 kB/s for 60 s aborts instead of sitting under the
     900 s outer budget. Git reads GIT_CONFIG_COUNT/KEY_n/VALUE_n, so a
     `config --get` inside a throwaway repo is the receipt."""

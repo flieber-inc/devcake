@@ -22,6 +22,7 @@ GIT_TIMEOUT_SECONDS = 900   # bounds a wedged fetch; also the cold-clone budget
 # A network transfer that crawls (a stalled fetch, a far end that stopped
 # sending) aborts once it stays under LOW_SPEED_LIMIT bytes/s for
 # LOW_SPEED_TIME seconds, instead of sitting under the 900 s outer budget.
+# git-lfs transfers use their own client (lfs.activitytimeout) — not this.
 # The same pair rides the Dev-side clones (images/common/devcake_dev/
 # workspace/provision.py network_git_env); a structural test pins the two.
 GIT_LOW_SPEED_LIMIT_BPS = 1000

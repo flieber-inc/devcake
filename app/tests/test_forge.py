@@ -722,6 +722,8 @@ def test_gitlab_pr_files_concatenates_across_pages():
     forge = gl()
 
     async def _req(method, path, **kw):
+        if path == "/merge_requests/7":
+            return {"changes_count": "101"}
         assert "/merge_requests/7/diffs" in path
         assert "per_page=100" in path
         page = int(path.split("page=")[-1].split("&")[0])
@@ -741,6 +743,8 @@ def test_gitlab_pr_files_maps_status_and_keeps_too_large_paths():
     forge = gl()
 
     async def _req(method, path, **kw):
+        if path == "/merge_requests/3":
+            return {"changes_count": "5"}
         if "page=1" not in path:
             return []
         return [
@@ -767,6 +771,8 @@ def test_gitlab_pr_files_flags_the_page_ceiling():
     asked: list[int] = []
 
     async def _req(method, path, **kw):
+        if path == "/merge_requests/5":
+            return {"changes_count": "1000+"}
         page = int(path.split("page=")[-1].split("&")[0])
         asked.append(page)
         return [{"new_path": f"p{page}-{i}.py", "old_path": f"p{page}-{i}.py"}
@@ -777,6 +783,43 @@ def test_gitlab_pr_files_flags_the_page_ceiling():
     assert result.truncated is True
     assert len(result.files) == 4000
     assert max(asked) == 40
+
+
+def test_gitlab_pr_files_reads_the_vendors_own_overflow_signal():
+    """GitLab caps a merge request's stored diff and then reports
+    `changes_count: "1000+"` on the merge request itself; the paginated
+    walk ends on a short page and cannot see that. The listing must read
+    the vendor's signal and disclose truncation — delivery attaches an
+    incomplete file set as complete otherwise."""
+    forge = gl()
+
+    def _stub(count):
+        async def _req(method, path, **kw):
+            if path == "/merge_requests/9":
+                return {"changes_count": count}
+            if "page=1" in path:
+                return [{"new_path": "a.py", "old_path": "a.py"}]
+            return []
+        return _req
+
+    forge._req = _stub("1000+")
+    result = run_coro(forge.pr_files(9))
+    assert result.truncated is True
+    assert [f.path for f in result.files] == ["a.py"]
+
+    forge._req = _stub("1")
+    assert run_coro(forge.pr_files(9)).truncated is False
+
+    # an unreadable merge request row never hides the files
+    async def _broken(method, path, **kw):
+        from devcake.ports.forge import ForgeError
+        if path == "/merge_requests/9":
+            raise ForgeError("GET /merge_requests/9 → 500", status=500)
+        return [{"new_path": "a.py", "old_path": "a.py"}] if "page=1" in path else []
+    forge._req = _broken
+    result = run_coro(forge.pr_files(9))
+    assert [f.path for f in result.files] == ["a.py"]
+    assert result.truncated is False
 
 
 # ── close_pr: close without merging (ticket delivery) ────────────────────────

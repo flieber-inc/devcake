@@ -17,10 +17,10 @@ mission_pmo_id "3" for unrelated missions.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Callable
 
+from .. import deadline
 from .model import Mission, MissionRef
 
 # Peer resolution runs inside the LOCAL instance's poll segment: a sick peer
@@ -28,7 +28,7 @@ from .model import Mission, MissionRef
 # must not couple its latency into every local cycle. A peer that cannot
 # answer within this budget counts as a miss for THIS resolution path —
 # fail-safe unchanged (miss ⇒ next candidate ⇒ at worst unreadable-open,
-# self-healing next cycle).
+# self-healing next cycle). The read itself is never cancelled (ADR-0044).
 PEER_GET_TIMEOUT_S = 5.0
 
 # Peer resolution is legal only when the LOCAL adapter declares
@@ -175,9 +175,14 @@ class BlockerLocator:
         refs = [MissionRef(b, "issue") for b in bids]
         try:
             if timeout is not None:
+                # ADR-0044: the deadline bounds this cycle's wait, never the
+                # read — a slow peer's batch finishes in the background and
+                # its answer is dropped; it is never cancelled mid-handshake.
                 pages = max(1, -(-len(bids) // 100))
-                async with asyncio.timeout(timeout * pages):
-                    return dict(await mgr.pmo.get_many(refs))
+                res = await deadline.bounded(mgr.pmo.get_many(refs),
+                                             timeout * pages,
+                                             name="peer_get_many")
+                return dict(res.value) if res.done else {}
             return dict(await mgr.pmo.get_many(refs))
         except Exception:  # noqa: BLE001 — one unreadable/slow path falls through to the next candidate; unresolved blockers stay open (ADR-0007 fail-safe)
             return {}
@@ -190,8 +195,9 @@ class BlockerLocator:
         # opaque id — always query as issue.
         try:
             if timeout is not None:
-                async with asyncio.timeout(timeout):
-                    return await mgr.pmo.get(MissionRef(bid, "issue"))
+                res = await deadline.bounded(mgr.pmo.get(MissionRef(bid, "issue")),
+                                             timeout, name="peer_get")
+                return res.value if res.done else None
             return await mgr.pmo.get(MissionRef(bid, "issue"))
         except Exception:  # noqa: BLE001 — one unreadable/slow path falls through to the next candidate; a fully-unresolved blocker stays open (ADR-0007 fail-safe)
             return None

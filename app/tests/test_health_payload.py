@@ -441,12 +441,21 @@ def test_pmo_health_exposes_probe_detail_and_capability_flags(tmp_path, monkeypa
 
 
 def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
-    """Per-probe 5 s timeout + concurrent gather: a sick PMO reports
-    ok:False; /health returns without waiting out a 30 s client timeout."""
+    """A sick PMO must not stall /health — but it must not be CANCELLED
+    either (ADR-0044: a cancel mid TLS handshake leaks the socket). The
+    probe keeps running in the background; /health serves a `probe pending`
+    row now and the real result once it lands."""
     from devcake.config import PMOInstance
+    release = asyncio.Event()
+    seen = {}
 
     async def hang(team):
-        await asyncio.sleep(3600)
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+        return SimpleNamespace(ok=True)
 
     async def fine(team):
         return SimpleNamespace(ok=True)
@@ -465,10 +474,50 @@ def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
 
     managers = {"sick": _mgr(hang), "fine": _mgr(fine)}
     monkeypatch.setattr(health_mod, "_PMO_PROBE_TIMEOUT", 0.05)
-    payload = _pmo_payload(cfg, managers, monkeypatch)
-    assert payload["pmo_instances"]["sick"]["ok"] is False, (
-        "the timeout must convert a hang into ok:False")
-    assert payload["pmo_instances"]["fine"]["ok"] is True
+
+    async def drive():
+        health_mod.reset_health_caches()
+        first = await _pmo_payload_async(cfg, managers, drain=False)
+        release.set()
+        await deadline.drain()
+        second = await _pmo_payload_async(cfg, managers)
+        return first, second
+
+    first, second = run_coro(drive())
+    sick = first["pmo_instances"]["sick"]
+    assert sick["ok"] is None, "a probe still running is unknown, not red"
+    assert sick["detail"] == "probe pending"
+    assert first["pmo_instances"]["fine"]["ok"] is True
+    assert second["pmo_instances"]["sick"]["ok"] is True, (
+        "the finished probe lands in the cache for the next /health")
+    assert "detail" not in second["pmo_instances"]["sick"]
+    assert seen == {}
+
+
+def test_pending_pmo_probe_is_single_flight_within_the_ttl(tmp_path, monkeypatch):
+    """Two /health calls while a probe is pending start ONE probe."""
+    gate = asyncio.Event()
+    calls = []
+
+    async def slow(team):
+        calls.append(team)
+        await gate.wait()
+        return SimpleNamespace(ok=True)
+
+    cfg, managers = _pmo_world(slow, tmp_path, monkeypatch)
+    monkeypatch.setattr(health_mod, "_PMO_PROBE_TIMEOUT", 0.05)
+
+    async def drive():
+        health_mod.reset_health_caches()
+        await _pmo_payload_async(cfg, managers, drain=False)
+        await _pmo_payload_async(cfg, managers, drain=False)
+        gate.set()
+        await deadline.drain()
+        return await _pmo_payload_async(cfg, managers)
+
+    payload = run_coro(drive())
+    assert calls == ["ENG"]
+    assert payload["pmo_instances"]["linear"]["ok"] is True
 
 
 def test_pmo_probe_transport_failure_carries_detail(tmp_path, monkeypatch):

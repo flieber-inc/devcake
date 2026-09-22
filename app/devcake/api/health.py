@@ -309,6 +309,38 @@ def _budget_warnings(budgets: dict, poll_interval_seconds: int) -> dict[str, str
     return out
 
 
+async def _probe_and_store(key, mgr, inst, cached, now) -> dict:
+    """One PMO probe → one cache row (written here, so a late finish still
+    lands for the next /health). Probe contract (docs/15 §7): any failure
+    maps to ok:False + detail; the budget's deferral keeps the last state."""
+    detail = ""
+    rel = att = None
+    try:
+        h = (await mgr.pmo.health_probe(inst.team_key)) if mgr else None
+        ok = bool(h and h.ok)
+        detail = getattr(h, "detail", "") or "" if h else ""
+        try:
+            caps = mgr.pmo.capabilities() if mgr else None
+            if caps is not None:
+                rel = bool(caps.relations_supported)
+                att = bool(getattr(caps, "attachments_supported", True))
+        except Exception:  # noqa: BLE001 — caps are advisory on /health
+            pass
+    except PMOBudgetExceeded as e:
+        # ADR-0040: the request budget deferred the probe — not an
+        # outage. Keep the last known state (or unknown), say why.
+        ok = cached["ok"] if cached is not None else None
+        detail = f"probe deferred: {str(e)[:150]}"
+    except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + detail; /health must never 500
+        ok = False
+        detail = f"probe failed: {str(e)[:150]}"
+        log.warning("pmo probe %s failed: %s", inst.name, e)
+    row = {"ts": now, "ok": ok, "detail": detail,
+           "relations_supported": rel, "attachments_supported": att}
+    _pmo_probe_cache[key] = row
+    return row
+
+
 async def build_health_payload(*, config, dev_types, managers, stewards,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
@@ -341,35 +373,19 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         if cached is not None and now - cached["ts"] < _PMO_PROBE_TTL:
             row = cached
         else:
-            mgr = managers.get(inst.name)
-            detail = ""
-            rel = att = None
-            try:
-                async with asyncio.timeout(_PMO_PROBE_TIMEOUT):
-                    h = (await mgr.pmo.health_probe(inst.team_key)
-                         ) if mgr else None
-                    ok = bool(h and h.ok)
-                    detail = getattr(h, "detail", "") or "" if h else ""
-                    try:
-                        caps = mgr.pmo.capabilities() if mgr else None
-                        if caps is not None:
-                            rel = bool(caps.relations_supported)
-                            att = bool(getattr(
-                                caps, "attachments_supported", True))
-                    except Exception:  # noqa: BLE001 — caps are advisory on /health
-                        pass
-            except PMOBudgetExceeded as e:
-                # ADR-0040: the request budget deferred the probe — not an
-                # outage. Keep the last known state (or unknown), say why.
-                ok = cached["ok"] if cached is not None else None
-                detail = f"probe deferred: {str(e)[:150]}"
-            except Exception as e:  # noqa: BLE001 — probe contract: any failure (incl. the 5s timeout) → ok:False + detail; /health must never 500
-                ok = False
-                detail = f"probe failed: {str(e)[:150]}"
-                log.warning("pmo probe %s failed: %s", inst.name, e)
-            row = {"ts": now, "ok": ok, "detail": detail,
-                   "relations_supported": rel, "attachments_supported": att}
-            _pmo_probe_cache[key] = row
+            # ADR-0044: the probe is never cancelled. A placeholder row holds
+            # the slot (single-flight for the TTL) while the probe runs; the
+            # probe writes the real row when it lands, whether or not this
+            # request waited it out.
+            placeholder = {
+                "ts": now, "ok": cached["ok"] if cached is not None else None,
+                "detail": "probe pending", "pending": True,
+                "relations_supported": None, "attachments_supported": None}
+            _pmo_probe_cache[key] = placeholder
+            res = await deadline.bounded(
+                _probe_and_store(key, managers.get(inst.name), inst, cached, now),
+                _PMO_PROBE_TIMEOUT, name=f"pmo_probe:{inst.name}")
+            row = res.value if res.done else placeholder
         out = {
             "ok": row["ok"], "configured": True, "team": inst.team_key,
             "intake_paused": bool(inst.intake_paused),

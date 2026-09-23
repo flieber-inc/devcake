@@ -19,7 +19,7 @@ Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.10.
 [Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.10).
 
 - **Fixed — nested Podman no longer fills the Dev cgroup with
-  fuse-overlayfs.** Rootless image storage sat on the container's own
+  fuse-overlayfs** (#482). Rootless image storage sat on the container's own
   overlay upper, so the diff fell back to fuse-overlayfs and that page
   cache was charged to the Dev's memory cap. The store now lives at
   `/workspace/.podman-storage` on the per-run workspace bind (host

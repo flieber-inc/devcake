@@ -398,8 +398,13 @@ socket, images pulled per run, the host's name); when the receipt is red
 the section adds that containers are unavailable here — verify with local
 services, spend no turns on the engine, and do not report the environment
 as a discovery.
-Nested storage lives under $HOME → per-run ephemeral; nested writes onto
-the /workspace BIND persist past the run as foreign-uid files, so the DAG's
+Nested storage lives at `/workspace/.podman-storage` on the per-run
+workspace bind (host ext4). The container's own overlay upper cannot host
+a native overlay diff, and that fallback is `fuse-overlayfs`, whose page
+cache is charged to this container's cgroup. `mount_program` is empty so
+the diff stays native. The store is per-run ephemeral, same as before.
+Nested writes onto the /workspace bind persist past the run as foreign-uid
+files, so the DAG's
 exit handler re-chowns the workspace to uid 1000 at run end (success,
 failure, and stop) and the app then reclaims it normally. The container's
 cgroup limits bound the nested engine too. The long

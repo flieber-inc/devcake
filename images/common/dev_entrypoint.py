@@ -604,7 +604,59 @@ def provision_main() -> None:
     print(f"provision {RUN_ID} done: {workdir} ready")
 
 
+def cgroup_budget(cpu_max: str, memory_max: str) -> dict[str, str]:
+    """Tool limits from cgroup v2 `cpu.max` and `memory.max`.
+
+    `nproc` and `/proc/meminfo` show the host. A quota of `max`, or a
+    memory max of `max` / `0`, is unlimited: that resource is omitted so
+    a tool keeps its own default instead of a made-up cap. The memory
+    figure handed to Go and Node is 70% of `memory.max`, leaving the
+    rest of the cgroup for the nested engine and page cache.
+    """
+    out: dict[str, str] = {}
+    cpu_fields = cpu_max.split()
+    if len(cpu_fields) == 2 and cpu_fields[0] != "max":
+        quota = int(cpu_fields[0])
+        period = int(cpu_fields[1])
+        if period > 0 and quota > 0:
+            whole = quota // period
+            if quota % period == 0:
+                cpus = str(whole)
+            else:
+                tenths = (quota * 10) // period
+                cpus = f"{tenths // 10}.{tenths % 10}"
+            out["DEVCAKE_CPUS"] = cpus
+            out["GOMAXPROCS"] = str(max(1, whole))
+    mem = memory_max.strip()
+    if mem and mem not in ("max", "0"):
+        memory = int(mem)
+        if memory > 0:
+            limit = memory * 70 // 100
+            out["DEVCAKE_MEMORY_BYTES"] = str(memory)
+            out["GOMEMLIMIT"] = f"{limit}B"
+            out["NODE_OPTIONS"] = f"--max-old-space-size={limit // (1024 * 1024)}"
+    return out
+
+
+def apply_cgroup_budget(environ: dict, cpu_path, mem_path) -> None:
+    """Set the budget on `environ` when the cgroup files exist.
+
+    Existing keys win (`setdefault`): a runspec or the operator can
+    override a derived value. A missing file — macOS, a unit test, a
+    cgroup v1 host — leaves the environment alone.
+    """
+    try:
+        cpu = pathlib.Path(cpu_path).read_text()
+        mem = pathlib.Path(mem_path).read_text()
+    except OSError:
+        return
+    for key, value in cgroup_budget(cpu, mem).items():
+        environ.setdefault(key, value)
+
+
 def main() -> None:
+    apply_cgroup_budget(os.environ, "/sys/fs/cgroup/cpu.max",
+                        "/sys/fs/cgroup/memory.max")
     # Phase dispatch (ADR-0025): the two-step dev-run DAG sets DEVCAKE_PHASE
     # on every step. There is NO single-container fallback — a missing/unknown
     # phase is a mismatched build or a hand-run container, and crashes loudly

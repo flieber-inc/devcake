@@ -63,6 +63,9 @@ def test_both_steps_thread_the_container_limits_flat():
         host = steps[sid]["with"]["host"]
         assert "resources" not in host, "one form only — flat under host:"
         assert host["Memory"] == "${params.MEMORY_BYTES}"
+        # Same value as Memory: Docker's default is 2x, which pretends a
+        # swap device exists. 0 stays unlimited, matching Memory.
+        assert host["MemorySwap"] == "${params.MEMORY_BYTES}"
         assert host["NanoCPUs"] == "${params.NANO_CPUS}"
         assert host["PidsLimit"] == "${params.PIDS}"
         assert host["NetworkMode"] == "devcake_runtime"

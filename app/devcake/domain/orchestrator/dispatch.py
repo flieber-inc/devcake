@@ -459,6 +459,10 @@ file subset works, but a service that depends on another's health check
 (`condition: service_healthy`) does not start here, `build:` needs a
 Containerfile-compatible Dockerfile, and published `ports` are reachable
 from this container only.
+The cgroup on this container is your RAM and CPU budget. `nproc` and
+`/proc/meminfo` show the host, not that budget. Size workers and heaps
+from `DEVCAKE_CPUS` and `DEVCAKE_MEMORY_BYTES`. A nested service with no
+memory limit shares this container's cgroup.
 """
 
 COMPOSE_UNAVAILABLE_NOTE = """**`docker compose` is not working on this host** — containers run, but

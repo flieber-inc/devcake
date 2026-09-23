@@ -998,6 +998,18 @@ until that run exists, field evidence below stays operator-self-reported.
   timeout — not covered here, never unbounded either. Neither caused the 2026-09 incidents (zero `/changes`
   calls in 40 h on the host) — hygiene. Docs 06, 07.
 
+- **Nested Podman store on the workspace bind** (2026-09-23): rootless
+  graphroot moves to `/workspace/.podman-storage` (host ext4) and
+  `mount_program` is emptied, so the diff is native instead of
+  fuse-overlayfs charging the Dev cgroup. The entrypoint exports the
+  cgroup CPU and memory budget to the tools; the Dev prompt says
+  `nproc` and `/proc/meminfo` are the host; `MemorySwap` equals
+  `Memory`. The probe records native overlay without flipping `rig_ok`.
+  Mechanism measured on the v0.6.9 host kernel with this config applied
+  to `devcake/dev-grok-build:v0.6.9-1.0.40` (native diff, zero fuse
+  processes, 25 MB after an Alpine pull). **built** · **⏳ live-pending**
+  the re-pin bake. Docs 07.
+
 ### Field evidence (receipted)
 
 - **A two-core host running five Dev containers at once** (2026-09-22):

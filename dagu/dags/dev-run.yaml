@@ -173,6 +173,10 @@ steps:
         MaskedPaths: []
         ReadonlyPaths: []
         Memory: ${params.MEMORY_BYTES}
+        # Docker's default is 2× Memory. This host has no swap; pinning
+        # the total to Memory keeps a later swapfile from doubling the cap.
+        # 0 stays unlimited, same as Memory.
+        MemorySwap: ${params.MEMORY_BYTES}
         NanoCPUs: ${params.NANO_CPUS}
         PidsLimit: ${params.PIDS}
         # /dev/fuse for fuse-overlayfs on kernels <5.13; ≥5.13 uses native
@@ -212,6 +216,7 @@ steps:
         MaskedPaths: []                # same contract as provision
         ReadonlyPaths: []
         Memory: ${params.MEMORY_BYTES}
+        MemorySwap: ${params.MEMORY_BYTES}
         NanoCPUs: ${params.NANO_CPUS}
         PidsLimit: ${params.PIDS}
         Devices:

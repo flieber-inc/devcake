@@ -36,6 +36,9 @@ def test_note_describes_the_engine_and_stays_green_without_a_red_receipt(tmp_pat
     _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": ""})
     assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
     assert "podman-compose" in dispatch.ENVIRONMENT_NOTE
+    assert "DEVCAKE_CPUS" in dispatch.ENVIRONMENT_NOTE
+    assert "DEVCAKE_MEMORY_BYTES" in dispatch.ENVIRONMENT_NOTE
+    assert "nproc" in dispatch.ENVIRONMENT_NOTE
     _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": "", "compose_ok": True})
     assert dispatch._environment_note() == dispatch.ENVIRONMENT_NOTE
     _status(tmp_path, monkeypatch, {"rig_ok": True, "first_red": "", "compose_ok": False})

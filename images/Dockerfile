@@ -182,6 +182,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends uidmap libcap2-
     # subordinate id ranges for `dev` come from useradd below (shadow's
     # auto-allocation — one canonical range, no hand-written duplicate)
 
+# Rootless store on the workspace bind. See common/containers/storage.conf.
+COPY common/containers/storage.conf /usr/local/share/devcake/storage.conf
+
 # Non-root harness user (docs/07 §7; Claude Code refuses root).
 # Create user before setting HOME so installers (e.g. Grok CLI) can write $HOME.
 # The .npmrc prefix makes RUNTIME `npm i -g` a user-space self-serve (root
@@ -198,6 +201,11 @@ RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
     # provider" banner reads as an error to an agent; the provider is ours.
     && printf '[engine]\ncgroup_manager = "cgroupfs"\nevents_logger = "file"\ncompose_warning_logs = false\n' \
         > /home/dev/.config/containers/containers.conf \
+    && cp /usr/local/share/devcake/storage.conf /home/dev/.config/containers/storage.conf \
+    # The podman-static tarball sets mount_program to fuse-overlayfs.
+    # Empty it so a merged read cannot put the FUSE daemon back.
+    && sed -i -E 's/^([[:space:]]*)mount_program[[:space:]]*=.*/\1mount_program = ""/' \
+        /etc/containers/storage.conf \
     && chown -R dev:dev /home/dev /workspace /opt/pw-browsers
 
 ENV HOME=/home/dev \

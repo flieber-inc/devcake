@@ -107,6 +107,16 @@ echo "NP_UIDMAP=$(printf '%s\n' "$out" \
 out="$(podman info --format '{{.Store.GraphDriverName}}' 2>&1)"; rc=$?
 echo "NP_GRAPH_RC=$rc"
 echo "NP_GRAPH=$(printf '%s\n' "$out" | tail -1)"
+# Native overlay diff, not the driver name. "overlay" + fuse-overlayfs is
+# the expensive fallback (backing fs is the container's own overlay).
+out="$(podman info --format json 2>/dev/null | python3 -c 'import json,sys
+raw=sys.stdin.read()
+i=raw.find("{")
+d=json.loads(raw[i:]) if i>=0 else {}
+gs=(d.get("store") or {}).get("graphStatus") or {}
+print(gs.get("Native Overlay Diff",""))')"
+echo "NP_NATIVE_DIFF=$(printf '%s\n' "$out" | tail -1)"
+echo "NP_FUSE_COUNT=$(ps -eo comm | grep -c '^[f]use-overlayfs$' || true)"
 out="$(podman run --rm -v /workspace:/w "$NP_TEST_IMAGE" sh -c 'id -u > /w/np_write && echo nested-ok' 2>&1)"; rc=$?
 echo "NP_NESTED_RC=$rc"
 printf '%s\n' "$out" | sed 's/^/NP_NESTED_OUT: /'
@@ -207,6 +217,8 @@ UIDMAP_RC="$(val NP_UIDMAP_RC)"
 UIDMAP="$(val NP_UIDMAP)"
 GRAPH_RC="$(val NP_GRAPH_RC)"
 GRAPH="$(val NP_GRAPH)"
+NATIVE_DIFF="$(val NP_NATIVE_DIFF)"
+FUSE_COUNT="$(val NP_FUSE_COUNT)"
 NESTED_RC="$(val NP_NESTED_RC)"
 SUBUID_RC="$(val NP_SUBUID_RC)"
 COMPOSE_RC="$(val NP_COMPOSE_RC)"
@@ -269,6 +281,7 @@ NP_FIRST_RED="$FIRST_RED" NP_FIRST_RED_DETAIL="$FIRST_RED_DETAIL" NP_IMAGE_ID="$
 NP_DOCKER_RC="$DOCKER_RC" NP_INNER_UID="${INNER_UID:-}" \
 NP_INNER_KERNEL="${INNER_KERNEL:-}" NP_UIDMAP_RC="${UIDMAP_RC:-}" \
 NP_UIDMAP="${UIDMAP:-}" NP_GRAPH_RC="${GRAPH_RC:-}" NP_GRAPH="${GRAPH:-}" \
+NP_NATIVE_DIFF="${NATIVE_DIFF:-}" NP_FUSE_COUNT="${FUSE_COUNT:-0}" \
 NP_NESTED_RC="${NESTED_RC:-}" NP_NESTED_OK="$NESTED_OK" \
 NP_SUBUID_RC="${SUBUID_RC:-}" NP_SUBUID_WRITE_UID="$SUBUID_WRITE_UID" \
 NP_COMPOSE_RC="${COMPOSE_RC:-}" NP_NETWORK_RC="${NETWORK_RC:-}" \
@@ -279,8 +292,13 @@ NP_RECLAIM_RC="$RECLAIM_RC" \
 python3 - <<'PY'
 import json
 import os
+import sys
+
+sys.path.insert(0, "scripts/harness_probe")
+from storage_verdict import storage_ok
 
 e = os.environ
+_fuse = int(e.get("NP_FUSE_COUNT") or 0)
 receipt = {
     "measured_at": e["NP_STAMP"],
     "image": e["NP_IMAGE"],
@@ -298,6 +316,13 @@ receipt = {
     "docker_run_rc": int(e["NP_DOCKER_RC"]),
     "uid_map": {"rc": e["NP_UIDMAP_RC"], "first_row": e["NP_UIDMAP"]},
     "graph_driver": {"rc": e["NP_GRAPH_RC"], "name": e["NP_GRAPH"]},
+    # Not part of rig_ok: fuse still runs containers. It fills the cgroup.
+    "storage": {
+        "native_overlay_diff": e.get("NP_NATIVE_DIFF", ""),
+        "fuse_count": _fuse,
+        "ok": storage_ok(native_overlay_diff=e.get("NP_NATIVE_DIFF", ""),
+                         fuse_count=_fuse),
+    },
     "nested_run": {"rc": e["NP_NESTED_RC"], "ok": e["NP_NESTED_OK"] == "true"},
     # `docker compose up` through the symlink — recorded, not part of rig_ok
     "compose": {"rc": e["NP_COMPOSE_RC"], "ok": e["NP_COMPOSE_RC"] == "0"},

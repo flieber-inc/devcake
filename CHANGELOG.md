@@ -13,6 +13,26 @@ added here without copying the full roadmap.
 See the living log and open candidates in
 [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
+## v0.6.10 (2026-09-23)
+
+Patch release in the v0.6 "Kentucky Butter" line. `devcake-cli` stays at 0.1.10. No profile change. Harness images re-bake at the re-pin (the nested store moved) and the app re-bakes for the Dev prompt. A Dev container already running keeps the image it started with.
+[Release notes](https://github.com/flieber-inc/devcake/releases/tag/v0.6.10).
+
+- **Fixed — nested Podman no longer fills the Dev cgroup with
+  fuse-overlayfs** (#482). Rootless image storage sat on the container's own
+  overlay upper, so the diff fell back to fuse-overlayfs and that page
+  cache was charged to the Dev's memory cap. The store now lives at
+  `/workspace/.podman-storage` on the per-run workspace bind (host
+  ext4), and `mount_program` is empty so the diff stays native. The
+  entrypoint reads `cpu.max` and `memory.max` and exports
+  `DEVCAKE_CPUS`, `DEVCAKE_MEMORY_BYTES`, `GOMAXPROCS`, `GOMEMLIMIT`
+  and a Node heap cap at 70% of the memory max; an unlimited cgroup
+  exports nothing for that resource. The Dev prompt says `nproc` and
+  `/proc/meminfo` show the host. `MemorySwap` is pinned to `Memory` on
+  both dev-run steps, so Docker's 2× default cannot pretend a swap
+  device exists. The nested-engine probe records native overlay and
+  the fuse process count without changing `rig_ok`. docs/07.
+
 ## v0.6.9 (2026-09-22)
 
 Patch release in the v0.6 "Kentucky Butter" line. Ships with `devcake-cli` 0.1.10 — upgrade the CLI before `devcake up --release v0.6.9`. No profile change. The Dev-side clone change re-bakes every harness image at the re-pin, and compose recreates `app`, `dagu` and `redis` for their new CPU weight; a host under a resize keeps its concurrency — `/health.capacity` says whether the fleet still outgrows the cores.

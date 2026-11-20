@@ -100,9 +100,9 @@ ARG PODMAN_COMPOSE_VERSION
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         redis==5.2.1 \
-        opentelemetry-api==1.29.0 \
-        opentelemetry-sdk==1.29.0 \
-        opentelemetry-exporter-otlp-proto-http==1.29.0 \
+        opentelemetry-api==1.45.2 \
+        opentelemetry-sdk==1.45.2 \
+        opentelemetry-exporter-otlp-proto-http==1.45.2 \
         openpyxl==3.1.5 \
         pandas==2.2.3 \
         uv==0.5.11 \
@@ -263,9 +263,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         redis==5.2.1 \
-        opentelemetry-api==1.29.0 \
-        opentelemetry-sdk==1.29.0 \
-        opentelemetry-exporter-otlp-proto-http==1.29.0
+        opentelemetry-api==1.45.2 \
+        opentelemetry-sdk==1.45.2 \
+        opentelemetry-exporter-otlp-proto-http==1.45.2
 
 RUN useradd -m -u 1000 dev
 
